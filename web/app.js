@@ -192,10 +192,10 @@ function renderSettings() {
   $("apiStatus").className = `status-pill ${appState.app.api_key_set ? "ok" : ""}`;
   const discord = appState.discord || {};
   $("discordStatus").textContent = discord.complete
-    ? "Discord credentials are stored locally. Sign-in can use the persistent browser profile."
+    ? "Discord credentials are stored locally. Sign In opens the persistent browser profile and can fill them."
     : discord.email_set || discord.password_set
       ? "Partial Discord credentials are stored. Add the missing value or sign in manually."
-      : "No stored Discord credentials. You can still sign in manually.";
+      : "No stored Discord credentials. Enter them here or click Sign In and complete Discord manually.";
   $("discordEmail").value = "";
   $("discordPassword").value = "";
   const updates = appState.updates || {};
@@ -328,7 +328,18 @@ async function saveDiscordCredentials() {
 }
 
 async function launchDiscordLogin() {
+  const email = $("discordEmail").value.trim();
+  const password = $("discordPassword").value;
+  if (email || password) {
+    await api("/api/discord-credentials", {
+      method: "POST",
+      body: JSON.stringify({ email, password }),
+    });
+    $("discordEmail").value = "";
+    $("discordPassword").value = "";
+  }
   await api("/api/discord-login", { method: "POST", body: JSON.stringify({}) });
+  await loadState();
   toast("Discord sign-in window launched");
 }
 
