@@ -22,6 +22,8 @@ Generic fictional sample data is shown here; real server names, channels, users,
 
 ## Setup
 
+For operating concepts, required inputs, safety modes, and troubleshooting, read the [Operator Guide](docs/OPERATOR_GUIDE.md).
+
 ### Simple Windows Install
 
 For normal use, download the Windows release ZIP, extract it somewhere you plan to keep it, then double-click:
