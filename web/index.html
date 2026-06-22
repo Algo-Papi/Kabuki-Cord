@@ -51,7 +51,10 @@
         <section class="panel-section channels-section">
           <div class="section-title with-action">
             <span>Channels</span>
-            <button id="addChannel" class="small-button"><i class="bi bi-plus"></i> Add</button>
+            <div class="button-row">
+              <button id="openDiscordChannel" class="small-button"><i class="bi bi-box-arrow-up-right"></i> Open</button>
+              <button id="addChannel" class="small-button"><i class="bi bi-plus"></i> Add</button>
+            </div>
           </div>
           <div id="channelList" class="channel-list"></div>
         </section>
@@ -159,6 +162,27 @@
               </div>
               <div class="control-row">
                 <div>
+                  <strong>Human-paced typing</strong>
+                  <span>Types approved live sends into Discord over time so the normal typing indicator has time to appear.</span>
+                </div>
+                <label class="switch"><input id="typingIndicatorEnabled" type="checkbox" /><span></span></label>
+              </div>
+              <div class="writing-grid">
+                <label class="field">
+                  <span>Minimum typing seconds</span>
+                  <input id="typingMinSeconds" type="number" min="0" max="30" step="0.5" />
+                </label>
+                <label class="field">
+                  <span>Maximum typing seconds</span>
+                  <input id="typingMaxSeconds" type="number" min="1" max="60" step="0.5" />
+                </label>
+                <label class="field span-2">
+                  <span>Typing speed, characters per second</span>
+                  <input id="typingCharsPerSecond" type="number" min="1" max="40" step="1" />
+                </label>
+              </div>
+              <div class="control-row">
+                <div>
                   <strong>Require approval for proactive drafts</strong>
                   <span>Default safety layer for topic-only opportunities.</span>
                 </div>
@@ -210,7 +234,7 @@
         <section id="history" class="tab-pane">
           <div class="history-layout">
             <div>
-              <div class="section-title">Selected Channel Conversation</div>
+              <div id="historyMessageTitle" class="section-title">Selected Channel Conversation</div>
               <div id="historyMessages" class="history-list"></div>
             </div>
             <div>

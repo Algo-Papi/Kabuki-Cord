@@ -182,7 +182,13 @@ class NhiZuesRunner:
                         draft=decision.draft,
                     )
                 else:
-                    await session.send_message(decision.draft)
+                    await session.send_message(
+                        decision.draft,
+                        typing_enabled=self.config.typing_indicator_enabled,
+                        typing_min_seconds=self.config.typing_min_seconds,
+                        typing_max_seconds=self.config.typing_max_seconds,
+                        typing_chars_per_second=self.config.typing_chars_per_second,
+                    )
                     self.events.add(
                         event_type="message_sent",
                         server_id=target.server_id,

@@ -144,6 +144,8 @@ The top-bar **Start/Pause** control runs or pauses the local scanner loop. **Dry
 
 The **Behavior** tab includes writing-imperfection controls. `NHI_ZUES_WRITING_MISTAKE_RATE` sets typo intensity, `NHI_ZUES_WRITING_QUIRK` controls the consistent style quirk, and `NHI_ZUES_WRITING_MISSPELLINGS` stores repeatable replacements such as `definitely:definately`.
 
+Approved live sends can also be human-paced. `NHI_ZUES_TYPING_INDICATOR_ENABLED=true` makes Kabuki-Cord type the final approved message into Discord over a bounded duration so Discord has time to show the normal typing indicator. The min/max duration and characters-per-second controls live in the **Behavior** tab.
+
 ## Privacy Boundary
 
 By default, Kabuki-Cord does not send Discord conversation text to OpenAI because LLM drafting is disabled. When you enable LLM drafting, the prompt can include recent visible Discord messages, lightweight per-user memory summaries, character memory, and per-user behavior notes so the model can draft context-aware replies. Use channel-level observe/engage toggles and budget limits to control that exposure.
@@ -155,6 +157,8 @@ The GUI includes an update check under **API & Runtime**. It only updates from t
 ## Approvals
 
 Approval cards can be edited before sending. Use **Save** to persist draft edits, **Reply to** chips to target a recent poster and prefix their display name, **Regenerate** to rewrite the draft using your mini prompt, **Discard** to remove an unwanted draft, and **Approve & Send** to send only when dry-run is off.
+
+Use **Open** in the channel panel to launch the selected Discord channel in the persistent browser profile. This pauses the local scanner first so the browser profile is not shared by two Playwright sessions at once.
 
 ## Character Cards
 
@@ -226,7 +230,7 @@ Kabuki-Cord is intended to grow into a local control panel with:
 - Conversations: inspect per-user memory and add person-specific behavior notes.
 - Observed conversations: summarize recent posters and queue suggested responses for approval.
 - Approvals: review or regenerate proactive draft opportunities before anything is sent.
-- History: review remembered channel messages and approval/response events.
+- History: review remembered channel messages and approval/response events, with per-channel remembered-message counts in the channel list.
 - Events: show redirects, login/session issues, budget stops, and attention-needed items.
 - Updates: check GitHub and pull fast-forward updates from the public repo.
 

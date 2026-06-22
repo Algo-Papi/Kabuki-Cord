@@ -414,11 +414,30 @@ class DiscordWebSession:
             for row in rows
         ]
 
-    async def send_message(self, text: str) -> None:
+    async def send_message(
+        self,
+        text: str,
+        *,
+        typing_enabled: bool = False,
+        typing_min_seconds: float = 2.5,
+        typing_max_seconds: float = 18.0,
+        typing_chars_per_second: float = 10.0,
+    ) -> None:
         textbox = self.page.locator(TEXTBOX).last
         await textbox.wait_for(state="visible", timeout=15_000)
         await textbox.click()
-        await textbox.fill(text)
+        if typing_enabled:
+            await textbox.fill("")
+            duration = _typing_duration(
+                text,
+                min_seconds=typing_min_seconds,
+                max_seconds=typing_max_seconds,
+                chars_per_second=typing_chars_per_second,
+            )
+            delay_ms = max(15, int((duration * 1000) / max(len(text), 1)))
+            await textbox.type(text, delay=delay_ms)
+        else:
+            await textbox.fill(text)
         await textbox.press("Enter")
         await asyncio.sleep(0.5)
 
@@ -433,3 +452,17 @@ class DiscordWebSession:
             )
         except Exception:
             return True
+
+
+def _typing_duration(
+    text: str,
+    *,
+    min_seconds: float,
+    max_seconds: float,
+    chars_per_second: float,
+) -> float:
+    chars = max(len(text.strip()), 1)
+    cps = max(float(chars_per_second or 10.0), 1.0)
+    lower = max(float(min_seconds or 0), 0.0)
+    upper = max(float(max_seconds or lower), lower)
+    return min(max(chars / cps, lower), upper)

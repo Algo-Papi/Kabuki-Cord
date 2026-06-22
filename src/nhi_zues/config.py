@@ -46,6 +46,10 @@ class AppConfig:
     writing_mistake_rate: float
     writing_quirk: str
     writing_misspellings: str
+    typing_indicator_enabled: bool
+    typing_min_seconds: float
+    typing_max_seconds: float
+    typing_chars_per_second: float
 
 
 def load_config() -> AppConfig:
@@ -81,6 +85,10 @@ def load_config() -> AppConfig:
             "NHI_ZUES_WRITING_MISSPELLINGS",
             "definitely:definately,because:becuase,probably:prolly",
         ),
+        typing_indicator_enabled=_env_bool("NHI_ZUES_TYPING_INDICATOR_ENABLED", default=True),
+        typing_min_seconds=_env_float("NHI_ZUES_TYPING_MIN_SECONDS", 2.5),
+        typing_max_seconds=_env_float("NHI_ZUES_TYPING_MAX_SECONDS", 18.0),
+        typing_chars_per_second=_env_float("NHI_ZUES_TYPING_CHARS_PER_SECOND", 10.0),
     )
 
 

@@ -106,6 +106,14 @@ class GuiHandler(BaseHTTPRequestHandler):
             start_discord_login()
             self._json({"ok": True, "message": "Discord sign-in window launched."})
             return
+        if parsed.path == "/api/open-discord-channel":
+            try:
+                start_discord_channel(body)
+            except RuntimeError as exc:
+                self._json({"ok": False, "error": str(exc)}, status=400)
+                return
+            self._json({"ok": True, "state": app_state(), "message": "Discord channel window launched."})
+            return
         if parsed.path == "/api/runtime-start":
             RUNTIME.start()
             self._json({"ok": True, "state": app_state()})
@@ -360,6 +368,10 @@ def app_state() -> dict:
             "writing_mistake_rate": config.writing_mistake_rate,
             "writing_quirk": config.writing_quirk,
             "writing_misspellings": config.writing_misspellings,
+            "typing_indicator_enabled": config.typing_indicator_enabled,
+            "typing_min_seconds": config.typing_min_seconds,
+            "typing_max_seconds": config.typing_max_seconds,
+            "typing_chars_per_second": config.typing_chars_per_second,
         },
         "discord": discord_credential_status(),
         "runtime": RUNTIME.state(),
@@ -382,6 +394,10 @@ def app_state() -> dict:
                 "NHI_ZUES_WRITING_MISSPELLINGS",
                 "definitely:definately,because:becuase,probably:prolly",
             ),
+            "NHI_ZUES_TYPING_INDICATOR_ENABLED": env.get("NHI_ZUES_TYPING_INDICATOR_ENABLED", "true"),
+            "NHI_ZUES_TYPING_MIN_SECONDS": env.get("NHI_ZUES_TYPING_MIN_SECONDS", "2.5"),
+            "NHI_ZUES_TYPING_MAX_SECONDS": env.get("NHI_ZUES_TYPING_MAX_SECONDS", "18.0"),
+            "NHI_ZUES_TYPING_CHARS_PER_SECOND": env.get("NHI_ZUES_TYPING_CHARS_PER_SECOND", "10.0"),
         },
         "servers": _read_json(config.servers_file, default={"servers": []}),
         "characters": character_cards(config.character_dir),
@@ -968,7 +984,33 @@ async def _send_approval_message(config: AppConfig, server_id: str, channel_id: 
         current_url = await session.navigate_channel(server_id, channel_id)
         if channel_id not in current_url:
             raise RuntimeError("Discord redirected away from the approval channel.")
-        await session.send_message(draft)
+        await session.send_message(
+            draft,
+            typing_enabled=config.typing_indicator_enabled,
+            typing_min_seconds=config.typing_min_seconds,
+            typing_max_seconds=config.typing_max_seconds,
+            typing_chars_per_second=config.typing_chars_per_second,
+        )
+
+
+def start_discord_channel(body: dict) -> None:
+    server_id = str(body.get("server_id") or "")
+    channel_id = str(body.get("channel_id") or "")
+    if not server_id or not channel_id:
+        raise RuntimeError("Missing server or channel.")
+    if not DISCORD_SESSION_LOCK.acquire(blocking=False):
+        raise RuntimeError("Discord browser profile is busy. Pause scanning or close the sign-in window, then try again.")
+    DISCORD_SESSION_LOCK.release()
+    RUNTIME.pause()
+    kwargs = {}
+    if sys.platform == "win32":
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+    subprocess.Popen(
+        [sys.executable, "-m", "nhi_zues.cli", "--open-channel", server_id, channel_id],
+        cwd=ROOT,
+        close_fds=True,
+        **kwargs,
+    )
 
 
 def read_env() -> dict[str, str]:
@@ -1001,6 +1043,10 @@ def update_env(values: dict) -> None:
         "NHI_ZUES_WRITING_MISTAKE_RATE",
         "NHI_ZUES_WRITING_QUIRK",
         "NHI_ZUES_WRITING_MISSPELLINGS",
+        "NHI_ZUES_TYPING_INDICATOR_ENABLED",
+        "NHI_ZUES_TYPING_MIN_SECONDS",
+        "NHI_ZUES_TYPING_MAX_SECONDS",
+        "NHI_ZUES_TYPING_CHARS_PER_SECOND",
     }
     for key, value in values.items():
         if key not in allowed:

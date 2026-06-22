@@ -122,7 +122,9 @@ function renderServerPanel() {
     .map((chan, index) => {
       const name = chan.label || chan.channel_id;
       const type = channelTypeLabel(chan.channel_type);
-      const meta = [type, chan.category].filter(Boolean).join(" - ") || `ID ${chan.channel_id || ""}`;
+      const remembered = historyCount(chan.channel_id);
+      const metaBase = [type, chan.category].filter(Boolean).join(" - ") || `ID ${chan.channel_id || ""}`;
+      const meta = remembered ? `${metaBase} - ${remembered} remembered` : metaBase;
       return `
         <div class="channel-row ${index === selectedChannel ? "active" : ""}">
           <div class="channel-name" data-channel="${index}" title="Channel ID: ${escapeAttr(chan.channel_id || "")}">
@@ -236,6 +238,10 @@ function renderSettings() {
   $("mistakeRate").value = Math.round(Number(appState.env.NHI_ZUES_WRITING_MISTAKE_RATE || "0.06") * 100);
   $("writingQuirk").value = appState.env.NHI_ZUES_WRITING_QUIRK || "lowercase_no_commas";
   $("writingMisspellings").value = appState.env.NHI_ZUES_WRITING_MISSPELLINGS || "definitely:definately,because:becuase,probably:prolly";
+  $("typingIndicatorEnabled").checked = strBool(appState.env.NHI_ZUES_TYPING_INDICATOR_ENABLED, true);
+  $("typingMinSeconds").value = appState.env.NHI_ZUES_TYPING_MIN_SECONDS || "2.5";
+  $("typingMaxSeconds").value = appState.env.NHI_ZUES_TYPING_MAX_SECONDS || "18.0";
+  $("typingCharsPerSecond").value = appState.env.NHI_ZUES_TYPING_CHARS_PER_SECOND || "10.0";
 }
 
 function renderRuntime() {
@@ -469,6 +475,9 @@ function renderHistory() {
   const history = current ? appState.history?.[current.channel_id] : null;
   const messages = history?.messages || [];
   const events = history?.events || [];
+  $("historyMessageTitle").textContent = current
+    ? `${formatChannelName(current.label || current.channel_id, current.channel_type)} conversation`
+    : "Selected Channel Conversation";
   $("historyMessages").innerHTML =
     messages
       .slice(-40)
@@ -479,7 +488,7 @@ function renderHistory() {
           <p>${escapeHtml(message.text)}</p>
         </div>
       `)
-      .join("") || `<div class="note-item">No channel history recorded yet.</div>`;
+      .join("") || emptyHistoryMessage();
   $("historyEvents").innerHTML =
     events
       .slice(-40)
@@ -491,6 +500,17 @@ function renderHistory() {
         </div>
       `)
       .join("") || `<div class="note-item">No approval or response events recorded yet.</div>`;
+}
+
+function emptyHistoryMessage() {
+  const channelsWithHistory = channels()
+    .filter((item) => historyCount(item.channel_id) > 0)
+    .slice(0, 5)
+    .map((item) => `${formatChannelName(item.label || item.channel_id, item.channel_type)} (${historyCount(item.channel_id)})`)
+    .join(", ");
+  return channelsWithHistory
+    ? `<div class="note-item">No remembered messages for the selected channel yet. Channels with history here: ${escapeHtml(channelsWithHistory)}.</div>`
+    : `<div class="note-item">No channel history recorded yet. Enable Observe, then run Start or scan once.</div>`;
 }
 
 async function createSuggestedApproval(userKey) {
@@ -542,6 +562,10 @@ async function saveAll() {
     NHI_ZUES_WRITING_MISTAKE_RATE: String(Math.max(0, Math.min(Number($("mistakeRate").value || 0), 35)) / 100),
     NHI_ZUES_WRITING_QUIRK: $("writingQuirk").value,
     NHI_ZUES_WRITING_MISSPELLINGS: $("writingMisspellings").value.trim(),
+    NHI_ZUES_TYPING_INDICATOR_ENABLED: $("typingIndicatorEnabled").checked,
+    NHI_ZUES_TYPING_MIN_SECONDS: $("typingMinSeconds").value,
+    NHI_ZUES_TYPING_MAX_SECONDS: $("typingMaxSeconds").value,
+    NHI_ZUES_TYPING_CHARS_PER_SECOND: $("typingCharsPerSecond").value,
   };
   if ($("apiKey").value.trim()) settings.OPENAI_API_KEY = $("apiKey").value.trim();
   await api("/api/servers", { method: "POST", body: JSON.stringify(appState.servers) });
@@ -601,6 +625,24 @@ async function launchDiscordLogin() {
   toast("Discord sign-in window launched");
 }
 
+async function openDiscordChannel() {
+  const currentServer = server();
+  const currentChannel = channel();
+  if (!currentServer?.server_id || !currentChannel?.channel_id) {
+    toast("Select a channel first");
+    return;
+  }
+  await api("/api/open-discord-channel", {
+    method: "POST",
+    body: JSON.stringify({
+      server_id: currentServer.server_id,
+      channel_id: currentChannel.channel_id,
+    }),
+  });
+  await loadState();
+  toast("Discord channel window launched");
+}
+
 async function checkUpdates() {
   const result = await api("/api/update-check", { method: "POST", body: JSON.stringify({}) });
   renderUpdateResult(result);
@@ -640,6 +682,10 @@ function lines(id) {
 function strBool(value, fallback) {
   if (value === undefined || value === null || value === "") return fallback;
   return String(value).toLowerCase() === "true";
+}
+
+function historyCount(channelId) {
+  return appState.history?.[channelId]?.messages?.length || 0;
 }
 
 function scopeLabel(item) {
@@ -740,6 +786,7 @@ $("saveServers").addEventListener("click", saveAll);
 $("syncDiscordServers").addEventListener("click", () => syncDiscordServers().catch((error) => toast(error.message)));
 $("saveDiscord").addEventListener("click", saveDiscordCredentials);
 $("launchDiscordLogin").addEventListener("click", launchDiscordLogin);
+$("openDiscordChannel").addEventListener("click", () => openDiscordChannel().catch((error) => toast(error.message)));
 $("checkUpdates").addEventListener("click", checkUpdates);
 $("applyUpdate").addEventListener("click", applyUpdate);
 

@@ -15,6 +15,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="kabuki-cord")
     parser.add_argument("--once", action="store_true", help="Process configured channels once and exit.")
     parser.add_argument("--login", action="store_true", help="Open Discord and save a persistent browser login session.")
+    parser.add_argument("--open-channel", nargs=2, metavar=("SERVER_ID", "CHANNEL_ID"), help="Open one Discord channel in the persistent browser profile and keep it visible.")
     parser.add_argument("--usage", action="store_true", help="Print recorded API usage and exit.")
     parser.add_argument("--approvals", action="store_true", help="Print queued proactive drafts and exit.")
     parser.add_argument("--remember-story", help="Add a story/claim continuity note to the active character.")
@@ -46,6 +47,38 @@ def main() -> None:
 
         logged_in = asyncio.run(login())
         print("Discord login session saved." if logged_in else "Discord login was not completed.")
+        return
+
+    if args.open_channel:
+        from .browser import DiscordWebSession
+        from .secrets import get_discord_credentials
+
+        server_id, channel_id = args.open_channel
+        credentials = get_discord_credentials()
+
+        async def open_channel() -> bool:
+            async with DiscordWebSession(
+                config.profile_dir,
+                browser_channel=config.browser_channel,
+                headless=False,
+            ) as session:
+                logged_in = await session.login_if_needed(
+                    email=credentials.email,
+                    password=credentials.password,
+                    timeout_seconds=240,
+                )
+                if not logged_in:
+                    return False
+                await session.navigate_channel(server_id, channel_id)
+                print(f"Opened Discord channel: https://discord.com/channels/{server_id}/{channel_id}")
+                try:
+                    await session.page.wait_for_event("close", timeout=0)
+                except Exception:
+                    pass
+                return True
+
+        opened = asyncio.run(open_channel())
+        print("Discord channel window closed." if opened else "Discord channel was not opened.")
         return
 
     if args.usage:
