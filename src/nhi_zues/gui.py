@@ -353,10 +353,14 @@ class RuntimeController:
             self._thread = threading.Thread(target=self._loop, name="kabuki-runtime", daemon=True)
             self._thread.start()
 
-    def pause(self) -> None:
+    def pause(self, *, wait: bool = False, timeout: float = 10.0) -> None:
+        thread: threading.Thread | None = None
         with self._lock:
             self._running = False
             self._stop.set()
+            thread = self._thread
+        if wait and thread and thread.is_alive() and thread is not threading.current_thread():
+            thread.join(timeout=timeout)
 
     def state(self) -> dict:
         thread_alive = bool(self._thread and self._thread.is_alive())
@@ -791,7 +795,7 @@ def sync_discord_servers() -> dict:
 
 def _acquire_discord_session_or_raise(*, pause_runtime: bool = False) -> None:
     if pause_runtime:
-        RUNTIME.pause()
+        RUNTIME.pause(wait=True, timeout=10.0)
 
     deadline = time.monotonic() + DISCORD_LOCK_WAIT_SECONDS
     while time.monotonic() < deadline:
@@ -1126,7 +1130,7 @@ def _send_approval_locked(*, approval_id: str, draft: str) -> None:
     )
 
     lock_acquired = False
-    resume_runtime = bool(RUNTIME.status().get("running"))
+    resume_runtime = bool(RUNTIME.state().get("running"))
     try:
         _acquire_discord_session_or_raise(pause_runtime=True)
         lock_acquired = True

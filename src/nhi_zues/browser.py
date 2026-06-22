@@ -540,6 +540,7 @@ class DiscordWebSession:
         typing_chars_per_second: float = 10.0,
     ) -> None:
         await self.wait_for_writable_channel(timeout_ms=15_000)
+        before_message_ids = await self._visible_message_ids()
         textbox = self.page.locator(TEXTBOX).last
         await textbox.wait_for(state="visible", timeout=15_000)
         await textbox.click()
@@ -556,7 +557,50 @@ class DiscordWebSession:
         else:
             await textbox.fill(text)
         await textbox.press("Enter")
-        await asyncio.sleep(0.5)
+        await self._wait_for_sent_message(text, before_message_ids=before_message_ids, timeout_ms=15_000)
+
+    async def _visible_message_ids(self) -> list[str]:
+        return await self.page.evaluate(
+            """
+            () => Array.from(document.querySelectorAll('[id^="chat-messages-"]'))
+                .map((node) => node.id || "")
+                .filter(Boolean)
+            """
+        )
+
+    async def _wait_for_sent_message(
+        self,
+        text: str,
+        *,
+        before_message_ids: list[str],
+        timeout_ms: int,
+    ) -> None:
+        try:
+            await self.page.wait_for_function(
+                """
+                ({ expected, beforeIds }) => {
+                    const normalize = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+                    const target = normalize(expected);
+                    const before = new Set(beforeIds || []);
+                    const messages = Array.from(document.querySelectorAll('[id^="chat-messages-"]'));
+                    return messages.some((node) => {
+                        if (before.has(node.id || "")) return false;
+                        const content = node.querySelector('[class*="messageContent"]');
+                        return normalize(content?.textContent || "") === target;
+                    });
+                }
+                """,
+                {"expected": text, "beforeIds": before_message_ids},
+                timeout=timeout_ms,
+            )
+        except Exception as exc:
+            state = await self.writable_channel_state()
+            raise RuntimeError(
+                "Discord did not confirm the message appeared after pressing Enter. "
+                f"url={state.get('url')}; has_composer={state.get('has_composer')}; "
+                f"has_messages={state.get('has_messages')}; notice={state.get('notice') or 'none'}. "
+                "The draft remains queued so you can inspect Discord before retrying."
+            ) from exc
 
     async def _is_logged_in(self) -> bool:
         if "/login" in self.page.url:
