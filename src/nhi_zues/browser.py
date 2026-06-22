@@ -462,6 +462,7 @@ class DiscordWebSession:
         )
 
     async def read_visible_messages(self, server_id: str, channel_id: str) -> list[MessageRecord]:
+        await self.ensure_latest_messages_visible()
         rows = await self.page.evaluate(
             """
             () => {
@@ -504,6 +505,30 @@ class DiscordWebSession:
             )
             for row in rows
         ]
+
+    async def ensure_latest_messages_visible(self) -> None:
+        try:
+            await self.page.keyboard.press("End")
+            await self.page.wait_for_timeout(350)
+            await self.page.evaluate(
+                """
+                () => {
+                    const firstMessage = document.querySelector('[id^="chat-messages-"]');
+                    let scroller = firstMessage?.parentElement || null;
+                    while (scroller && scroller !== document.body) {
+                        if (scroller.scrollHeight > scroller.clientHeight + 20) {
+                            scroller.scrollTop = scroller.scrollHeight;
+                            break;
+                        }
+                        scroller = scroller.parentElement;
+                    }
+                }
+                """
+            )
+            await self.page.keyboard.press("End")
+            await self.page.wait_for_timeout(700)
+        except Exception:
+            await self.page.wait_for_timeout(500)
 
     async def send_message(
         self,

@@ -365,38 +365,37 @@ class RuntimeController:
         }
 
     def _loop(self) -> None:
-        while not self._stop.is_set():
-            with self._lock:
-                active = self._running
-            if not active:
-                break
-
+        acquired = False
+        try:
+            config = load_config()
+            if not config.channels:
+                self._last_error = "No channels are enabled for Observe."
+                return
+            acquired = DISCORD_SESSION_LOCK.acquire(blocking=False)
+            if not acquired:
+                self._last_error = "Discord browser profile is busy."
+                return
             try:
-                config = load_config()
-                if not config.channels:
-                    self._last_error = "No channels are enabled for Observe."
-                    self._stop.wait(5)
-                    continue
-                if not DISCORD_SESSION_LOCK.acquire(blocking=False):
-                    self._last_error = "Discord browser profile is busy."
-                    self._stop.wait(5)
-                    continue
-                try:
-                    asyncio.run(NhiZuesRunner(config).run_once())
-                    self._last_run_at = time.time()
+                asyncio.run(
+                    NhiZuesRunner(config).run_until_stopped(
+                        self._stop,
+                        on_cycle=self._mark_cycle_complete,
+                    )
+                )
+                if self._stop.is_set():
                     self._last_error = ""
-                finally:
+            finally:
+                if acquired:
                     DISCORD_SESSION_LOCK.release()
-                interval = max(config.poll_seconds, 5)
-            except Exception as exc:
-                self._last_error = str(exc)
-                interval = 10
+        except Exception as exc:
+            self._last_error = str(exc)
+        finally:
+            with self._lock:
+                self._running = False
 
-            if self._stop.wait(interval):
-                break
-
-        with self._lock:
-            self._running = False
+    def _mark_cycle_complete(self) -> None:
+        self._last_run_at = time.time()
+        self._last_error = ""
 
 
 RUNTIME = RuntimeController()

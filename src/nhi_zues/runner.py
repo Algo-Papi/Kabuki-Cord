@@ -60,7 +60,10 @@ class NhiZuesRunner:
     async def run_forever(self) -> None:
         await self._run(loop=True)
 
-    async def _run(self, *, loop: bool) -> None:
+    async def run_until_stopped(self, stop_event, *, on_cycle=None) -> None:
+        await self._run(loop=True, stop_event=stop_event, on_cycle=on_cycle)
+
+    async def _run(self, *, loop: bool, stop_event=None, on_cycle=None) -> None:
         if not self.config.channels:
             raise ValueError("Configure at least one channel in NHI_ZUES_CHANNELS.")
 
@@ -75,17 +78,25 @@ class NhiZuesRunner:
             credentials = get_discord_credentials()
             await session.login_if_needed(email=credentials.email, password=credentials.password)
             last_checked: dict[tuple[str, str], float] = {}
-            while True:
+            while not _stop_requested(stop_event):
                 targets = self._due_targets(last_checked) if loop else list(self.config.channels)
                 if targets:
                     await self._process_channels(session, targets)
                     now = time.monotonic()
                     for target in targets:
                         last_checked[(target.server_id, target.channel_id)] = now
+                    if on_cycle:
+                        on_cycle()
                 if not loop:
                     return
 
-                await asyncio.sleep(min(self.config.poll_seconds, 10))
+                sleep_seconds = min(self.config.poll_seconds, 10)
+                if stop_event is not None:
+                    should_stop = await asyncio.to_thread(stop_event.wait, sleep_seconds)
+                    if should_stop:
+                        return
+                else:
+                    await asyncio.sleep(sleep_seconds)
 
     def _due_targets(self, last_checked: dict[tuple[str, str], float]):
         now = time.monotonic()
@@ -279,3 +290,7 @@ def _without_own_messages(messages, *, character_names: tuple[str, ...]):
 
 def _normalize_author(value: str) -> str:
     return " ".join(str(value or "").lower().split())
+
+
+def _stop_requested(stop_event) -> bool:
+    return bool(stop_event is not None and stop_event.is_set())
