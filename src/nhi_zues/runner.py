@@ -39,6 +39,7 @@ class NhiZuesRunner:
             model=config.openai_model,
             enabled=config.llm_enabled,
             generate_drafts=(not config.dry_run) or config.draft_in_dry_run,
+            conversation_reply_enabled=config.conversation_reply_enabled,
             budget=self.budget,
             max_output_tokens=config.max_output_tokens,
             max_input_chars=config.max_input_chars,
@@ -210,7 +211,7 @@ class NhiZuesRunner:
                     self.memory.save()
                     continue
 
-                if not target.auto_respond_enabled:
+                if decision.requires_approval or not target.auto_respond_enabled:
                     existing = self.approvals.find_source_overlap(
                         channel_id=target.channel_id,
                         source_message_ids=source_ids,

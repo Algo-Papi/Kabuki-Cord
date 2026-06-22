@@ -254,6 +254,7 @@ function renderSettings() {
   renderModelOptions();
   $("llmEnabled").checked = strBool(appState.env.NHI_ZUES_LLM_ENABLED, false);
   $("draftDryRun").checked = strBool(appState.env.NHI_ZUES_DRAFT_IN_DRY_RUN, false);
+  $("conversationReply").checked = strBool(appState.env.NHI_ZUES_CONVERSATION_REPLY_ENABLED, false);
   $("dryRun").checked = strBool(appState.env.NHI_ZUES_DRY_RUN, true);
   $("dailyBudget").value = appState.env.NHI_ZUES_MAX_DAILY_USD || "0.25";
   $("sessionBudget").value = appState.env.NHI_ZUES_MAX_SESSION_USD || "0.05";
@@ -753,6 +754,7 @@ async function saveAll() {
     OPENAI_MODEL: $("openaiModel").value.trim(),
     NHI_ZUES_LLM_ENABLED: $("llmEnabled").checked,
     NHI_ZUES_DRAFT_IN_DRY_RUN: $("draftDryRun").checked,
+    NHI_ZUES_CONVERSATION_REPLY_ENABLED: $("conversationReply").checked,
     NHI_ZUES_DRY_RUN: $("dryRun").checked,
     NHI_ZUES_PROACTIVE_APPROVAL_REQUIRED: $("approvalRequired").checked,
     NHI_ZUES_CHARACTER_CARD: appState.env.NHI_ZUES_CHARACTER_CARD || appState.active_character.path,

@@ -420,6 +420,7 @@ def app_state() -> dict:
             "active_character_card": config.character_card,
             "llm_enabled": config.llm_enabled,
             "draft_in_dry_run": config.draft_in_dry_run,
+            "conversation_reply_enabled": config.conversation_reply_enabled,
             "dry_run": config.dry_run,
             "proactive_approval_required": config.proactive_approval_required,
             "openai_model": config.openai_model,
@@ -449,6 +450,9 @@ def app_state() -> dict:
             "OPENAI_MODEL": env.get("OPENAI_MODEL", ""),
             "NHI_ZUES_LLM_ENABLED": env.get("NHI_ZUES_LLM_ENABLED", "false"),
             "NHI_ZUES_DRAFT_IN_DRY_RUN": env.get("NHI_ZUES_DRAFT_IN_DRY_RUN", "false"),
+            "NHI_ZUES_CONVERSATION_REPLY_ENABLED": env.get(
+                "NHI_ZUES_CONVERSATION_REPLY_ENABLED", "false"
+            ),
             "NHI_ZUES_DRY_RUN": env.get("NHI_ZUES_DRY_RUN", "true"),
             "NHI_ZUES_PROACTIVE_APPROVAL_REQUIRED": env.get(
                 "NHI_ZUES_PROACTIVE_APPROVAL_REQUIRED", "true"
@@ -1557,6 +1561,7 @@ def update_env(values: dict) -> None:
         "OPENAI_MODEL",
         "NHI_ZUES_LLM_ENABLED",
         "NHI_ZUES_DRAFT_IN_DRY_RUN",
+        "NHI_ZUES_CONVERSATION_REPLY_ENABLED",
         "NHI_ZUES_DRY_RUN",
         "NHI_ZUES_PROACTIVE_APPROVAL_REQUIRED",
         "NHI_ZUES_CHARACTER_CARD",

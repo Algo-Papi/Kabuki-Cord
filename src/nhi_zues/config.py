@@ -37,6 +37,7 @@ class AppConfig:
     openai_model: str
     llm_enabled: bool
     draft_in_dry_run: bool
+    conversation_reply_enabled: bool
     max_daily_usd: float
     max_session_usd: float
     max_llm_calls_per_run: int
@@ -73,6 +74,7 @@ def load_config() -> AppConfig:
         openai_model=_env("OPENAI_MODEL", "gpt-5.4-nano"),
         llm_enabled=_env_bool("NHI_ZUES_LLM_ENABLED", default=False),
         draft_in_dry_run=_env_bool("NHI_ZUES_DRAFT_IN_DRY_RUN", default=False),
+        conversation_reply_enabled=_env_bool("NHI_ZUES_CONVERSATION_REPLY_ENABLED", default=False),
         max_daily_usd=float(_env("NHI_ZUES_MAX_DAILY_USD", "0.25")),
         max_session_usd=float(_env("NHI_ZUES_MAX_SESSION_USD", "0.05")),
         max_llm_calls_per_run=int(_env("NHI_ZUES_MAX_LLM_CALLS_PER_RUN", "3")),

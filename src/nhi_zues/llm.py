@@ -19,6 +19,7 @@ class ReplyPlanner:
         model: str,
         enabled: bool,
         generate_drafts: bool,
+        conversation_reply_enabled: bool,
         budget: BudgetManager,
         max_output_tokens: int,
         max_input_chars: int,
@@ -30,6 +31,7 @@ class ReplyPlanner:
         self.model = model
         self.enabled = enabled
         self.generate_drafts = generate_drafts
+        self.conversation_reply_enabled = conversation_reply_enabled
         self.budget = budget
         self.max_output_tokens = max_output_tokens
         self.max_input_chars = max_input_chars
@@ -54,10 +56,15 @@ class ReplyPlanner:
         if not new_messages:
             return DraftDecision(False, "no new messages")
 
-        engagement_type = _engagement_type(new_messages, topics, character)
+        engagement_type = _engagement_type(
+            new_messages,
+            topics,
+            character,
+            conversation_reply_enabled=self.conversation_reply_enabled,
+        )
         if engagement_type == "none":
             return DraftDecision(False, "no tracked topic or direct name cue")
-        requires_approval = engagement_type == "proactive" and self.proactive_approval_required
+        requires_approval = engagement_type in {"proactive", "conversation"} and self.proactive_approval_required
 
         if not self.enabled:
             return DraftDecision(
@@ -221,6 +228,8 @@ def _engagement_type(
     messages: list[MessageRecord],
     topics: TopicSnapshot,
     character: CharacterCard,
+    *,
+    conversation_reply_enabled: bool = False,
 ) -> str:
     text = "\n".join(message.text.lower() for message in messages)
     if any(alias in text for alias in character.aliases):
@@ -229,6 +238,8 @@ def _engagement_type(
         return "proactive"
     if topics.top_topics:
         return "proactive"
+    if conversation_reply_enabled:
+        return "conversation"
     return "none"
 
 
