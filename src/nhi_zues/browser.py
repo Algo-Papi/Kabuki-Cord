@@ -47,6 +47,87 @@ class DiscordWebSession:
         await self.page.goto("https://discord.com/channels/@me", wait_until="domcontentloaded")
         await self.page.wait_for_timeout(1500)
 
+    async def discover_servers(self) -> list[dict[str, str]]:
+        await self.open_home()
+        try:
+            await self.page.wait_for_function(
+                """
+                () => {
+                    const anchors = Array.from(document.querySelectorAll('a[href*="/channels/"]'));
+                    const treeItems = Array.from(
+                        document.querySelectorAll('[data-list-item-id^="guildsnav___"]')
+                    );
+                    return anchors.some((node) => /\\/channels\\/\\d{5,}/.test(node.getAttribute("href") || ""))
+                        || treeItems.some((node) => /guildsnav___\\d{5,}/.test(node.getAttribute("data-list-item-id") || ""));
+                }
+                """,
+                timeout=15_000,
+            )
+        except Exception:
+            await self.page.wait_for_timeout(1500)
+
+        rows = await self.page.evaluate(
+            """
+            () => {
+                const guildNav = document.querySelector('[data-list-id="guildsnav"]');
+                const seen = new Map();
+                const cleanLabel = (value) => String(value || "")
+                    .replace(/^\\s*unread messages?,\\s*/i, "")
+                    .replace(/^\\s*\\d+\\s+mentions?,\\s*/i, "")
+                    .replace(/^\\s*\\d+\\s+unread messages?,\\s*/i, "")
+                    .replace(/,?\\s*\\d+\\s+unread messages?.*$/i, "")
+                    .replace(/,?\\s*unread.*$/i, "")
+                    .trim();
+                const remember = (serverId, label) => {
+                    if (seen.has(serverId)) return;
+                    seen.set(serverId, { server_id: serverId, label: cleanLabel(label) });
+                };
+
+                const anchors = Array.from(
+                    (guildNav || document).querySelectorAll('a[href*="/channels/"]')
+                );
+                for (const anchor of anchors) {
+                    const href = anchor.getAttribute("href") || "";
+                    const match = href.match(/\\/channels\\/(\\d{5,})/);
+                    if (!match) continue;
+                    const serverId = match[1];
+                    const labelledNode = anchor.querySelector("[aria-label], [title]");
+                    const rawLabel =
+                        anchor.getAttribute("aria-label") ||
+                        anchor.getAttribute("title") ||
+                        labelledNode?.getAttribute("aria-label") ||
+                        labelledNode?.getAttribute("title") ||
+                        anchor.textContent ||
+                        "";
+                    remember(serverId, rawLabel);
+                }
+
+                const treeItems = Array.from(
+                    (guildNav || document).querySelectorAll('[data-list-item-id^="guildsnav___"]')
+                );
+                for (const item of treeItems) {
+                    const marker = item.getAttribute("data-list-item-id") || "";
+                    const match = marker.match(/^guildsnav___(\\d{5,})$/);
+                    if (!match) continue;
+                    const labelNode = item.querySelector('[data-dnd-name]');
+                    const rawLabel =
+                        labelNode?.getAttribute("data-dnd-name") ||
+                        item.getAttribute("aria-label") ||
+                        item.getAttribute("title") ||
+                        item.textContent ||
+                        "";
+                    remember(match[1], rawLabel);
+                }
+                return Array.from(seen.values());
+            }
+            """
+        )
+        return [
+            {"server_id": str(row["server_id"]), "label": str(row.get("label") or "")}
+            for row in rows
+            if row.get("server_id")
+        ]
+
     async def login_if_needed(
         self,
         *,

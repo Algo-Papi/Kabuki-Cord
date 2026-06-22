@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import mimetypes
 import os
@@ -15,10 +16,11 @@ from urllib.parse import unquote, urlparse
 from dotenv import load_dotenv
 
 from .approvals import ApprovalQueue
+from .browser import DiscordWebSession
 from .budget import BudgetManager
 from .character_memory import CharacterMemoryStore
-from .config import load_config
-from .secrets import discord_credential_status, set_discord_credentials
+from .config import AppConfig, load_config
+from .secrets import discord_credential_status, get_discord_credentials, set_discord_credentials
 from .user_instructions import UserInstructionStore
 
 
@@ -59,8 +61,15 @@ class GuiHandler(BaseHTTPRequestHandler):
             return
         body = self._read_json()
         if parsed.path == "/api/servers":
-            _write_json(ROOT / "config" / "servers.json", body)
+            config = load_config()
+            _write_json(config.servers_file, body)
             self._json({"ok": True, "state": app_state()})
+            return
+        if parsed.path == "/api/discord-sync-servers":
+            try:
+                self._json(sync_discord_servers())
+            except RuntimeError as exc:
+                self._json({"ok": False, "error": str(exc)}, status=400)
             return
         if parsed.path == "/api/settings":
             update_env(body)
@@ -223,7 +232,7 @@ def app_state() -> dict:
             "NHI_ZUES_MAX_SESSION_USD": env.get("NHI_ZUES_MAX_SESSION_USD", "0.05"),
             "NHI_ZUES_MAX_LLM_CALLS_PER_RUN": env.get("NHI_ZUES_MAX_LLM_CALLS_PER_RUN", "3"),
         },
-        "servers": _read_json(ROOT / "config" / "servers.json", default={"servers": []}),
+        "servers": _read_json(config.servers_file, default={"servers": []}),
         "characters": character_cards(config.character_dir),
         "active_character": read_character(config.character_dir, config.character_card),
         "character_memory": character_memory_state(config.state_dir, config.character_card),
@@ -244,6 +253,79 @@ def usage_state() -> dict:
         max_calls_per_run=config.max_llm_calls_per_run,
     )
     return budget.summary()
+
+
+def sync_discord_servers() -> dict:
+    config = load_config()
+    try:
+        discovered = asyncio.run(_discover_discord_servers(config))
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        raise RuntimeError(
+            "Discord sync failed. Close any open Kabuki Discord sign-in windows and try again."
+        ) from exc
+    payload = _read_json(config.servers_file, default={"servers": []})
+    server_list = payload.get("servers")
+    if not isinstance(server_list, list):
+        server_list = []
+
+    by_id: dict[str, dict] = {}
+    for item in server_list:
+        if isinstance(item, dict) and item.get("server_id"):
+            by_id[str(item["server_id"])] = item
+
+    added = 0
+    updated = 0
+    for server in discovered:
+        server_id = str(server["server_id"])
+        label = str(server.get("label") or "")
+        existing = by_id.get(server_id)
+        if existing is None:
+            existing = {
+                "server_id": server_id,
+                "label": label,
+                "character_card": None,
+                "poll_seconds": 120,
+                "channels": [],
+            }
+            server_list.append(existing)
+            by_id[server_id] = existing
+            added += 1
+            continue
+        if label and not str(existing.get("label") or "").strip():
+            existing["label"] = label
+            updated += 1
+
+    next_payload = {**payload, "servers": server_list}
+    _write_json(config.servers_file, next_payload)
+    return {
+        "ok": True,
+        "discovered": len(discovered),
+        "added": added,
+        "updated": updated,
+        "state": app_state(),
+    }
+
+
+async def _discover_discord_servers(config: AppConfig) -> list[dict[str, str]]:
+    credentials = get_discord_credentials()
+    async with DiscordWebSession(
+        config.profile_dir,
+        browser_channel=config.browser_channel,
+        headless=config.headless,
+    ) as session:
+        logged_in = await session.login_if_needed(
+            email=credentials.email,
+            password=credentials.password,
+            timeout_seconds=120,
+        )
+        if not logged_in:
+            raise RuntimeError("Discord is not signed in. Use Sign In first, then Sync Servers.")
+        servers = await session.discover_servers()
+    if not servers:
+        raise RuntimeError("No Discord servers were found in the signed-in browser profile.")
+    return servers
 
 
 def character_cards(card_dir: Path) -> list[dict]:

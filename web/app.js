@@ -24,7 +24,16 @@ async function api(path, options = {}) {
     },
     ...rest,
   });
-  if (!response.ok) throw new Error(await response.text());
+  if (!response.ok) {
+    const errorText = await response.text();
+    let message = errorText;
+    try {
+      message = JSON.parse(errorText).error || errorText;
+    } catch {
+      message = errorText;
+    }
+    throw new Error(message);
+  }
   return response.json();
 }
 
@@ -321,6 +330,19 @@ async function saveAll() {
   toast("Settings saved");
 }
 
+async function syncDiscordServers() {
+  syncFormsToState();
+  await api("/api/servers", { method: "POST", body: JSON.stringify(appState.servers) });
+  const result = await api("/api/discord-sync-servers", { method: "POST", body: JSON.stringify({}) });
+  appState = result.state;
+  selectedServer = Math.min(selectedServer, servers().length - 1);
+  if (selectedServer < 0) selectedServer = 0;
+  selectedChannel = Math.min(selectedChannel, channels().length - 1);
+  if (selectedChannel < 0) selectedChannel = 0;
+  render();
+  toast(`Synced ${result.discovered} servers (${result.added} new)`);
+}
+
 async function saveDiscordCredentials() {
   const email = $("discordEmail").value.trim();
   const password = $("discordPassword").value;
@@ -416,6 +438,7 @@ document.querySelectorAll(".tab").forEach((tab) => {
 $("refresh").addEventListener("click", loadState);
 $("saveAll").addEventListener("click", saveAll);
 $("saveServers").addEventListener("click", saveAll);
+$("syncDiscordServers").addEventListener("click", () => syncDiscordServers().catch((error) => toast(error.message)));
 $("saveDiscord").addEventListener("click", saveDiscordCredentials);
 $("launchDiscordLogin").addEventListener("click", launchDiscordLogin);
 $("checkUpdates").addEventListener("click", checkUpdates);

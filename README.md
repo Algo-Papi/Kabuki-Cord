@@ -73,6 +73,8 @@ The desktop control panel is the preferred entrypoint:
 
 The app starts a local backend and opens its own window. Use **API & Runtime -> Discord Session** to save Discord credentials locally or open the Discord sign-in window. Future runs reuse the persistent browser profile.
 
+After signing in, click **Sync Servers** in the top bar to read the Discord server rail from that persistent browser profile and merge discovered servers into your ignored local server config. The public sample `config/servers.json` stays as a placeholder for GitHub.
+
 Dry-run mode prints observations and draft decisions without sending messages. Keep `NHI_ZUES_DRY_RUN=true` while testing selectors, memory, and topic behavior.
 
 For a clean test pass that exits after one sweep:
@@ -193,7 +195,7 @@ Each server can define:
 - `engage_enabled`: whether to consider drafts for that channel.
 - `auto_respond_enabled`: whether approval-required drafts may be sent automatically when dry-run is off.
 
-The GUI should edit this file instead of asking users to hand-edit environment variables.
+In normal use, point `NHI_ZUES_SERVERS_FILE` at an ignored local file, then use the GUI's **Sync Servers**, channel add, and per-channel toggles instead of hand-editing environment variables.
 
 ## GUI Direction
 
