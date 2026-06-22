@@ -136,6 +136,8 @@ NHI_ZUES_MAX_SESSION_USD=0.05
 NHI_ZUES_MAX_LLM_CALLS_PER_RUN=3
 ```
 
+The **API & Runtime** tab has a **Models** button next to the model field. It calls OpenAI's model-list endpoint with the locally saved key and fills model suggestions for that project. If no key is saved yet, the app shows fallback suggestions and still lets you type a model ID manually.
+
 The routing path is deliberately conservative: new messages are read first, local topic/name triggers decide whether a draft is worth generating, then budget checks run before any API request. Drafts generated during dry-run are logged but not sent.
 
 Per-channel auto-respond can be enabled from the Behavior tab, but it is off by default. Dry-run still prevents sending even if auto-respond is enabled.

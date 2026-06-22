@@ -270,10 +270,15 @@
               <span>OpenAI API Key</span>
               <input id="apiKey" type="password" placeholder="Stored only in ignored local .env" />
             </label>
-            <label class="field">
+            <div class="field">
               <span>Model</span>
-              <input id="openaiModel" type="text" />
-            </label>
+              <div class="inline-input model-picker">
+                <input id="openaiModel" type="text" list="openaiModelOptions" autocomplete="off" placeholder="gpt-5.4-nano" />
+                <button id="refreshOpenAIModels" class="small-button" type="button" title="Fetch models available to this OpenAI API key"><i class="bi bi-cloud-arrow-down"></i> Models</button>
+              </div>
+              <datalist id="openaiModelOptions"></datalist>
+              <small id="modelListStatus" class="field-hint"></small>
+            </div>
             <div class="control-bank span-2">
               <div class="control-row">
                 <div><strong>Enable LLM drafting</strong><span>Allows API calls after local routing passes.</span></div>

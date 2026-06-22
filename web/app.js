@@ -229,6 +229,7 @@ function renderSettings() {
     ? `Ready to update from ${updates.remote}.`
     : "GitHub origin is not configured yet. Update will be available after publishing.";
   $("openaiModel").value = appState.env.OPENAI_MODEL || appState.app.openai_model || "";
+  renderModelOptions();
   $("llmEnabled").checked = strBool(appState.env.NHI_ZUES_LLM_ENABLED, false);
   $("draftDryRun").checked = strBool(appState.env.NHI_ZUES_DRAFT_IN_DRY_RUN, false);
   $("dryRun").checked = strBool(appState.env.NHI_ZUES_DRY_RUN, true);
@@ -242,6 +243,37 @@ function renderSettings() {
   $("typingMinSeconds").value = appState.env.NHI_ZUES_TYPING_MIN_SECONDS || "2.5";
   $("typingMaxSeconds").value = appState.env.NHI_ZUES_TYPING_MAX_SECONDS || "18.0";
   $("typingCharsPerSecond").value = appState.env.NHI_ZUES_TYPING_CHARS_PER_SECOND || "10.0";
+}
+
+function renderModelOptions() {
+  const datalist = $("openaiModelOptions");
+  const status = $("modelListStatus");
+  if (!datalist || !status) return;
+  const current = appState.env.OPENAI_MODEL || appState.app.openai_model || "";
+  const models = Array.isArray(appState.model_options) ? appState.model_options : [];
+  const byId = new Map();
+  models.forEach((model) => {
+    const id = typeof model === "string" ? model : model?.id;
+    if (!id) return;
+    byId.set(id, {
+      id,
+      label: typeof model === "string" ? model : model.label || model.id,
+    });
+  });
+  if (current && !byId.has(current)) {
+    byId.set(current, { id: current, label: `${current} - current setting` });
+  }
+  datalist.innerHTML = Array.from(byId.values())
+    .map((model) => `<option value="${escapeAttr(model.id)}" label="${escapeAttr(model.label)}"></option>`)
+    .join("");
+
+  const catalog = appState.model_catalog || {};
+  if (catalog.live) {
+    const fetched = catalog.fetched_at ? ` Last refreshed ${formatTime(catalog.fetched_at)}.` : "";
+    status.textContent = `${byId.size} model options loaded from ${catalog.source || "OpenAI"}.${fetched}`;
+  } else {
+    status.textContent = catalog.message || "Fallback model suggestions shown until models are refreshed.";
+  }
 }
 
 function renderRuntime() {
@@ -653,6 +685,20 @@ async function applyUpdate() {
   renderUpdateResult(result);
 }
 
+async function refreshOpenAIModels() {
+  $("modelListStatus").textContent = "Fetching models from OpenAI...";
+  const result = await api("/api/openai-models", { method: "POST", body: JSON.stringify({}) });
+  appState.model_options = result.models || appState.model_options || [];
+  appState.model_catalog = {
+    live: Boolean(result.live),
+    source: result.source || "",
+    message: result.message || "",
+    fetched_at: result.fetched_at || "",
+  };
+  renderModelOptions();
+  toast(result.message || "Model list refreshed");
+}
+
 async function toggleRuntime() {
   const runtime = appState.runtime || {};
   const path = runtime.running ? "/api/runtime-pause" : "/api/runtime-start";
@@ -787,6 +833,7 @@ $("syncDiscordServers").addEventListener("click", () => syncDiscordServers().cat
 $("saveDiscord").addEventListener("click", saveDiscordCredentials);
 $("launchDiscordLogin").addEventListener("click", launchDiscordLogin);
 $("openDiscordChannel").addEventListener("click", () => openDiscordChannel().catch((error) => toast(error.message)));
+$("refreshOpenAIModels").addEventListener("click", () => refreshOpenAIModels().catch((error) => toast(error.message)));
 $("checkUpdates").addEventListener("click", checkUpdates);
 $("applyUpdate").addEventListener("click", applyUpdate);
 

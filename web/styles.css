@@ -230,6 +230,12 @@ h2 {
   font-weight: 650;
 }
 
+.field-hint {
+  color: var(--faint);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 input,
 select,
 textarea {
@@ -264,6 +270,14 @@ textarea:focus {
 
 .inline-input span {
   color: var(--muted);
+}
+
+.model-picker {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.model-picker .small-button {
+  white-space: nowrap;
 }
 
 .channels-section {
