@@ -12,6 +12,14 @@ The first version is intentionally conservative:
 - Stores local runtime state under `.state/`.
 - Exposes a desktop app launcher while keeping the backend local to `127.0.0.1`.
 
+## Screenshots
+
+Generic sample data is shown here; real server names, channels, users, approvals, and icons stay in ignored local state.
+
+![Kabuki-Cord dashboard](docs/screenshots/kabuki-cord-dashboard.png)
+
+![Kabuki-Cord approvals](docs/screenshots/kabuki-cord-approvals.png)
+
 ## Setup
 
 ### Simple Windows Install
@@ -75,6 +83,8 @@ The app starts a local backend and opens its own window. Use **API & Runtime -> 
 
 After signing in, click **Sync Discord** in the top bar to read the Discord server rail and available text/forum channels from that persistent browser profile. Discovered servers and channels are merged into your ignored local server config, while newly discovered channels stay inactive until you enable Observe or Engage. The public sample `config/servers.json` stays as a placeholder for GitHub.
 
+Synced server icons are cached under ignored runtime state and displayed in the left rail when Discord exposes an icon URL.
+
 Dry-run mode prints observations and draft decisions without sending messages. Keep `NHI_ZUES_DRY_RUN=true` while testing selectors, memory, and topic behavior.
 
 For a clean test pass that exits after one sweep:
@@ -130,6 +140,8 @@ The routing path is deliberately conservative: new messages are read first, loca
 
 Per-channel auto-respond can be enabled from the Behavior tab, but it is off by default. Dry-run still prevents sending even if auto-respond is enabled.
 
+The top-bar **Start/Pause** control runs or pauses the local scanner loop. **Dry-run mode** means the scanner can observe, remember, and draft, but approved messages are blocked until dry-run is turned off in **API & Runtime**.
+
 ## Privacy Boundary
 
 By default, Kabuki-Cord does not send Discord conversation text to OpenAI because LLM drafting is disabled. When you enable LLM drafting, the prompt can include recent visible Discord messages, lightweight per-user memory summaries, character memory, and per-user behavior notes so the model can draft context-aware replies. Use channel-level observe/engage toggles and budget limits to control that exposure.
@@ -137,6 +149,10 @@ By default, Kabuki-Cord does not send Discord conversation text to OpenAI becaus
 ## Updates
 
 The GUI includes an update check under **API & Runtime**. It only updates from the configured `origin` remote when that remote points at `Algo-Papi/Kabuki-Cord`, and it refuses to pull if the working tree has local changes.
+
+## Approvals
+
+Approval cards can be edited before sending. Use **Save** to persist draft edits, **Reply to** chips to prefix a recent poster's display name, **Discard** to remove an unwanted draft, and **Approve & Send** to send only when dry-run is off.
 
 ## Character Cards
 

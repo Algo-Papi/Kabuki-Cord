@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import mimetypes
 import os
 import secrets as token_secrets
 import subprocess
 import sys
+import threading
+import time
+import urllib.request
 from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.metadata import PackageNotFoundError, version
@@ -20,6 +24,7 @@ from .browser import DiscordWebSession
 from .budget import BudgetManager
 from .character_memory import CharacterMemoryStore
 from .config import AppConfig, load_config
+from .runner import NhiZuesRunner
 from .secrets import discord_credential_status, get_discord_credentials, set_discord_credentials
 from .user_instructions import UserInstructionStore
 
@@ -27,6 +32,7 @@ from .user_instructions import UserInstructionStore
 ROOT = Path.cwd()
 WEB_ROOT = ROOT / "web"
 SESSION_TOKEN = token_secrets.token_urlsafe(32)
+DISCORD_SESSION_LOCK = threading.Lock()
 
 
 class GuiHandler(BaseHTTPRequestHandler):
@@ -39,6 +45,12 @@ class GuiHandler(BaseHTTPRequestHandler):
                 self._json({"ok": False, "error": "Forbidden."}, status=403)
                 return
             self._json({"ok": True, "token": SESSION_TOKEN})
+            return
+        if parsed.path.startswith("/api/server-icons/"):
+            if not self._host_allowed():
+                self._json({"ok": False, "error": "Forbidden."}, status=403)
+                return
+            self._file(_server_icon_path(parsed.path.removeprefix("/api/server-icons/")))
             return
         if parsed.path.startswith("/api/") and not self._authorized_api(require_json=False):
             self._json({"ok": False, "error": "Forbidden."}, status=403)
@@ -89,6 +101,34 @@ class GuiHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/discord-login":
             start_discord_login()
             self._json({"ok": True, "message": "Discord sign-in window launched."})
+            return
+        if parsed.path == "/api/runtime-start":
+            RUNTIME.start()
+            self._json({"ok": True, "state": app_state()})
+            return
+        if parsed.path == "/api/runtime-pause":
+            RUNTIME.pause()
+            self._json({"ok": True, "state": app_state()})
+            return
+        if parsed.path == "/api/approval-update":
+            try:
+                update_approval(body)
+            except (KeyError, ValueError) as exc:
+                self._json({"ok": False, "error": str(exc)}, status=400)
+                return
+            self._json({"ok": True, "state": app_state()})
+            return
+        if parsed.path == "/api/approval-discard":
+            discard_approval(body)
+            self._json({"ok": True, "state": app_state()})
+            return
+        if parsed.path == "/api/approval-send":
+            try:
+                send_approval(body)
+            except RuntimeError as exc:
+                self._json({"ok": False, "error": str(exc)}, status=400)
+                return
+            self._json({"ok": True, "state": app_state()})
             return
         if parsed.path == "/api/update-check":
             self._json(check_update(apply_update=False))
@@ -195,6 +235,80 @@ class GuiHandler(BaseHTTPRequestHandler):
         return host in {"127.0.0.1", "localhost", "::1"}
 
 
+class RuntimeController:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._thread: threading.Thread | None = None
+        self._stop = threading.Event()
+        self._running = False
+        self._last_started_at: float | None = None
+        self._last_run_at: float | None = None
+        self._last_error: str = ""
+
+    def start(self) -> None:
+        with self._lock:
+            self._stop.clear()
+            if self._thread and self._thread.is_alive():
+                self._running = True
+                return
+            self._running = True
+            self._last_started_at = time.time()
+            self._thread = threading.Thread(target=self._loop, name="kabuki-runtime", daemon=True)
+            self._thread.start()
+
+    def pause(self) -> None:
+        with self._lock:
+            self._running = False
+            self._stop.set()
+
+    def state(self) -> dict:
+        thread_alive = bool(self._thread and self._thread.is_alive())
+        return {
+            "running": self._running and thread_alive,
+            "paused": not (self._running and thread_alive),
+            "last_started_at": self._last_started_at,
+            "last_run_at": self._last_run_at,
+            "last_error": self._last_error,
+        }
+
+    def _loop(self) -> None:
+        while not self._stop.is_set():
+            with self._lock:
+                active = self._running
+            if not active:
+                break
+
+            try:
+                config = load_config()
+                if not config.channels:
+                    self._last_error = "No channels are enabled for Observe."
+                    self._stop.wait(5)
+                    continue
+                if not DISCORD_SESSION_LOCK.acquire(blocking=False):
+                    self._last_error = "Discord browser profile is busy."
+                    self._stop.wait(5)
+                    continue
+                try:
+                    asyncio.run(NhiZuesRunner(config).run_once())
+                    self._last_run_at = time.time()
+                    self._last_error = ""
+                finally:
+                    DISCORD_SESSION_LOCK.release()
+                interval = max(config.poll_seconds, 5)
+            except Exception as exc:
+                self._last_error = str(exc)
+                interval = 10
+
+            if self._stop.wait(interval):
+                break
+
+        with self._lock:
+            self._running = False
+
+
+RUNTIME = RuntimeController()
+
+
 def app_state() -> dict:
     load_dotenv(override=True)
     config = load_config()
@@ -218,6 +332,7 @@ def app_state() -> dict:
             "max_llm_calls_per_run": config.max_llm_calls_per_run,
         },
         "discord": discord_credential_status(),
+        "runtime": RUNTIME.state(),
         "updates": update_state(),
         "env": {
             "OPENAI_MODEL": env.get("OPENAI_MODEL", ""),
@@ -239,6 +354,7 @@ def app_state() -> dict:
         "user_instructions": user_instruction_state(config.state_dir),
         "usage": usage_state(),
         "approvals": [asdict(item) for item in ApprovalQueue(config.state_dir / "approvals.json").list()],
+        "recent_posters": recent_posters_state(config.state_dir / "memory.json"),
         "memory": memory_state(config.state_dir / "memory.json"),
     }
 
@@ -257,14 +373,19 @@ def usage_state() -> dict:
 
 def sync_discord_servers() -> dict:
     config = load_config()
+    if not DISCORD_SESSION_LOCK.acquire(blocking=False):
+        raise RuntimeError("Discord browser profile is busy. Pause scanning or close the sign-in window, then try again.")
     try:
-        discovered = asyncio.run(_discover_discord_workspace(config))
-    except RuntimeError:
-        raise
-    except Exception as exc:
-        raise RuntimeError(
-            "Discord sync failed. Close any open Kabuki Discord sign-in windows and try again."
-        ) from exc
+        try:
+            discovered = asyncio.run(_discover_discord_workspace(config))
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            raise RuntimeError(
+                "Discord sync failed. Close any open Kabuki Discord sign-in windows and try again."
+            ) from exc
+    finally:
+        DISCORD_SESSION_LOCK.release()
     payload = _read_json(config.servers_file, default={"servers": []})
     server_list = payload.get("servers")
     if not isinstance(server_list, list):
@@ -299,6 +420,10 @@ def sync_discord_servers() -> dict:
         if label and str(existing.get("label") or "").strip() != label:
             existing["label"] = label
             updated += 1
+        icon_url = str(server.get("icon_url") or "")
+        icon_path = _cache_server_icon(config.state_dir, server_id, icon_url)
+        if icon_path:
+            existing["icon_path"] = icon_path
         channel_stats = _merge_channels(existing, server.get("channels", []))
         channels_discovered += channel_stats["discovered"]
         channels_added += channel_stats["added"]
@@ -432,6 +557,35 @@ def memory_state(path: Path) -> dict:
     }
 
 
+def recent_posters_state(path: Path) -> dict:
+    payload = _read_json(path, default={"channels": {}})
+    result: dict[str, list[dict]] = {}
+    for channel_id, rows in payload.get("channels", {}).items():
+        posters: list[dict] = []
+        seen: set[str] = set()
+        for row in reversed(rows):
+            author = str(row.get("author") or "").strip()
+            if not author:
+                continue
+            author_id = row.get("author_id")
+            key = f"discord:{author_id}" if author_id else f"name:{author.lower()}"
+            if key in seen:
+                continue
+            seen.add(key)
+            posters.append(
+                {
+                    "user_key": key,
+                    "display_name": author,
+                    "author_id": author_id,
+                    "reply_prefix": f"@{author}",
+                }
+            )
+            if len(posters) >= 6:
+                break
+        result[str(channel_id)] = posters
+    return result
+
+
 def character_memory_state(state_dir: Path, card_id: str) -> dict:
     memory = CharacterMemoryStore(state_dir / "character_memory").load(card_id)
     return asdict(memory)
@@ -440,6 +594,63 @@ def character_memory_state(state_dir: Path, card_id: str) -> dict:
 def user_instruction_state(state_dir: Path) -> dict:
     path = state_dir / "user_instructions.json"
     return _read_json(path, default={"items": []})
+
+
+def update_approval(body: dict) -> None:
+    approval_id = str(body.get("approval_id") or "")
+    draft = str(body.get("draft") or "").strip()
+    if not approval_id or not draft:
+        raise ValueError("Missing approval id or draft text.")
+    config = load_config()
+    ApprovalQueue(config.state_dir / "approvals.json").update_draft(approval_id, draft)
+
+
+def discard_approval(body: dict) -> None:
+    approval_id = str(body.get("approval_id") or "")
+    if not approval_id:
+        return
+    config = load_config()
+    ApprovalQueue(config.state_dir / "approvals.json").remove(approval_id)
+
+
+def send_approval(body: dict) -> None:
+    approval_id = str(body.get("approval_id") or "")
+    draft = str(body.get("draft") or "").strip()
+    if not approval_id or not draft:
+        raise RuntimeError("Missing approval id or draft text.")
+
+    config = load_config()
+    if config.dry_run:
+        raise RuntimeError("Dry-run is enabled. Turn off Dry-run mode in API & Runtime before sending.")
+    if not DISCORD_SESSION_LOCK.acquire(blocking=False):
+        raise RuntimeError("Discord browser profile is busy. Pause scanning or close the sign-in window, then try again.")
+    try:
+        queue = ApprovalQueue(config.state_dir / "approvals.json")
+        item = queue.update_draft(approval_id, draft)
+        asyncio.run(_send_approval_message(config, item.server_id, item.channel_id, draft))
+        queue.remove(approval_id)
+    finally:
+        DISCORD_SESSION_LOCK.release()
+
+
+async def _send_approval_message(config: AppConfig, server_id: str, channel_id: str, draft: str) -> None:
+    credentials = get_discord_credentials()
+    async with DiscordWebSession(
+        config.profile_dir,
+        browser_channel=config.browser_channel,
+        headless=config.headless,
+    ) as session:
+        logged_in = await session.login_if_needed(
+            email=credentials.email,
+            password=credentials.password,
+            timeout_seconds=120,
+        )
+        if not logged_in:
+            raise RuntimeError("Discord is not signed in. Use Sign In first.")
+        current_url = await session.navigate_channel(server_id, channel_id)
+        if channel_id not in current_url:
+            raise RuntimeError("Discord redirected away from the approval channel.")
+        await session.send_message(draft)
 
 
 def read_env() -> dict[str, str]:
@@ -587,6 +798,33 @@ def _safe_character_path(card_path: str, *, card_dir: Path | None = None) -> Pat
     target = (base / card_path).resolve()
     if base.resolve() not in target.parents and target != base.resolve():
         raise ValueError("Character card path escapes card directory.")
+    return target
+
+
+def _cache_server_icon(state_dir: Path, server_id: str, icon_url: str) -> str:
+    if not icon_url.startswith(("https://", "http://")):
+        return ""
+    suffix = Path(urlparse(icon_url).path).suffix.lower()
+    if suffix not in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
+        suffix = ".webp"
+    filename = f"{server_id}-{hashlib.sha256(icon_url.encode('utf-8')).hexdigest()[:12]}{suffix}"
+    target_dir = state_dir / "server_icons"
+    target = target_dir / filename
+    if not target.exists():
+        target_dir.mkdir(parents=True, exist_ok=True)
+        request = urllib.request.Request(icon_url, headers={"User-Agent": "Kabuki-Cord"})
+        with urllib.request.urlopen(request, timeout=20) as response:
+            target.write_bytes(response.read())
+    return f"/api/server-icons/{filename}"
+
+
+def _server_icon_path(filename: str) -> Path | None:
+    if not filename or "/" in filename or "\\" in filename:
+        return None
+    target = (load_config().state_dir / "server_icons" / filename).resolve()
+    base = (load_config().state_dir / "server_icons").resolve()
+    if target != base and base not in target.parents:
+        return None
     return target
 
 

@@ -62,6 +62,37 @@ class ApprovalQueue:
     def list(self) -> list[ApprovalItem]:
         return list(self._items)
 
+    def get(self, approval_id: str) -> ApprovalItem | None:
+        return next((item for item in self._items if item.approval_id == approval_id), None)
+
+    def update_draft(self, approval_id: str, draft: str) -> ApprovalItem:
+        for index, item in enumerate(self._items):
+            if item.approval_id != approval_id:
+                continue
+            updated = ApprovalItem(
+                approval_id=item.approval_id,
+                created_at=item.created_at,
+                server_id=item.server_id,
+                channel_id=item.channel_id,
+                character_name=item.character_name,
+                engagement_type=item.engagement_type,
+                reason=item.reason,
+                draft=draft,
+                source_message_ids=item.source_message_ids,
+            )
+            self._items[index] = updated
+            self._save()
+            return updated
+        raise KeyError(f"Unknown approval: {approval_id}")
+
+    def remove(self, approval_id: str) -> bool:
+        original_count = len(self._items)
+        self._items = [item for item in self._items if item.approval_id != approval_id]
+        changed = len(self._items) != original_count
+        if changed:
+            self._save()
+        return changed
+
     def _load(self) -> list[ApprovalItem]:
         if not self.queue_file.exists():
             return []

@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import ctypes
 import threading
 import webbrowser
 from http.server import ThreadingHTTPServer
+from pathlib import Path
 
 from .gui import GuiHandler
+
+
+ROOT = Path.cwd()
 
 
 def main() -> None:
@@ -25,6 +30,9 @@ def main() -> None:
         return
 
     try:
+        icon_path = ROOT / "assets" / "app.ico"
+        if hasattr(ctypes, "windll"):
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("KabukiCord.Desktop")
         window = webview.create_window(
             "Kabuki-Cord",
             url,
@@ -32,7 +40,7 @@ def main() -> None:
             height=980,
             min_size=(1180, 720),
         )
-        webview.start()
+        webview.start(icon=str(icon_path) if icon_path.exists() else None)
         _ = window
     finally:
         server.shutdown()

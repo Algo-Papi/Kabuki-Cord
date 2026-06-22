@@ -78,9 +78,9 @@ class DiscordWebSession:
                     .replace(/,?\\s*\\d+\\s+unread messages?.*$/i, "")
                     .replace(/,?\\s*unread.*$/i, "")
                     .trim();
-                const remember = (serverId, label) => {
+                const remember = (serverId, label, iconUrl = "") => {
                     if (seen.has(serverId)) return;
-                    seen.set(serverId, { server_id: serverId, label: cleanLabel(label) });
+                    seen.set(serverId, { server_id: serverId, label: cleanLabel(label), icon_url: iconUrl || "" });
                 };
 
                 const anchors = Array.from(
@@ -99,7 +99,8 @@ class DiscordWebSession:
                         labelledNode?.getAttribute("title") ||
                         anchor.textContent ||
                         "";
-                    remember(serverId, rawLabel);
+                    const iconUrl = anchor.querySelector("img[src]")?.getAttribute("src") || "";
+                    remember(serverId, rawLabel, iconUrl);
                 }
 
                 const treeItems = Array.from(
@@ -116,14 +117,19 @@ class DiscordWebSession:
                         item.getAttribute("title") ||
                         item.textContent ||
                         "";
-                    remember(match[1], rawLabel);
+                    const iconUrl = item.querySelector("img[src]")?.getAttribute("src") || "";
+                    remember(match[1], rawLabel, iconUrl);
                 }
                 return Array.from(seen.values());
             }
             """
         )
         return [
-            {"server_id": str(row["server_id"]), "label": str(row.get("label") or "")}
+            {
+                "server_id": str(row["server_id"]),
+                "label": str(row.get("label") or ""),
+                "icon_url": str(row.get("icon_url") or ""),
+            }
             for row in rows
             if row.get("server_id")
         ]

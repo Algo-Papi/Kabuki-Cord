@@ -68,6 +68,7 @@ function render() {
   renderCharacterCards();
   renderCharacterEditor();
   renderSettings();
+  renderRuntime();
   renderGrowth();
   renderApprovals();
   renderMetrics();
@@ -77,6 +78,7 @@ function renderRail() {
   $("serverRail").innerHTML = servers()
     .map((srv, index) => {
       const label = srv.label || `S${index + 1}`;
+      const icon = srv.icon_path || srv.icon_url || "/assets/placeholders/server.svg";
       const initials = label
         .split(/\s+/)
         .filter(Boolean)
@@ -86,7 +88,7 @@ function renderRail() {
         .toUpperCase() || String(index + 1);
       return `
         <button class="server-bubble ${index === selectedServer ? "active" : ""}" data-server="${index}" title="${escapeHtml(label)}">
-          <img src="/assets/placeholders/server.svg" alt="" />
+          <img src="${escapeAttr(icon)}" alt="" onerror="this.src='/assets/placeholders/server.svg'" />
           <span>${escapeHtml(initials)}</span>
         </button>
       `;
@@ -228,7 +230,24 @@ function renderSettings() {
   $("dailyBudget").value = appState.env.NHI_ZUES_MAX_DAILY_USD || "0.25";
   $("sessionBudget").value = appState.env.NHI_ZUES_MAX_SESSION_USD || "0.05";
   $("maxCalls").value = appState.env.NHI_ZUES_MAX_LLM_CALLS_PER_RUN || "3";
-  $("runtimeStatus").textContent = appState.app.dry_run ? "dry-run enabled" : "live sending possible";
+}
+
+function renderRuntime() {
+  const runtime = appState.runtime || {};
+  const running = Boolean(runtime.running);
+  $("runtimeControl").innerHTML = running
+    ? `<i class="bi bi-pause-fill"></i> Pause`
+    : `<i class="bi bi-play-fill"></i> Start`;
+  $("runtimeControl").className = running ? "secondary-button active-runtime" : "secondary-button";
+  if (running) {
+    $("runtimeStatus").textContent = appState.app.dry_run
+      ? "scanner running - dry-run"
+      : "scanner running - live sends allowed";
+  } else {
+    $("runtimeStatus").textContent = appState.app.dry_run
+      ? "paused - dry-run"
+      : "paused - live sends allowed";
+  }
 }
 
 function renderGrowth() {
@@ -266,20 +285,99 @@ function renderApprovals() {
   $("approvalList").innerHTML =
     approvals
       .map((item) => `
-        <div class="approval-item">
+        <div class="approval-item" data-approval-item="${escapeAttr(item.approval_id)}">
           <strong>${escapeHtml(item.character_name)} · #${escapeHtml(item.channel_id)}</strong>
           <span>${escapeHtml(item.reason)}</span>
-          <p>${escapeHtml(item.draft)}</p>
-          <button class="small-button" data-copy="${escapeAttr(item.draft)}"><i class="bi bi-copy"></i> Copy draft</button>
+          <textarea class="approval-draft" data-approval-draft="${escapeAttr(item.approval_id)}" rows="5">${escapeHtml(item.draft)}</textarea>
+          ${recentPosterChips(item.channel_id, item.approval_id)}
+          <div class="approval-actions">
+            <button class="small-button" data-approval-save="${escapeAttr(item.approval_id)}"><i class="bi bi-save2"></i> Save</button>
+            <button class="small-button" data-copy="${escapeAttr(item.approval_id)}"><i class="bi bi-copy"></i> Copy</button>
+            <button class="small-button" data-approval-discard="${escapeAttr(item.approval_id)}"><i class="bi bi-trash3"></i> Discard</button>
+            <button class="primary-button approval-send" data-approval-send="${escapeAttr(item.approval_id)}"><i class="bi bi-send"></i> Approve & Send</button>
+          </div>
+          ${appState.app.dry_run ? `<div class="approval-warning">Dry-run is on. Approved messages will be blocked until Dry-run mode is turned off in API & Runtime.</div>` : ""}
         </div>
       `)
       .join("") || `<div class="approval-item"><strong>No queued approvals</strong><span>Proactive drafts will appear here.</span></div>`;
   document.querySelectorAll("[data-copy]").forEach((button) => {
     button.addEventListener("click", async () => {
-      await navigator.clipboard.writeText(button.dataset.copy || "");
+      await navigator.clipboard.writeText(approvalDraft(button.dataset.copy));
       toast("Draft copied");
     });
   });
+  document.querySelectorAll("[data-approval-save]").forEach((button) => {
+    button.addEventListener("click", () => saveApproval(button.dataset.approvalSave));
+  });
+  document.querySelectorAll("[data-approval-discard]").forEach((button) => {
+    button.addEventListener("click", () => discardApproval(button.dataset.approvalDiscard));
+  });
+  document.querySelectorAll("[data-approval-send]").forEach((button) => {
+    button.addEventListener("click", () => sendApproval(button.dataset.approvalSend));
+  });
+  document.querySelectorAll("[data-poster-prefix]").forEach((button) => {
+    button.addEventListener("click", () => insertReplyPrefix(button.dataset.approvalId, button.dataset.posterPrefix));
+  });
+}
+
+function recentPosterChips(channelId, approvalId) {
+  const posters = appState.recent_posters?.[channelId] || [];
+  if (!posters.length) return `<div class="poster-chips muted">No recent posters recorded for this channel yet.</div>`;
+  return `
+    <div class="poster-chips">
+      <span>Reply to</span>
+      ${posters
+        .map((poster) => `
+          <button type="button" data-approval-id="${escapeAttr(approvalId)}" data-poster-prefix="${escapeAttr(poster.reply_prefix)}">
+            ${escapeHtml(poster.display_name)}
+          </button>
+        `)
+        .join("")}
+    </div>
+  `;
+}
+
+function approvalDraft(approvalId) {
+  return document.querySelector(`[data-approval-draft="${cssEscape(approvalId)}"]`)?.value.trim() || "";
+}
+
+function insertReplyPrefix(approvalId, prefix) {
+  const textarea = document.querySelector(`[data-approval-draft="${cssEscape(approvalId)}"]`);
+  if (!textarea || !prefix) return;
+  const current = textarea.value.trim();
+  textarea.value = current.startsWith(prefix) ? current : `${prefix} ${current}`;
+  textarea.focus();
+}
+
+async function saveApproval(approvalId) {
+  await api("/api/approval-update", {
+    method: "POST",
+    body: JSON.stringify({ approval_id: approvalId, draft: approvalDraft(approvalId) }),
+  });
+  await loadState();
+  toast("Approval draft saved");
+}
+
+async function discardApproval(approvalId) {
+  await api("/api/approval-discard", {
+    method: "POST",
+    body: JSON.stringify({ approval_id: approvalId }),
+  });
+  await loadState();
+  toast("Approval discarded");
+}
+
+async function sendApproval(approvalId) {
+  try {
+    await api("/api/approval-send", {
+      method: "POST",
+      body: JSON.stringify({ approval_id: approvalId, draft: approvalDraft(approvalId) }),
+    });
+    await loadState();
+    toast("Approved message sent");
+  } catch (error) {
+    toast(error.message);
+  }
 }
 
 function renderMetrics() {
@@ -388,6 +486,15 @@ async function applyUpdate() {
   renderUpdateResult(result);
 }
 
+async function toggleRuntime() {
+  const runtime = appState.runtime || {};
+  const path = runtime.running ? "/api/runtime-pause" : "/api/runtime-start";
+  const result = await api(path, { method: "POST", body: JSON.stringify({}) });
+  appState = result.state;
+  render();
+  toast(appState.runtime.running ? "Scanner started" : "Scanner paused");
+}
+
 function renderUpdateResult(result) {
   const message = result.ok
     ? result.update_available
@@ -439,6 +546,11 @@ function escapeAttr(value) {
   return escapeHtml(value).replaceAll("'", "&#39;");
 }
 
+function cssEscape(value) {
+  if (window.CSS?.escape) return CSS.escape(value || "");
+  return String(value || "").replaceAll('"', '\\"');
+}
+
 function toast(message) {
   $("toast").textContent = message;
   $("toast").classList.add("show");
@@ -455,6 +567,7 @@ document.querySelectorAll(".tab").forEach((tab) => {
 });
 
 $("refresh").addEventListener("click", loadState);
+$("runtimeControl").addEventListener("click", () => toggleRuntime().catch((error) => toast(error.message)));
 $("saveAll").addEventListener("click", saveAll);
 $("saveServers").addEventListener("click", saveAll);
 $("syncDiscordServers").addEventListener("click", () => syncDiscordServers().catch((error) => toast(error.message)));
