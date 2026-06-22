@@ -25,6 +25,7 @@ TEXT_SUFFIXES = {
     ".md",
     ".ps1",
     ".py",
+    ".svg",
     ".toml",
     ".txt",
     ".yaml",

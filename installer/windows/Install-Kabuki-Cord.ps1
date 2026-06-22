@@ -125,7 +125,12 @@ function New-Shortcut {
   $shortcut.TargetPath = $TargetPath
   $shortcut.WorkingDirectory = $WorkingDirectory
   $shortcut.Description = $Description
-  $shortcut.IconLocation = "$env:SystemRoot\System32\shell32.dll,44"
+  $iconPath = Join-Path $WorkingDirectory "assets\app.ico"
+  if (Test-Path $iconPath) {
+    $shortcut.IconLocation = $iconPath
+  } else {
+    $shortcut.IconLocation = "$env:SystemRoot\System32\shell32.dll,44"
+  }
   $shortcut.Save()
 }
 

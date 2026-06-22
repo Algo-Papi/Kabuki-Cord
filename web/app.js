@@ -75,7 +75,12 @@ function renderRail() {
         .map((part) => part[0])
         .join("")
         .toUpperCase() || String(index + 1);
-      return `<button class="server-bubble ${index === selectedServer ? "active" : ""}" data-server="${index}" title="${escapeHtml(label)}">${escapeHtml(initials)}</button>`;
+      return `
+        <button class="server-bubble ${index === selectedServer ? "active" : ""}" data-server="${index}" title="${escapeHtml(label)}">
+          <img src="/assets/placeholders/server.svg" alt="" />
+          <span>${escapeHtml(initials)}</span>
+        </button>
+      `;
     })
     .join("");
   document.querySelectorAll("[data-server]").forEach((button) => {
@@ -105,8 +110,11 @@ function renderServerPanel() {
       return `
         <div class="channel-row ${index === selectedChannel ? "active" : ""}">
           <div class="channel-name" data-channel="${index}">
-            <strong># ${escapeHtml(name)}</strong>
-            <span>${escapeHtml(chan.channel_id || "")}</span>
+            <img src="/assets/placeholders/channel.svg" alt="" />
+            <div>
+              <strong>${escapeHtml(name)}</strong>
+              <span>${escapeHtml(chan.channel_id || "")}</span>
+            </div>
           </div>
           <div class="channel-actions">
             <button class="pill-toggle observe ${chan.scan_enabled ? "on" : ""}" data-toggle="scan" data-channel="${index}">Observe</button>
@@ -145,7 +153,7 @@ function renderCharacterCards() {
   $("characterCards").innerHTML = appState.characters
     .map((card) => `
       <button class="character-card ${card.path === activePath ? "active" : ""}" data-card="${escapeAttr(card.path)}">
-        <div class="portrait">${escapeHtml((card.name || "K").slice(0, 2).toUpperCase())}</div>
+        <div class="portrait"><img src="/assets/placeholders/character.svg" alt="" /></div>
         <strong>${escapeHtml(card.name)}</strong>
         <small>${escapeHtml(card.path)}</small>
       </button>
@@ -226,8 +234,11 @@ function renderGrowth() {
     users
       .map((user) => `
         <div class="user-item ${user.user_key === selectedUserKey ? "active" : ""}" data-user="${escapeAttr(user.user_key)}">
-          <strong>${escapeHtml(user.display_name || user.user_key)}</strong>
-          <span>${escapeHtml(user.user_key)} · ${user.message_count || 0} messages</span>
+          <img src="/assets/placeholders/user.svg" alt="" />
+          <div>
+            <strong>${escapeHtml(user.display_name || user.user_key)}</strong>
+            <span>${escapeHtml(user.user_key)} · ${user.message_count || 0} messages</span>
+          </div>
         </div>
       `)
       .join("") || `<div class="note-item">No users observed yet.</div>`;

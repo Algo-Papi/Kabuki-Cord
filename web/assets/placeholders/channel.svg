@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="Channel placeholder">
+  <defs>
+    <linearGradient id="bg" x1="12" y1="10" x2="84" y2="86" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#202a34"/>
+      <stop offset="1" stop-color="#10161c"/>
+    </linearGradient>
+    <linearGradient id="cyan" x1="19" y1="17" x2="77" y2="79" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#74e7ff"/>
+      <stop offset="1" stop-color="#7a57ff"/>
+    </linearGradient>
+  </defs>
+  <rect x="9" y="9" width="78" height="78" rx="22" fill="url(#bg)" stroke="#30404b" stroke-width="3"/>
+  <path d="M35 24 29 72M61 24 55 72M24 39h51M21 57h51" stroke="#dce6ea" stroke-width="8" stroke-linecap="round"/>
+  <path d="M25 39h50M22 57h50" stroke="url(#cyan)" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="76" cy="25" r="7" fill="#10161c" stroke="#66dcf4" stroke-width="4"/>
+  <circle cx="23" cy="73" r="5" fill="#b83a35"/>
+</svg>

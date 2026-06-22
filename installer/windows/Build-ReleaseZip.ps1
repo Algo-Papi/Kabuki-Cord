@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-  [string]$Version = "1.0.2"
+  [string]$Version = "1.0.3"
 )
 
 $ErrorActionPreference = "Stop"
@@ -13,6 +13,7 @@ $ZipPath = Join-Path $DistDir "Kabuki-Cord-$Version-windows.zip"
 $ExePath = Join-Path $RepoRoot "Install-Kabuki-Cord.exe"
 $WrapperSource = Join-Path $ScriptDir "InstallWrapper.cs"
 $Csc = Join-Path $env:WINDIR "Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+$IconPath = Join-Path $RepoRoot "assets\app.ico"
 
 if (-not (Test-Path $Csc)) {
   throw "Could not find csc.exe at $Csc"
@@ -23,7 +24,17 @@ Remove-Item -Recurse -Force -Path $StageDir -ErrorAction SilentlyContinue
 Remove-Item -Force -Path $ZipPath -ErrorAction SilentlyContinue
 Remove-Item -Force -Path $ExePath -ErrorAction SilentlyContinue
 
-& $Csc /nologo /target:winexe /out:$ExePath /reference:System.Windows.Forms.dll $WrapperSource
+$cscArgs = @(
+  "/nologo",
+  "/target:winexe",
+  "/out:$ExePath",
+  "/reference:System.Windows.Forms.dll"
+)
+if (Test-Path $IconPath) {
+  $cscArgs += "/win32icon:$IconPath"
+}
+$cscArgs += $WrapperSource
+& $Csc @cscArgs
 if ($LASTEXITCODE -ne 0) {
   throw "Install wrapper build failed."
 }
