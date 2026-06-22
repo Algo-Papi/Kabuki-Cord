@@ -47,6 +47,10 @@ APPROVAL_REGENERATION_LOCKS: dict[str, threading.Lock] = {}
 APPROVAL_REGENERATION_LOCKS_LOCK = threading.Lock()
 APPROVAL_SEND_LOCKS: dict[str, threading.Lock] = {}
 APPROVAL_SEND_LOCKS_LOCK = threading.Lock()
+UPDATE_STATE_CACHE: dict[str, object] | None = None
+UPDATE_STATE_CACHE_AT = 0.0
+UPDATE_STATE_CACHE_LOCK = threading.Lock()
+UPDATE_STATE_CACHE_SECONDS = 300.0
 OPENAI_MODEL_FALLBACKS = [
     {
         "id": "gpt-5.4-nano",
@@ -129,6 +133,24 @@ class GuiHandler(BaseHTTPRequestHandler):
             except RuntimeError as exc:
                 self._json({"ok": False, "error": str(exc)}, status=400)
             return
+        if parsed.path == "/api/discord-repair-server":
+            try:
+                self._json(repair_discord_server(body))
+            except RuntimeError as exc:
+                self._json({"ok": False, "error": str(exc)}, status=400)
+            return
+        if parsed.path == "/api/channel-backfill":
+            try:
+                self._json(backfill_channel_history(body))
+            except RuntimeError as exc:
+                self._json({"ok": False, "error": str(exc)}, status=400)
+            return
+        if parsed.path == "/api/channel-refresh":
+            try:
+                self._json(refresh_channel_latest(body))
+            except RuntimeError as exc:
+                self._json({"ok": False, "error": str(exc)}, status=400)
+            return
         if parsed.path == "/api/settings":
             try:
                 update_env(body)
@@ -152,7 +174,11 @@ class GuiHandler(BaseHTTPRequestHandler):
             self._json({"ok": True, "state": app_state()})
             return
         if parsed.path == "/api/discord-login":
-            start_discord_login()
+            try:
+                start_discord_login()
+            except RuntimeError as exc:
+                self._json({"ok": False, "error": str(exc)}, status=400)
+                return
             self._json({"ok": True, "message": "Discord sign-in window launched."})
             return
         if parsed.path == "/api/open-discord-channel":
@@ -199,7 +225,13 @@ class GuiHandler(BaseHTTPRequestHandler):
             try:
                 regenerate_approval(body)
             except RuntimeError as exc:
+                log_regeneration_failure(body, str(exc))
                 self._json({"ok": False, "error": str(exc)}, status=400)
+                return
+            except Exception as exc:
+                message = f"Could not regenerate approval draft: {_redact_secret_text(str(exc))}"
+                log_regeneration_failure(body, message)
+                self._json({"ok": False, "error": message}, status=500)
                 return
             self._json({"ok": True, "state": app_state()})
             return
@@ -208,6 +240,15 @@ class GuiHandler(BaseHTTPRequestHandler):
                 create_manual_approval(body)
             except RuntimeError as exc:
                 self._json({"ok": False, "error": str(exc)}, status=400)
+                return
+            except Exception as exc:
+                self._json(
+                    {
+                        "ok": False,
+                        "error": f"Could not create approval draft: {_redact_secret_text(str(exc))}",
+                    },
+                    status=500,
+                )
                 return
             self._json({"ok": True, "state": app_state()})
             return
@@ -410,7 +451,7 @@ RUNTIME = RuntimeController()
 
 
 def app_state() -> dict:
-    load_dotenv(override=True)
+    load_dotenv(override=True, encoding="utf-8-sig")
     config = load_config()
     env = read_env()
     model_catalog = model_catalog_state(config)
@@ -426,6 +467,7 @@ def app_state() -> dict:
             "llm_enabled": config.llm_enabled,
             "draft_in_dry_run": config.draft_in_dry_run,
             "conversation_reply_enabled": config.conversation_reply_enabled,
+            "runtime_mode": config.runtime_mode,
             "dry_run": config.dry_run,
             "proactive_approval_required": config.proactive_approval_required,
             "openai_model": config.openai_model,
@@ -454,6 +496,7 @@ def app_state() -> dict:
         "env": {
             "OPENAI_MODEL": env.get("OPENAI_MODEL", ""),
             "NHI_ZUES_LLM_ENABLED": env.get("NHI_ZUES_LLM_ENABLED", "false"),
+            "NHI_ZUES_RUNTIME_MODE": env.get("NHI_ZUES_RUNTIME_MODE", config.runtime_mode),
             "NHI_ZUES_DRAFT_IN_DRY_RUN": env.get("NHI_ZUES_DRAFT_IN_DRY_RUN", "false"),
             "NHI_ZUES_CONVERSATION_REPLY_ENABLED": env.get(
                 "NHI_ZUES_CONVERSATION_REPLY_ENABLED", "false"
@@ -795,6 +838,142 @@ def sync_discord_servers() -> dict:
     }
 
 
+def repair_discord_server(body: dict) -> dict:
+    server_id = str(body.get("server_id") or "").strip()
+    if not server_id:
+        raise RuntimeError("Select a server before repairing channels.")
+    config = load_config()
+    _acquire_discord_session_or_raise(pause_runtime=True)
+    try:
+        try:
+            discovered_channels = asyncio.run(_discover_discord_server_channels(config, server_id))
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            raise RuntimeError(
+                "Discord channel repair failed. Close any open Kabuki Discord sign-in/channel windows and try again."
+            ) from exc
+    finally:
+        DISCORD_SESSION_LOCK.release()
+
+    payload = _read_json(config.servers_file, default={"servers": []})
+    server_list = payload.get("servers")
+    if not isinstance(server_list, list):
+        server_list = []
+    server = next(
+        (
+            item
+            for item in server_list
+            if isinstance(item, dict) and str(item.get("server_id") or "") == server_id
+        ),
+        None,
+    )
+    if server is None:
+        server = {
+            "server_id": server_id,
+            "label": f"Server {server_id}",
+            "character_card": None,
+            "poll_seconds": 120,
+            "channels": [],
+        }
+        server_list.append(server)
+    stats = _merge_channels(server, discovered_channels)
+    _write_json(config.servers_file, {**payload, "servers": server_list})
+    EventLog(config.state_dir / "events.json").add(
+        event_type="discord_repair",
+        server_id=server_id,
+        channel_id="",
+        summary=(
+            f"Server channel repair found {stats['discovered']} channel/thread item(s), "
+            f"added {stats['added']}, updated {stats['updated']}."
+        ),
+        draft="",
+    )
+    return {"ok": True, **stats, "state": app_state()}
+
+
+def backfill_channel_history(body: dict) -> dict:
+    server_id = str(body.get("server_id") or "").strip()
+    channel_id = str(body.get("channel_id") or "").strip()
+    try:
+        limit = max(40, min(int(body.get("limit") or 160), 240))
+    except (TypeError, ValueError):
+        limit = 160
+    if not server_id or not channel_id:
+        raise RuntimeError("Select a channel before backfilling history.")
+
+    config = load_config()
+    _acquire_discord_session_or_raise(pause_runtime=True)
+    try:
+        try:
+            messages = asyncio.run(_backfill_channel_history(config, server_id, channel_id, limit=limit))
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            raise RuntimeError(
+                "Channel history backfill failed. Close any open Kabuki Discord sign-in/channel windows and try again."
+            ) from exc
+    finally:
+        DISCORD_SESSION_LOCK.release()
+
+    memory = ConversationMemory(config.state_dir / "memory.json", max_messages_per_channel=max(limit, 160))
+    memory.load()
+    fresh = memory.ingest(channel_id, messages)
+    memory.save()
+    EventLog(config.state_dir / "events.json").add(
+        event_type="channel_backfilled",
+        server_id=server_id,
+        channel_id=channel_id,
+        summary=f"Backfilled {len(messages)} visible/history message(s), {len(fresh)} new to Kabuki memory.",
+        draft="",
+    )
+    return {
+        "ok": True,
+        "messages": len(messages),
+        "new": len(fresh),
+        "state": app_state(),
+    }
+
+
+def refresh_channel_latest(body: dict) -> dict:
+    server_id = str(body.get("server_id") or "").strip()
+    channel_id = str(body.get("channel_id") or "").strip()
+    if not server_id or not channel_id:
+        raise RuntimeError("Select a channel before refreshing latest messages.")
+
+    config = load_config()
+    _acquire_discord_session_or_raise(pause_runtime=True)
+    try:
+        try:
+            messages = asyncio.run(_read_latest_channel_messages(config, server_id, channel_id))
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            raise RuntimeError(
+                "Latest message refresh failed. Close any open Kabuki Discord sign-in/channel windows and try again."
+            ) from exc
+    finally:
+        DISCORD_SESSION_LOCK.release()
+
+    memory = ConversationMemory(config.state_dir / "memory.json")
+    memory.load()
+    fresh = memory.ingest(channel_id, messages)
+    memory.save()
+    EventLog(config.state_dir / "events.json").add(
+        event_type="channel_refreshed",
+        server_id=server_id,
+        channel_id=channel_id,
+        summary=f"Refreshed latest visible messages: {len(messages)} found, {len(fresh)} new.",
+        draft="",
+    )
+    return {
+        "ok": True,
+        "messages": len(messages),
+        "new": len(fresh),
+        "state": app_state(),
+    }
+
+
 def _acquire_discord_session_or_raise(*, pause_runtime: bool = False) -> None:
     if pause_runtime:
         RUNTIME.pause(wait=True, timeout=10.0)
@@ -836,13 +1015,14 @@ def _merge_channels(server: dict, discovered_channels: list[dict]) -> dict[str, 
                 "label": str(channel.get("label") or ""),
                 "channel_type": str(channel.get("channel_type") or "text"),
                 "category": str(channel.get("category") or ""),
+                "parent_channel_id": str(channel.get("parent_channel_id") or ""),
                 "scan_enabled": False,
                 "engage_enabled": False,
                 "auto_respond_enabled": False,
             }
             added += 1
         else:
-            for key in ("label", "channel_type", "category"):
+            for key in ("label", "channel_type", "category", "parent_channel_id"):
                 value = str(channel.get(key) or "")
                 if value and str(existing.get(key) or "") != value:
                     existing[key] = value
@@ -884,6 +1064,76 @@ async def _discover_discord_workspace(config: AppConfig) -> list[dict]:
     if not servers:
         raise RuntimeError("No Discord servers were found in the signed-in browser profile.")
     return servers
+
+
+async def _discover_discord_server_channels(config: AppConfig, server_id: str) -> list[dict]:
+    credentials = get_discord_credentials()
+    async with DiscordWebSession(
+        config.profile_dir,
+        browser_channel=config.browser_channel,
+        headless=config.headless,
+    ) as session:
+        logged_in = await session.login_if_needed(
+            email=credentials.email,
+            password=credentials.password,
+            timeout_seconds=120,
+            allow_human_challenge=False,
+        )
+        if not logged_in:
+            raise RuntimeError(discord_login_blocker_message(await session.login_blocker_state()))
+        return await session.discover_channels(server_id)
+
+
+async def _backfill_channel_history(
+    config: AppConfig,
+    server_id: str,
+    channel_id: str,
+    *,
+    limit: int,
+) -> list[MessageRecord]:
+    credentials = get_discord_credentials()
+    async with DiscordWebSession(
+        config.profile_dir,
+        browser_channel=config.browser_channel,
+        headless=config.headless,
+    ) as session:
+        logged_in = await session.login_if_needed(
+            email=credentials.email,
+            password=credentials.password,
+            timeout_seconds=120,
+            allow_human_challenge=False,
+        )
+        if not logged_in:
+            raise RuntimeError(discord_login_blocker_message(await session.login_blocker_state()))
+        current_url = await session.navigate_channel(server_id, channel_id)
+        if channel_id not in current_url:
+            raise RuntimeError("Discord redirected away from the selected channel.")
+        return await session.read_channel_history(server_id, channel_id, limit=limit)
+
+
+async def _read_latest_channel_messages(
+    config: AppConfig,
+    server_id: str,
+    channel_id: str,
+) -> list[MessageRecord]:
+    credentials = get_discord_credentials()
+    async with DiscordWebSession(
+        config.profile_dir,
+        browser_channel=config.browser_channel,
+        headless=config.headless,
+    ) as session:
+        logged_in = await session.login_if_needed(
+            email=credentials.email,
+            password=credentials.password,
+            timeout_seconds=120,
+            allow_human_challenge=False,
+        )
+        if not logged_in:
+            raise RuntimeError(discord_login_blocker_message(await session.login_blocker_state()))
+        current_url = await session.navigate_channel(server_id, channel_id)
+        if channel_id not in current_url:
+            raise RuntimeError("Discord redirected away from the selected channel.")
+        return await session.read_visible_messages(server_id, channel_id)
 
 
 def character_cards(card_dir: Path) -> list[dict]:
@@ -932,6 +1182,7 @@ def observed_conversation_state(path: Path) -> dict:
     payload = _read_json(path, default={"channels": {}, "users": {}})
     result: dict[str, dict] = {}
     for channel_id, rows in payload.get("channels", {}).items():
+        rows = _sorted_message_rows(rows)
         recent = rows[-16:]
         poster_summaries = []
         seen: set[str] = set()
@@ -971,7 +1222,7 @@ def conversation_history_state(memory_path: Path, event_path: Path) -> dict:
         events_by_channel.setdefault(channel_id, []).append(event)
     return {
         str(channel_id): {
-            "messages": [_message_preview(row) for row in rows[-60:]],
+            "messages": [_message_preview(row) for row in _sorted_message_rows(rows)[-80:]],
             "events": events_by_channel.get(str(channel_id), [])[-60:],
         }
         for channel_id, rows in memory_payload.get("channels", {}).items()
@@ -993,6 +1244,7 @@ def recent_posters_state(path: Path) -> dict:
     payload = _read_json(path, default={"channels": {}})
     result: dict[str, list[dict]] = {}
     for channel_id, rows in payload.get("channels", {}).items():
+        rows = _sorted_message_rows(rows)
         posters: list[dict] = []
         seen: set[str] = set()
         for row in reversed(rows):
@@ -1009,7 +1261,8 @@ def recent_posters_state(path: Path) -> dict:
                     "user_key": key,
                     "display_name": author,
                     "author_id": author_id,
-                    "reply_prefix": f"@{author}",
+                    "message_id": str(row.get("message_id") or ""),
+                    "reply_prefix": _reply_mention_prefix(author, author_id),
                 }
             )
             if len(posters) >= 6:
@@ -1079,13 +1332,18 @@ def clear_approvals() -> int:
 def send_approval(body: dict) -> None:
     approval_id = str(body.get("approval_id") or "")
     draft = str(body.get("draft") or "").strip()
+    reply_to_message_id = str(body.get("reply_to_message_id") or "").strip()
     if not approval_id or not draft:
         raise RuntimeError("Missing approval id or draft text.")
     lock = _approval_send_lock(approval_id)
     if not lock.acquire(blocking=False):
         raise RuntimeError("Send is already running for this approval.")
     try:
-        _send_approval_locked(approval_id=approval_id, draft=draft)
+        _send_approval_locked(
+            approval_id=approval_id,
+            draft=draft,
+            reply_to_message_id=reply_to_message_id,
+        )
     finally:
         lock.release()
 
@@ -1099,10 +1357,10 @@ def _approval_send_lock(approval_id: str) -> threading.Lock:
         return lock
 
 
-def _send_approval_locked(*, approval_id: str, draft: str) -> None:
+def _send_approval_locked(*, approval_id: str, draft: str, reply_to_message_id: str = "") -> None:
     config = load_config()
-    if config.dry_run:
-        raise RuntimeError("Dry-run is enabled. Turn off Dry-run mode in API & Runtime before sending.")
+    if config.runtime_mode == "dry":
+        raise RuntimeError("Dry Mode is enabled. Switch response mode before sending approved replies.")
     queue = ApprovalQueue(config.state_dir / "approvals.json")
     try:
         item = queue.update_draft(approval_id, draft)
@@ -1134,6 +1392,7 @@ def _send_approval_locked(*, approval_id: str, draft: str) -> None:
 
     lock_acquired = False
     resume_runtime = bool(RUNTIME.state().get("running"))
+    start_runtime_after_send = False
     try:
         _acquire_discord_session_or_raise(pause_runtime=True)
         lock_acquired = True
@@ -1153,7 +1412,15 @@ def _send_approval_locked(*, approval_id: str, draft: str) -> None:
                 draft=draft,
             )
             raise RuntimeError(duplicate_message)
-        asyncio.run(_send_approval_message(config, item.server_id, item.channel_id, draft))
+        delivery = asyncio.run(
+            _send_approval_message(
+                config,
+                item.server_id,
+                item.channel_id,
+                draft,
+                reply_to_message_id=reply_to_message_id,
+            )
+        )
     except Exception as exc:
         friendly_error = _friendly_discord_send_error(str(exc))
         if not _is_non_delivery_block(friendly_error):
@@ -1166,6 +1433,22 @@ def _send_approval_locked(*, approval_id: str, draft: str) -> None:
             )
         raise RuntimeError(friendly_error) from exc
     else:
+        visible_messages = delivery.get("visible_messages")
+        if isinstance(visible_messages, list):
+            memory = ConversationMemory(config.state_dir / "memory.json")
+            memory.load()
+            fresh = memory.ingest(item.channel_id, visible_messages)
+            memory.save()
+            event_log.add(
+                event_type="channel_refreshed",
+                server_id=item.server_id,
+                channel_id=item.channel_id,
+                summary=(
+                    f"Immediate post-send refresh saw {len(visible_messages)} visible "
+                    f"message(s), {len(fresh)} new."
+                ),
+                draft="",
+            )
         ledger.record(
             server_id=item.server_id,
             channel_id=item.channel_id,
@@ -1174,17 +1457,29 @@ def _send_approval_locked(*, approval_id: str, draft: str) -> None:
             source_message_ids=item.source_message_ids,
         )
         queue.remove(approval_id)
+        summary = "Approved draft posted successfully to Discord."
+        if delivery.get("reply_fallback_used"):
+            summary = (
+                "Approved draft posted as a normal channel message because Discord "
+                "did not expose the selected message Reply action."
+            )
+        if delivery.get("assumed_sent"):
+            summary = (
+                "Approved draft appears posted. Discord cleared the composer and rendered "
+                "a new message, but Kabuki could not text-match the rendered copy."
+            )
         event_log.add(
             event_type="approval_sent",
             server_id=item.server_id,
             channel_id=item.channel_id,
-            summary="Approved draft posted successfully to Discord.",
+            summary=summary,
             draft=draft,
         )
+        start_runtime_after_send = True
     finally:
         if lock_acquired:
             DISCORD_SESSION_LOCK.release()
-        if resume_runtime:
+        if resume_runtime or start_runtime_after_send:
             RUNTIME.start()
 
 
@@ -1211,6 +1506,8 @@ def _friendly_discord_send_error(raw_error: str) -> str:
         "redirected away from the target channel",
         "permission to send messages",
         "read-only",
+        "selected message to reply to",
+        "reply action",
         "duplicate reply blocked",
         "already sent or cleared",
         "human verification",
@@ -1250,6 +1547,22 @@ def regenerate_approval(body: dict) -> None:
         lock.release()
 
 
+def log_regeneration_failure(body: dict, message: str) -> None:
+    try:
+        config = load_config()
+        approval_id = str(body.get("approval_id") or "")
+        item = ApprovalQueue(config.state_dir / "approvals.json").get(approval_id)
+        EventLog(config.state_dir / "events.json").add(
+            event_type="approval_regeneration_failed",
+            server_id=item.server_id if item else "",
+            channel_id=item.channel_id if item else "",
+            summary=_redact_secret_text(message),
+            draft=str(body.get("draft") or (item.draft if item else "")),
+        )
+    except Exception:
+        return
+
+
 def _approval_regeneration_lock(approval_id: str) -> threading.Lock:
     with APPROVAL_REGENERATION_LOCKS_LOCK:
         lock = APPROVAL_REGENERATION_LOCKS.get(approval_id)
@@ -1271,25 +1584,33 @@ def _regenerate_approval_locked(
     item = queue.get(approval_id)
     if item is None:
         raise RuntimeError("Unknown approval.")
+    source_ids = set(item.source_message_ids)
+    source_messages = [
+        message
+        for message in _memory_context(config.state_dir / "memory.json", item.channel_id)
+        if message.message_id in source_ids
+    ]
     decision = asyncio.run(
         _generate_manual_decision(
             config,
             server_id=item.server_id,
             channel_id=item.channel_id,
             target_user_key=target_user_key,
+            source_messages=source_messages,
             current_draft=current_draft or item.draft,
             operator_instruction=operator_instruction,
         )
     )
     if not decision.draft:
         raise RuntimeError(decision.reason)
-    queue.update_draft(approval_id, decision.draft)
+    draft = _draft_with_reply_mention(decision.draft, source_messages)
+    queue.update_draft(approval_id, draft)
     EventLog(config.state_dir / "events.json").add(
         event_type="approval_regenerated",
         server_id=item.server_id,
         channel_id=item.channel_id,
         summary=operator_instruction or decision.reason,
-        draft=decision.draft,
+        draft=draft,
         user_key=target_user_key,
     )
 
@@ -1298,12 +1619,18 @@ def create_manual_approval(body: dict) -> None:
     server_id = str(body.get("server_id") or "")
     channel_id = str(body.get("channel_id") or "")
     target_user_key = str(body.get("target_user_key") or "")
+    target_message_id = str(body.get("target_message_id") or "")
     operator_instruction = str(body.get("instruction") or "").strip()
     if not server_id or not channel_id:
         raise RuntimeError("Missing server or channel.")
     config = load_config()
     context = _memory_context(config.state_dir / "memory.json", channel_id)
-    source_messages = _manual_source_messages(context, target_user_key)
+    source_messages = _manual_source_messages(context, target_user_key, target_message_id)
+    if target_message_id and not source_messages:
+        raise RuntimeError(
+            "That selected message is no longer in remembered channel history. "
+            "Run the scanner or reopen the channel, then try again."
+        )
     source_ids = tuple(message.message_id for message in source_messages)
     ledger = ReplyLedger(config.state_dir / "sent_replies.json")
     duplicate_message = duplicate_reply_message(
@@ -1334,12 +1661,14 @@ def create_manual_approval(body: dict) -> None:
             server_id=server_id,
             channel_id=channel_id,
             target_user_key=target_user_key,
+            source_messages=source_messages,
             current_draft="",
             operator_instruction=operator_instruction,
         )
     )
     if not decision.draft:
         raise RuntimeError(decision.reason)
+    draft = _draft_with_reply_mention(decision.draft, source_messages)
     character = CharacterCardStore(config.character_dir, config.character_card).for_server(
         server_id,
         _server_character_card(config, server_id),
@@ -1350,7 +1679,7 @@ def create_manual_approval(body: dict) -> None:
         character_name=character.name,
         engagement_type="manual",
         reason=operator_instruction or decision.reason,
-        draft=decision.draft,
+        draft=draft,
         source_messages=source_messages,
     )
     EventLog(config.state_dir / "events.json").add(
@@ -1376,6 +1705,43 @@ def _message_preview(row: dict) -> dict:
     }
 
 
+def _reply_mention_prefix(author: str, author_id) -> str:
+    clean_id = str(author_id or "").strip()
+    if clean_id:
+        return f"<@{clean_id}>"
+    clean_author = str(author or "").strip()
+    return f"@{clean_author}" if clean_author else ""
+
+
+def _draft_with_reply_mention(draft: str, source_messages: list[MessageRecord]) -> str:
+    draft = str(draft or "").strip()
+    if not draft or not source_messages:
+        return draft
+    source = source_messages[-1]
+    prefix = _reply_mention_prefix(source.author, source.author_id)
+    if not prefix:
+        return draft
+    if draft.startswith(prefix) or re.match(r"^<@!?\d+>\s+", draft):
+        return draft
+    if source.author:
+        plain_prefix = f"@{source.author}"
+        if draft.startswith(plain_prefix):
+            return f"{prefix}{draft[len(plain_prefix):]}"
+    return f"{prefix} {draft}"
+
+
+def _sorted_message_rows(rows: list[dict]) -> list[dict]:
+    return sorted(rows or [], key=_message_row_sort_key)
+
+
+def _message_row_sort_key(row: dict) -> tuple[int, str]:
+    message_id = str(row.get("message_id") or "")
+    try:
+        return (int(message_id.rsplit("-", 1)[-1]), message_id)
+    except ValueError:
+        return (0, message_id)
+
+
 def _message_user_key(row: dict) -> str:
     author_id = row.get("author_id")
     if author_id:
@@ -1384,9 +1750,16 @@ def _message_user_key(row: dict) -> str:
     return f"name:{author or 'unknown'}"
 
 
-def _manual_source_messages(context: list[MessageRecord], target_user_key: str) -> list[MessageRecord]:
+def _manual_source_messages(
+    context: list[MessageRecord],
+    target_user_key: str,
+    target_message_id: str = "",
+) -> list[MessageRecord]:
     if not context:
         return []
+    if target_message_id:
+        selected = [message for message in context if message.message_id == target_message_id]
+        return selected[-1:] if selected else []
     if target_user_key:
         targeted = [
             message
@@ -1444,7 +1817,7 @@ def _summarize_messages(texts: list[str]) -> str:
 def _memory_context(memory_path: Path, channel_id: str):
     memory = ConversationMemory(memory_path)
     memory.load()
-    return memory.context(channel_id, limit=24)
+    return memory.context(channel_id, limit=80)
 
 
 def _server_character_card(config: AppConfig, server_id: str) -> str | None:
@@ -1463,10 +1836,12 @@ async def _generate_manual_decision(
     target_user_key: str,
     current_draft: str,
     operator_instruction: str,
+    source_messages: list[MessageRecord] | None = None,
 ):
     memory = ConversationMemory(config.state_dir / "memory.json")
     memory.load()
-    context = memory.context(channel_id, limit=24)
+    full_context = memory.context(channel_id, limit=120)
+    context = _manual_decision_context(full_context, source_messages or [])
     user_memories = memory.user_context_for(context, limit=10)
     user_notes = UserInstructionStore(config.state_dir / "user_instructions.json").for_users(
         [user.user_key for user in user_memories],
@@ -1481,6 +1856,7 @@ async def _generate_manual_decision(
         model=config.openai_model,
         enabled=config.llm_enabled,
         generate_drafts=True,
+        conversation_reply_enabled=True,
         budget=BudgetManager(
             config.state_dir / "usage.json",
             model=config.openai_model,
@@ -1495,6 +1871,13 @@ async def _generate_manual_decision(
         writing_quirk=config.writing_quirk,
         writing_misspellings=config.writing_misspellings,
     )
+    selected_text = _source_message_prompt(source_messages or [])
+    prompt_instruction = operator_instruction
+    if selected_text:
+        prompt_instruction = (
+            f"{operator_instruction or 'Draft a natural reply to the selected message.'}\n\n"
+            f"Selected message context:\n{selected_text}"
+        )
     return await planner.regenerate(
         channel_id=channel_id,
         character=character,
@@ -1503,12 +1886,57 @@ async def _generate_manual_decision(
         user_memories=user_memories,
         user_instructions=user_notes,
         current_draft=current_draft,
-        operator_instruction=operator_instruction,
+        operator_instruction=prompt_instruction,
         target_user_key=target_user_key,
     )
 
 
-async def _send_approval_message(config: AppConfig, server_id: str, channel_id: str, draft: str) -> None:
+def _manual_decision_context(
+    context: list[MessageRecord],
+    source_messages: list[MessageRecord],
+    *,
+    before: int = 14,
+    after: int = 8,
+    recent: int = 8,
+) -> list[MessageRecord]:
+    if not context:
+        return []
+    source_ids = {message.message_id for message in source_messages}
+    if not source_ids:
+        return context[-24:]
+    selected_indexes = [
+        index for index, message in enumerate(context) if message.message_id in source_ids
+    ]
+    if not selected_indexes:
+        return context[-24:]
+    start = max(0, min(selected_indexes) - before)
+    end = min(len(context), max(selected_indexes) + after + 1)
+    selected_window = context[start:end]
+    recent_window = context[-recent:]
+    by_id: dict[str, MessageRecord] = {}
+    for message in [*selected_window, *recent_window]:
+        by_id[message.message_id] = message
+    return list(by_id.values())[-32:]
+
+
+def _source_message_prompt(messages: list[MessageRecord]) -> str:
+    lines = []
+    for message in messages[-4:]:
+        text = message.text.strip()
+        if len(text) > 600:
+            text = text[:597].rstrip() + "..."
+        lines.append(f"- {message.author}: {text}")
+    return "\n".join(lines)
+
+
+async def _send_approval_message(
+    config: AppConfig,
+    server_id: str,
+    channel_id: str,
+    draft: str,
+    *,
+    reply_to_message_id: str = "",
+) -> dict[str, object]:
     credentials = get_discord_credentials()
     async with DiscordWebSession(
         config.profile_dir,
@@ -1523,21 +1951,33 @@ async def _send_approval_message(config: AppConfig, server_id: str, channel_id: 
         )
         if not logged_in:
             raise RuntimeError(discord_login_blocker_message(await session.login_blocker_state()))
-        current_url = await session.navigate_channel(server_id, channel_id)
+        current_url = await session.navigate_channel(
+            server_id,
+            channel_id,
+            message_id=reply_to_message_id,
+        )
         if channel_id not in current_url:
             raise RuntimeError("Discord redirected away from the approval channel.")
-        await session.send_message(
+        delivery = await session.send_message(
             draft,
+            reply_to_message_id=reply_to_message_id,
+            reply_fallback_to_channel=True,
             typing_enabled=config.typing_indicator_enabled,
             typing_min_seconds=config.typing_min_seconds,
             typing_max_seconds=config.typing_max_seconds,
             typing_chars_per_second=config.typing_chars_per_second,
         )
+        try:
+            delivery["visible_messages"] = await session.read_visible_messages(server_id, channel_id)
+        except Exception as exc:
+            delivery["refresh_error"] = str(exc)
+        return delivery
 
 
 def start_discord_channel(body: dict) -> None:
     server_id = str(body.get("server_id") or "")
     channel_id = str(body.get("channel_id") or "")
+    message_id = str(body.get("message_id") or "").strip()
     if not server_id or not channel_id:
         raise RuntimeError("Missing server or channel.")
     _acquire_discord_session_or_raise(pause_runtime=True)
@@ -1545,8 +1985,18 @@ def start_discord_channel(body: dict) -> None:
     kwargs = {}
     if sys.platform == "win32":
         kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+    command = [
+        _background_python_executable(),
+        "-m",
+        "nhi_zues.cli",
+        "--open-channel",
+        server_id,
+        channel_id,
+    ]
+    if message_id:
+        command.extend(["--message-id", message_id])
     subprocess.Popen(
-        [_background_python_executable(), "-m", "nhi_zues.cli", "--open-channel", server_id, channel_id],
+        command,
         cwd=ROOT,
         close_fds=True,
         **kwargs,
@@ -1558,7 +2008,7 @@ def read_env() -> dict[str, str]:
     values: dict[str, str] = {}
     if not env_path.exists():
         return values
-    for line in env_path.read_text(encoding="utf-8").splitlines():
+    for line in env_path.read_text(encoding="utf-8-sig").splitlines():
         if "=" not in line or line.strip().startswith("#"):
             continue
         key, value = line.split("=", 1)
@@ -1573,6 +2023,7 @@ def update_env(values: dict) -> None:
         "OPENAI_API_KEY",
         "OPENAI_MODEL",
         "NHI_ZUES_LLM_ENABLED",
+        "NHI_ZUES_RUNTIME_MODE",
         "NHI_ZUES_DRAFT_IN_DRY_RUN",
         "NHI_ZUES_CONVERSATION_REPLY_ENABLED",
         "NHI_ZUES_HEADLESS",
@@ -1604,10 +2055,14 @@ def _clean_env_value(key: str, value) -> str:
     cleaned = str(value).strip()
     if "\n" in cleaned or "\r" in cleaned:
         raise ValueError(f"{key} cannot contain line breaks.")
+    if key == "NHI_ZUES_RUNTIME_MODE" and cleaned not in {"dry", "full_auto", "semi_auto", "live_fire"}:
+        raise ValueError("Response mode must be dry, full_auto, semi_auto, or live_fire.")
     return cleaned
 
 
 def start_discord_login() -> None:
+    _acquire_discord_session_or_raise(pause_runtime=True)
+    DISCORD_SESSION_LOCK.release()
     kwargs = {}
     if sys.platform == "win32":
         kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
@@ -1628,11 +2083,21 @@ def _background_python_executable() -> str:
 
 
 def update_state() -> dict:
+    global UPDATE_STATE_CACHE, UPDATE_STATE_CACHE_AT
+    now = time.time()
+    with UPDATE_STATE_CACHE_LOCK:
+        if UPDATE_STATE_CACHE is not None and now - UPDATE_STATE_CACHE_AT < UPDATE_STATE_CACHE_SECONDS:
+            return dict(UPDATE_STATE_CACHE)
+
     remote = _git(["remote", "get-url", "origin"], check=False).stdout.strip()
-    return {
+    payload = {
         "remote": remote,
         "remote_allowed": _remote_allowed(remote) if remote else False,
     }
+    with UPDATE_STATE_CACHE_LOCK:
+        UPDATE_STATE_CACHE = dict(payload)
+        UPDATE_STATE_CACHE_AT = now
+    return payload
 
 
 def check_update(*, apply_update: bool) -> dict:
@@ -1701,6 +2166,13 @@ def _remote_allowed(remote: str) -> bool:
 
 
 def _git(args: list[str], *, check: bool = True) -> subprocess.CompletedProcess:
+    kwargs = {}
+    if sys.platform == "win32":
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = getattr(subprocess, "SW_HIDE", 0)
+        kwargs["startupinfo"] = startupinfo
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
     return subprocess.run(
         ["git", *args],
         cwd=ROOT,
@@ -1708,6 +2180,7 @@ def _git(args: list[str], *, check: bool = True) -> subprocess.CompletedProcess:
         capture_output=True,
         text=True,
         timeout=60,
+        **kwargs,
     )
 
 

@@ -16,6 +16,7 @@ def main() -> None:
     parser.add_argument("--once", action="store_true", help="Process configured channels once and exit.")
     parser.add_argument("--login", action="store_true", help="Open Discord and save a persistent browser login session.")
     parser.add_argument("--open-channel", nargs=2, metavar=("SERVER_ID", "CHANNEL_ID"), help="Open one Discord channel in the persistent browser profile and keep it visible.")
+    parser.add_argument("--message-id", help="When opening a channel, jump to this Discord message id if available.")
     parser.add_argument("--usage", action="store_true", help="Print recorded API usage and exit.")
     parser.add_argument("--approvals", action="store_true", help="Print queued proactive drafts and exit.")
     parser.add_argument("--remember-story", help="Add a story/claim continuity note to the active character.")
@@ -39,11 +40,12 @@ def main() -> None:
                 browser_channel=config.browser_channel,
                 headless=False,
             ) as session:
-                return await session.login_if_needed(
-                    email=credentials.email,
-                    password=credentials.password,
-                    timeout_seconds=240,
-                )
+                await session.open_home()
+                if await session._is_logged_in():
+                    await session.page.wait_for_timeout(3000)
+                    return True
+                await _fill_login_form_if_available(session, credentials.email, credentials.password)
+                return await _wait_for_manual_discord_login(session)
 
         logged_in = asyncio.run(login())
         print("Discord login session saved." if logged_in else "Discord login was not completed.")
@@ -69,7 +71,7 @@ def main() -> None:
                 )
                 if not logged_in:
                     return False
-                await session.navigate_channel(server_id, channel_id)
+                await session.navigate_channel(server_id, channel_id, message_id=args.message_id or "")
                 print(f"Opened Discord channel: https://discord.com/channels/{server_id}/{channel_id}")
                 try:
                     await session.page.wait_for_event("close", timeout=0)
@@ -134,6 +136,33 @@ def main() -> None:
         asyncio.run(runner.run_once())
     else:
         asyncio.run(runner.run_forever())
+
+
+async def _wait_for_manual_discord_login(session: "DiscordWebSession") -> bool:
+    while not session.page.is_closed():
+        if await session._is_logged_in():
+            await session.page.wait_for_timeout(3000)
+            return True
+        try:
+            await session.page.wait_for_event("close", timeout=1000)
+        except Exception:
+            pass
+    return False
+
+
+async def _fill_login_form_if_available(session: "DiscordWebSession", email: str | None, password: str | None) -> None:
+    if not email or not password:
+        return
+    login_form = session.page.locator('input[name="email"], input[type="email"]').first
+    try:
+        await login_form.wait_for(state="visible", timeout=15_000)
+        password_input = session.page.locator('input[name="password"], input[type="password"]').first
+        await password_input.wait_for(state="visible", timeout=15_000)
+        await login_form.fill(email)
+        await password_input.fill(password)
+        await password_input.press("Enter")
+    except Exception:
+        return
 
 
 if __name__ == "__main__":

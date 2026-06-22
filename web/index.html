@@ -53,6 +53,9 @@
             <span>Channels</span>
             <div class="button-row">
               <button id="openDiscordChannel" class="small-button"><i class="bi bi-box-arrow-up-right"></i> Open</button>
+              <button id="repairDiscordServer" class="small-button"><i class="bi bi-wrench-adjustable"></i> Repair</button>
+              <button id="refreshChannelLatest" class="small-button"><i class="bi bi-arrow-clockwise"></i> Latest</button>
+              <button id="backfillChannel" class="small-button"><i class="bi bi-clock-history"></i> Backfill</button>
               <button id="addChannel" class="small-button"><i class="bi bi-plus"></i> Add</button>
             </div>
           </div>
@@ -75,6 +78,10 @@
             <h2>Character and automation control</h2>
           </div>
           <div class="topbar-actions">
+            <div id="operationStatus" class="operation-status idle">
+              <i class="bi bi-circle-fill"></i>
+              <span>Idle</span>
+            </div>
             <span id="apiStatus" class="status-pill"></span>
             <button id="runtimeControl" class="secondary-button" type="button"><i class="bi bi-play-fill"></i> Start</button>
             <button id="syncDiscordServers" class="secondary-button"><i class="bi bi-diagram-3"></i> Sync Discord</button>
@@ -184,16 +191,16 @@
               <div class="control-row">
                 <div>
                   <strong>Require approval for proactive drafts</strong>
-                  <span>Default safety layer for topic-only opportunities.</span>
+                  <span>Response Mode now controls approval and auto behavior globally.</span>
                 </div>
-                <label class="switch"><input id="approvalRequired" type="checkbox" /><span></span></label>
+                <label class="switch"><input id="approvalRequired" type="checkbox" disabled /><span></span></label>
               </div>
               <div class="control-row danger-row">
                 <div>
-                  <strong>Auto-respond in selected channel</strong>
-                  <span>Off by default. When enabled, approval-required drafts can be sent automatically outside dry-run.</span>
+                  <strong>Selected channel auto flag</strong>
+                  <span>Kept for older configs. New delivery decisions use the global Response Mode.</span>
                 </div>
-                <label class="switch danger"><input id="channelAutoRespond" type="checkbox" /><span></span></label>
+                <label class="switch danger"><input id="channelAutoRespond" type="checkbox" disabled /><span></span></label>
               </div>
             </div>
           </div>
@@ -287,6 +294,16 @@
               <small id="modelListStatus" class="field-hint"></small>
             </div>
             <div class="control-bank span-2">
+              <label class="field span-2">
+                <span>Response Mode</span>
+                <select id="runtimeMode">
+                  <option value="dry">Dry Mode - scan and reason, never send</option>
+                  <option value="full_auto">Full Auto - auto-send eligible replies</option>
+                  <option value="semi_auto">Semi Auto - auto-send regular replies, approve new starts</option>
+                  <option value="live_fire">Live Fire - approval required for every reply</option>
+                </select>
+                <small class="field-hint">Applies only to channels with Engage enabled. Dry Mode also blocks approved sends.</small>
+              </label>
               <div class="control-row">
                 <div><strong>Enable LLM drafting</strong><span>Allows API calls after local routing passes.</span></div>
                 <label class="switch"><input id="llmEnabled" type="checkbox" /><span></span></label>
@@ -300,8 +317,8 @@
                 <label class="switch"><input id="conversationReply" type="checkbox" /><span></span></label>
               </div>
               <div class="control-row">
-                <div><strong>Dry-run mode</strong><span>Observe, remember, and draft only. Turn this off only when you want approved replies to send.</span></div>
-                <label class="switch"><input id="dryRun" type="checkbox" /><span></span></label>
+                <div><strong>Legacy dry-run flag</strong><span>Automatically follows Response Mode for older config paths.</span></div>
+                <label class="switch"><input id="dryRun" type="checkbox" disabled /><span></span></label>
               </div>
             </div>
             <label class="field"><span>Daily Budget USD</span><input id="dailyBudget" type="number" min="0" step="0.01" /></label>

@@ -449,6 +449,97 @@ textarea:focus {
   gap: 10px;
 }
 
+.operation-status {
+  display: grid;
+  grid-template-columns: 16px minmax(74px, auto);
+  grid-template-rows: auto auto;
+  align-items: center;
+  column-gap: 7px;
+  min-width: 154px;
+  max-width: 240px;
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(16, 22, 28, 0.78);
+  color: #cfd8e2;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+.operation-status i {
+  grid-row: 1 / span 2;
+  color: var(--faint);
+}
+
+.operation-status span,
+.operation-status small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.operation-status span {
+  font-weight: 750;
+}
+
+.operation-status small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.operation-status.active,
+.operation-status.api,
+.operation-status.discord,
+.operation-status.working {
+  border-color: rgba(217, 185, 91, 0.35);
+  background: rgba(217, 185, 91, 0.09);
+  color: #f0dfa8;
+}
+
+.operation-status.active i,
+.operation-status.api i,
+.operation-status.discord i,
+.operation-status.working i {
+  color: var(--yellow);
+  animation: status-spin 1.2s linear infinite;
+}
+
+.operation-status.scanning {
+  border-color: rgba(95, 201, 120, 0.32);
+  background: rgba(95, 201, 120, 0.08);
+  color: #c5f0d0;
+}
+
+.operation-status.scanning i {
+  color: var(--green);
+}
+
+.operation-status.done {
+  border-color: rgba(95, 201, 120, 0.34);
+  background: rgba(95, 201, 120, 0.1);
+  color: #bff0cb;
+}
+
+.operation-status.done i {
+  color: var(--green);
+}
+
+.operation-status.failed {
+  border-color: rgba(239, 107, 120, 0.42);
+  background: rgba(239, 107, 120, 0.1);
+  color: #ffc1c8;
+}
+
+.operation-status.failed i {
+  color: var(--red);
+}
+
+@keyframes status-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .status-pill {
   border: 1px solid var(--line);
   border-radius: 999px;
@@ -1053,4 +1144,14 @@ button:disabled {
 .toast.show {
   opacity: 1;
   transform: translateY(0);
+}
+.history-item-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.history-item-header .small-button {
+  flex: 0 0 auto;
 }

@@ -10,7 +10,7 @@ from .models import MessageRecord, UserMemory
 
 
 class ConversationMemory:
-    def __init__(self, state_file: Path, *, max_messages_per_channel: int = 80) -> None:
+    def __init__(self, state_file: Path, *, max_messages_per_channel: int = 200) -> None:
         self.state_file = state_file
         self.max_messages_per_channel = max_messages_per_channel
         self._messages: dict[str, deque[MessageRecord]] = defaultdict(
@@ -61,7 +61,10 @@ class ConversationMemory:
         payload = {
             "seen_ids": sorted(self._seen_ids),
             "channels": {
-                channel_id: [self._serialize_message(message) for message in messages]
+                channel_id: [
+                    self._serialize_message(message)
+                    for message in sorted(messages, key=_message_order_key)
+                ]
                 for channel_id, messages in self._messages.items()
             },
             "users": {
@@ -81,9 +84,12 @@ class ConversationMemory:
             self._messages[channel_id].append(message)
             self._update_user_memory(message)
             fresh.append(message)
+        if messages:
+            self._sort_channel(channel_id)
         return fresh
 
     def context(self, channel_id: str, *, limit: int = 20) -> list[MessageRecord]:
+        self._sort_channel(channel_id)
         return list(self._messages[channel_id])[-limit:]
 
     def user_context_for(self, messages: list[MessageRecord], *, limit: int = 8) -> list[UserMemory]:
@@ -147,7 +153,17 @@ class ConversationMemory:
             )
             self._messages[message.channel_id][index] = upgraded
             self._update_user_memory(upgraded)
+            self._sort_channel(message.channel_id)
             return
+
+    def _sort_channel(self, channel_id: str) -> None:
+        messages = self._messages.get(channel_id)
+        if not messages:
+            return
+        self._messages[channel_id] = deque(
+            sorted(messages, key=_message_order_key),
+            maxlen=self.max_messages_per_channel,
+        )
 
     def _rebuild_user_index(self) -> None:
         summaries_by_key = {key: user.summary for key, user in self._users.items() if user.summary}
@@ -201,6 +217,13 @@ def _user_key(author: str, author_id: str | None = None) -> str:
 
 def _normalize_name(author: str) -> str:
     return " ".join(author.lower().strip().split())
+
+
+def _message_order_key(message: MessageRecord) -> tuple[int, str]:
+    try:
+        return (int(str(message.message_id).rsplit("-", 1)[-1]), message.message_id)
+    except ValueError:
+        return (0, message.message_id)
 
 
 def _extract_lightweight_topics(text: str) -> list[str]:

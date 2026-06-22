@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
+import sys
 from pathlib import Path
 
 from playwright.async_api import BrowserContext, Page, async_playwright
@@ -19,7 +21,8 @@ class DiscordWebSession:
         self._page: Page | None = None
 
     async def __aenter__(self) -> "DiscordWebSession":
-        self.profile_dir.mkdir(parents=True, exist_ok=True)
+        profile_dir = self.profile_dir.resolve()
+        profile_dir.mkdir(parents=True, exist_ok=True)
         self._playwright = await async_playwright().start()
         args = ["--disable-blink-features=AutomationControlled"]
         launch_headless = self.headless
@@ -28,15 +31,34 @@ class DiscordWebSession:
             # Use an off-screen headful window for silent automation instead.
             launch_headless = False
             args.extend(["--window-position=-32000,-32000", "--window-size=1440,1000"])
-        self._context = await self._playwright.chromium.launch_persistent_context(
-            user_data_dir=str(self.profile_dir),
+        else:
+            # Manual login/open-channel flows must override any off-screen bounds saved
+            # by the same persistent Chrome profile during silent automation.
+            args.extend(["--window-position=80,80", "--window-size=1440,1000"])
+        try:
+            self._context = await self._launch_context(profile_dir, launch_headless, args)
+        except Exception as exc:
+            if not _profile_in_use_error(exc):
+                raise
+            _close_profile_browsers(profile_dir)
+            await asyncio.sleep(1.0)
+            self._context = await self._launch_context(profile_dir, launch_headless, args)
+        self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
+        return self
+
+    async def _launch_context(
+        self,
+        profile_dir: Path,
+        launch_headless: bool,
+        args: list[str],
+    ) -> BrowserContext:
+        return await self._playwright.chromium.launch_persistent_context(
+            user_data_dir=str(profile_dir),
             channel=self.browser_channel,
             headless=launch_headless,
             viewport={"width": 1440, "height": 1000},
             args=args,
         )
-        self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
-        return self
 
     async def __aexit__(self, exc_type, exc, tb) -> None:
         if self._context:
@@ -73,6 +95,26 @@ class DiscordWebSession:
         except Exception:
             await self.page.wait_for_timeout(1500)
 
+        await self._reset_guild_nav_scroll()
+        seen: dict[str, dict[str, str]] = {}
+        last_count = -1
+        stable_bottom_rounds = 0
+        for _ in range(60):
+            for row in await self._visible_server_rows():
+                seen[row["server_id"]] = row
+
+            at_bottom = await self._scroll_guild_nav()
+            if at_bottom and len(seen) == last_count:
+                stable_bottom_rounds += 1
+            else:
+                stable_bottom_rounds = 0
+            last_count = len(seen)
+            if at_bottom and stable_bottom_rounds >= 2:
+                break
+
+        return list(seen.values())
+
+    async def _visible_server_rows(self) -> list[dict[str, str]]:
         rows = await self.page.evaluate(
             """
             () => {
@@ -141,6 +183,62 @@ class DiscordWebSession:
             if row.get("server_id")
         ]
 
+    async def _scroll_guild_nav(self) -> bool:
+        return bool(
+            await self.page.evaluate(
+                """
+                () => {
+                    const firstServer = document.querySelector('[data-list-item-id^="guildsnav___"]');
+                    const guildNav = document.querySelector('[data-list-id="guildsnav"]');
+                    const starts = [guildNav, firstServer?.parentElement].filter(Boolean);
+                    let scroller = null;
+                    for (const start of starts) {
+                        let cursor = start;
+                        while (cursor && cursor !== document.body) {
+                            if (cursor.scrollHeight > cursor.clientHeight + 20) {
+                                scroller = cursor;
+                                break;
+                            }
+                            cursor = cursor.parentElement;
+                        }
+                        if (scroller) break;
+                    }
+                    if (!scroller) return true;
+                    const before = scroller.scrollTop;
+                    scroller.scrollTop = Math.min(
+                        scroller.scrollTop + Math.max(scroller.clientHeight * 0.85, 420),
+                        scroller.scrollHeight
+                    );
+                    scroller.dispatchEvent(new Event("scroll", { bubbles: true }));
+                    const atBottom = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 4;
+                    return atBottom || scroller.scrollTop === before;
+                }
+                """
+            )
+        )
+
+    async def _reset_guild_nav_scroll(self) -> None:
+        await self.page.evaluate(
+            """
+            () => {
+                const firstServer = document.querySelector('[data-list-item-id^="guildsnav___"]');
+                const guildNav = document.querySelector('[data-list-id="guildsnav"]');
+                const starts = [guildNav, firstServer?.parentElement].filter(Boolean);
+                for (const start of starts) {
+                    let cursor = start;
+                    while (cursor && cursor !== document.body) {
+                        if (cursor.scrollHeight > cursor.clientHeight + 20) {
+                            cursor.scrollTop = 0;
+                            cursor.dispatchEvent(new Event("scroll", { bubbles: true }));
+                            return;
+                        }
+                        cursor = cursor.parentElement;
+                    }
+                }
+            }
+            """
+        )
+
     async def discover_channels(self, server_id: str) -> list[dict[str, str]]:
         await self._open_server(server_id)
         try:
@@ -161,24 +259,29 @@ class DiscordWebSession:
         except Exception:
             await self.page.wait_for_timeout(1500)
 
+        await self._expand_channel_categories()
         await self._reset_channel_sidebar_scroll()
         seen: dict[str, dict[str, str]] = {}
         last_count = -1
-        stable_rounds = 0
-        for _ in range(12):
+        stable_bottom_rounds = 0
+        for _ in range(40):
             rows = await self._visible_channel_rows(server_id)
             for row in rows:
                 seen[row["channel_id"]] = row
 
-            if len(seen) == last_count:
-                stable_rounds += 1
+            at_bottom = await self._scroll_channel_sidebar()
+            if at_bottom and len(seen) == last_count:
+                stable_bottom_rounds += 1
             else:
-                stable_rounds = 0
+                stable_bottom_rounds = 0
             last_count = len(seen)
 
-            at_bottom = await self._scroll_channel_sidebar()
-            if at_bottom and stable_rounds >= 1:
+            if at_bottom and stable_bottom_rounds >= 2:
                 break
+
+        for forum in [row for row in list(seen.values()) if row.get("channel_type") == "forum"][:20]:
+            for thread in await self._discover_forum_threads(server_id, forum):
+                seen[thread["channel_id"]] = thread
 
         return list(seen.values())
 
@@ -220,6 +323,7 @@ class DiscordWebSession:
                     const raw = `${value || ""} ${text || ""}`.toLowerCase();
                     if (raw.includes("(announcement channel)") || raw.startsWith("announcement")) return "announcement";
                     if (raw.includes("(forum channel)") || raw.startsWith("forum")) return "forum";
+                    if (raw.includes("(thread)") || raw.includes("thread channel")) return "thread";
                     if (raw.includes("(voice channel)") || raw.startsWith("voice")) return "voice";
                     if (raw.includes("(stage channel)") || raw.startsWith("stage")) return "stage";
                     return "text";
@@ -252,7 +356,7 @@ class DiscordWebSession:
                     const rawLabel = node.getAttribute("aria-label") || node.textContent || "";
                     const type = channelType(rawLabel, node.textContent || "");
                     const canScan = Boolean(hrefMatch) && (
-                        type === "text" || type === "forum" || type === "announcement"
+                        type === "text" || type === "forum" || type === "announcement" || type === "thread"
                     );
                     if (!rawLabel || !canScan) continue;
                     rows.push({
@@ -280,16 +384,153 @@ class DiscordWebSession:
             if row.get("channel_id") and row.get("label")
         ]
 
+    async def _expand_channel_categories(self) -> None:
+        try:
+            await self.page.evaluate(
+                """
+                () => {
+                    const firstChannel = document.querySelector('[data-list-item-id^="channels___"]');
+                    let root = firstChannel?.parentElement || document.querySelector('[data-list-id="channels"]');
+                    while (root && root !== document.body) {
+                        if (root.scrollHeight > root.clientHeight + 20) break;
+                        root = root.parentElement;
+                    }
+                    root = root || document;
+                    const collapsed = Array.from(root.querySelectorAll('[aria-expanded="false"]')).filter((node) => {
+                        const label = node.getAttribute("aria-label") || node.textContent || "";
+                        return label && !/server|guild|user settings|direct messages/i.test(label);
+                    });
+                    for (const node of collapsed.slice(0, 80)) {
+                        try { node.click(); } catch {}
+                    }
+                }
+                """
+            )
+            await self.page.wait_for_timeout(700)
+        except Exception:
+            return
+
+    async def _discover_forum_threads(self, server_id: str, forum: dict[str, str]) -> list[dict[str, str]]:
+        parent_id = str(forum.get("channel_id") or "")
+        if not parent_id:
+            return []
+        await self.navigate_channel(server_id, parent_id)
+        await self._load_forum_posts()
+        rows = await self.page.evaluate(
+            """
+            ({ serverId, parentId, parentLabel, category }) => {
+                const cleanLabel = (value) => String(value || "")
+                    .replace(/\\s+/g, " ")
+                    .replace(/^#\\s*/, "")
+                    .replace(/^(new|unread)\\s+/i, "")
+                    .trim();
+                const main =
+                    document.querySelector('[role="main"]')
+                    || document.querySelector('[class*="chatContent"]')
+                    || document;
+                const seen = new Map();
+                for (const anchor of Array.from(main.querySelectorAll(`a[href*="/channels/${serverId}/"]`))) {
+                    const href = anchor.getAttribute("href") || "";
+                    const match = href.match(new RegExp(`/channels/${serverId}/(\\\\d{5,})`));
+                    const threadId = match?.[1] || "";
+                    if (!threadId || threadId === parentId || seen.has(threadId)) continue;
+                    const rawLabel =
+                        anchor.getAttribute("aria-label")
+                        || anchor.querySelector('h3, [class*="title"], [class*="name"]')?.textContent
+                        || anchor.textContent
+                        || "";
+                    const label = cleanLabel(rawLabel).split("\\n")[0].slice(0, 120).trim();
+                    if (!label || /^\\d+$/.test(label)) continue;
+                    seen.set(threadId, {
+                        channel_id: threadId,
+                        label,
+                        channel_type: "thread",
+                        category: parentLabel ? `${parentLabel} threads` : (category || "Forum threads"),
+                        parent_channel_id: parentId,
+                        can_scan: "true",
+                    });
+                }
+                return Array.from(seen.values()).slice(0, 100);
+            }
+            """,
+            {
+                "serverId": server_id,
+                "parentId": parent_id,
+                "parentLabel": str(forum.get("label") or ""),
+                "category": str(forum.get("category") or ""),
+            },
+        )
+        return [
+            {
+                "channel_id": str(row["channel_id"]),
+                "label": str(row.get("label") or ""),
+                "channel_type": "thread",
+                "category": str(row.get("category") or ""),
+                "parent_channel_id": str(row.get("parent_channel_id") or parent_id),
+                "can_scan": "true",
+            }
+            for row in rows
+            if row.get("channel_id") and row.get("label")
+        ]
+
+    async def _load_forum_posts(self) -> None:
+        last_count = -1
+        stable_rounds = 0
+        for _ in range(10):
+            count = await self.page.evaluate(
+                """
+                () => {
+                    const main =
+                        document.querySelector('[role="main"]')
+                        || document.querySelector('[class*="chatContent"]')
+                        || document;
+                    const anchors = main.querySelectorAll('a[href*="/channels/"]').length;
+                    let scroller = main;
+                    while (scroller && scroller !== document.body) {
+                        if (scroller.scrollHeight > scroller.clientHeight + 20) break;
+                        scroller = scroller.parentElement;
+                    }
+                    if (scroller && scroller !== document.body) {
+                        scroller.scrollTop = Math.min(
+                            scroller.scrollTop + Math.max(scroller.clientHeight * 0.9, 500),
+                            scroller.scrollHeight
+                        );
+                        scroller.dispatchEvent(new Event("scroll", { bubbles: true }));
+                    } else {
+                        window.scrollTo(0, document.body.scrollHeight);
+                    }
+                    return anchors;
+                }
+                """
+            )
+            if count == last_count:
+                stable_rounds += 1
+            else:
+                stable_rounds = 0
+            last_count = count
+            if stable_rounds >= 2:
+                break
+            await self.page.wait_for_timeout(500)
+
     async def _scroll_channel_sidebar(self) -> bool:
         return bool(
             await self.page.evaluate(
                 """
                 () => {
                     const firstChannel = document.querySelector('[data-list-item-id^="channels___"]');
-                    let scroller = firstChannel?.parentElement || null;
-                    while (scroller && scroller !== document.body) {
-                        if (scroller.scrollHeight > scroller.clientHeight + 20) break;
-                        scroller = scroller.parentElement;
+                    const channelList = document.querySelector('[data-list-id="channels"]');
+                    const starts = [channelList, firstChannel?.parentElement].filter(Boolean);
+                    let scroller = null;
+                    for (const start of starts) {
+                        let cursor = start;
+                        while (cursor && cursor !== document.body) {
+                            if (cursor.scrollHeight > cursor.clientHeight + 20) {
+                                scroller = cursor;
+                                break;
+                            }
+                            cursor = cursor.parentElement;
+                        }
+                        if (scroller) break;
                     }
                     if (!scroller || scroller === document.body) return true;
                     const before = scroller.scrollTop;
@@ -309,13 +550,23 @@ class DiscordWebSession:
             """
             () => {
                 const firstChannel = document.querySelector('[data-list-item-id^="channels___"]');
-                let scroller = firstChannel?.parentElement || null;
-                while (scroller && scroller !== document.body) {
-                    if (scroller.scrollHeight > scroller.clientHeight + 20) break;
-                    scroller = scroller.parentElement;
+                const channelList = document.querySelector('[data-list-id="channels"]');
+                const starts = [channelList, firstChannel?.parentElement].filter(Boolean);
+                let scroller = null;
+                for (const start of starts) {
+                    let cursor = start;
+                    while (cursor && cursor !== document.body) {
+                        if (cursor.scrollHeight > cursor.clientHeight + 20) {
+                            scroller = cursor;
+                            break;
+                        }
+                        cursor = cursor.parentElement;
+                    }
+                    if (scroller) break;
                 }
                 if (scroller && scroller !== document.body) {
                     scroller.scrollTop = 0;
+                    scroller.dispatchEvent(new Event("scroll", { bubbles: true }));
                 }
             }
             """
@@ -397,9 +648,13 @@ class DiscordWebSession:
             """
         )
 
-    async def navigate_channel(self, server_id: str, channel_id: str) -> str:
+    async def navigate_channel(self, server_id: str, channel_id: str, *, message_id: str = "") -> str:
+        message_token = _discord_message_token(message_id)
+        target_url = f"https://discord.com/channels/{server_id}/{channel_id}"
+        if message_token:
+            target_url = f"{target_url}/{message_token}"
         await self.page.goto(
-            f"https://discord.com/channels/{server_id}/{channel_id}",
+            target_url,
             wait_until="commit",
         )
         try:
@@ -515,6 +770,40 @@ class DiscordWebSession:
 
     async def read_visible_messages(self, server_id: str, channel_id: str) -> list[MessageRecord]:
         await self.ensure_latest_messages_visible()
+        return await self._read_message_records_from_dom(server_id, channel_id)
+
+    async def read_channel_history(
+        self,
+        server_id: str,
+        channel_id: str,
+        *,
+        limit: int = 160,
+        scroll_rounds: int = 14,
+    ) -> list[MessageRecord]:
+        await self.ensure_latest_messages_visible()
+        seen: dict[str, MessageRecord] = {}
+        for message in await self._read_message_records_from_dom(server_id, channel_id):
+            seen[message.message_id] = message
+
+        stable_rounds = 0
+        last_count = len(seen)
+        for _ in range(max(scroll_rounds, 1)):
+            at_top = await self._scroll_messages_up()
+            await self.page.wait_for_timeout(650)
+            for message in await self._read_message_records_from_dom(server_id, channel_id):
+                seen[message.message_id] = message
+            if len(seen) == last_count:
+                stable_rounds += 1
+            else:
+                stable_rounds = 0
+            last_count = len(seen)
+            if len(seen) >= limit or (at_top and stable_rounds >= 2):
+                break
+
+        messages = sorted(seen.values(), key=_message_sort_value)
+        return messages[-limit:]
+
+    async def _read_message_records_from_dom(self, server_id: str, channel_id: str) -> list[MessageRecord]:
         rows = await self.page.evaluate(
             """
             () => {
@@ -558,6 +847,30 @@ class DiscordWebSession:
             for row in rows
         ]
 
+    async def _scroll_messages_up(self) -> bool:
+        return bool(
+            await self.page.evaluate(
+                """
+                () => {
+                    const firstMessage = document.querySelector('[id^="chat-messages-"]');
+                    let scroller = firstMessage?.parentElement || null;
+                    while (scroller && scroller !== document.body) {
+                        if (scroller.scrollHeight > scroller.clientHeight + 20) break;
+                        scroller = scroller.parentElement;
+                    }
+                    if (!scroller || scroller === document.body) return true;
+                    const before = scroller.scrollTop;
+                    scroller.scrollTop = Math.max(
+                        scroller.scrollTop - Math.max(scroller.clientHeight * 0.85, 500),
+                        0
+                    );
+                    scroller.dispatchEvent(new Event("scroll", { bubbles: true }));
+                    return scroller.scrollTop <= 4 || scroller.scrollTop === before;
+                }
+                """
+            )
+        )
+
     async def ensure_latest_messages_visible(self) -> None:
         try:
             await self.page.keyboard.press("End")
@@ -586,12 +899,27 @@ class DiscordWebSession:
         self,
         text: str,
         *,
+        reply_to_message_id: str = "",
+        reply_fallback_to_channel: bool = False,
         typing_enabled: bool = False,
         typing_min_seconds: float = 2.5,
         typing_max_seconds: float = 18.0,
         typing_chars_per_second: float = 10.0,
-    ) -> None:
+    ) -> dict[str, object]:
         await self.wait_for_writable_channel(timeout_ms=15_000)
+        delivery: dict[str, object] = {"reply_fallback_used": False, "reply_error": ""}
+        if reply_to_message_id:
+            try:
+                await self._prepare_reply_to_message(reply_to_message_id)
+            except Exception as exc:
+                if not reply_fallback_to_channel:
+                    raise
+                delivery = {
+                    "reply_fallback_used": True,
+                    "reply_error": str(exc),
+                }
+                await self.page.keyboard.press("Escape")
+                await self.page.wait_for_timeout(250)
         before_message_ids = await self._visible_message_ids()
         textbox = self.page.locator(TEXTBOX).last
         await textbox.wait_for(state="visible", timeout=15_000)
@@ -608,8 +936,42 @@ class DiscordWebSession:
             await textbox.type(text, delay=delay_ms)
         else:
             await textbox.fill(text)
+        await self._dismiss_editor_popovers()
         await textbox.press("Enter")
-        await self._wait_for_sent_message(text, before_message_ids=before_message_ids, timeout_ms=15_000)
+        delivery.update(
+            await self._wait_for_sent_message(
+                text,
+                before_message_ids=before_message_ids,
+                timeout_ms=15_000,
+            )
+        )
+        return delivery
+
+    async def _dismiss_editor_popovers(self) -> None:
+        try:
+            has_editor_popover = await self.page.evaluate(
+                """
+                () => {
+                    const visible = (node) => {
+                        if (!node) return false;
+                        const rect = node.getBoundingClientRect();
+                        const style = window.getComputedStyle(node);
+                        return rect.width > 0
+                            && rect.height > 0
+                            && style.display !== "none"
+                            && style.visibility !== "hidden";
+                    };
+                    return Array.from(document.querySelectorAll(
+                        '[role="listbox"], [class*="autocomplete"], [class*="autocompleteInner"], [class*="autocompleteScroller"]'
+                    )).some(visible);
+                }
+                """
+            )
+            if has_editor_popover:
+                await self.page.keyboard.press("Escape")
+                await self.page.wait_for_timeout(200)
+        except Exception:
+            return
 
     async def _visible_message_ids(self) -> list[str]:
         return await self.page.evaluate(
@@ -626,33 +988,209 @@ class DiscordWebSession:
         *,
         before_message_ids: list[str],
         timeout_ms: int,
-    ) -> None:
+    ) -> dict[str, object]:
         try:
             await self.page.wait_for_function(
                 """
                 ({ expected, beforeIds }) => {
-                    const normalize = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+                    const normalize = (value) => String(value || "")
+                        .replace(/[\\u200B-\\u200D\\uFEFF]/g, "")
+                        .replace(/\\s+/g, " ")
+                        .trim();
                     const target = normalize(expected);
+                    const targetWithoutPrefix = normalize(target
+                        .replace(/^<@!?\\d+>\\s+/, "")
+                        .replace(/^@\\S+(?:\\s+\\S+){0,3}\\s+/, "")
+                    );
+                    const usefulTargets = [target, targetWithoutPrefix].filter((item) => item.length >= 24);
                     const before = new Set(beforeIds || []);
                     const messages = Array.from(document.querySelectorAll('[id^="chat-messages-"]'));
+                    const matchesRendered = (rendered) => {
+                        if (!rendered || !target) return false;
+                        if (rendered === target || rendered.includes(target) || target.includes(rendered)) {
+                            return true;
+                        }
+                        return usefulTargets.some((candidate) => {
+                            const head = candidate.slice(0, 120);
+                            const tail = candidate.slice(-120);
+                            return (head.length >= 24 && rendered.includes(head))
+                                || (tail.length >= 24 && rendered.includes(tail));
+                        });
+                    };
                     return messages.some((node) => {
                         if (before.has(node.id || "")) return false;
-                        const content = node.querySelector('[class*="messageContent"]');
-                        return normalize(content?.textContent || "") === target;
+                        const renderedCandidates = Array.from(node.querySelectorAll('[class*="messageContent"]'))
+                            .map((content) => normalize(content?.textContent || ""))
+                            .filter(Boolean);
+                        renderedCandidates.push(normalize(node.textContent || ""));
+                        return renderedCandidates.some(matchesRendered);
                     });
                 }
                 """,
                 {"expected": text, "beforeIds": before_message_ids},
                 timeout=timeout_ms,
             )
+            return {"confirmed": True, "assumed_sent": False, "confirmation_warning": ""}
         except Exception as exc:
             state = await self.writable_channel_state()
+            composer_text = await self._composer_text()
+            after_message_ids = await self._visible_message_ids()
+            before = set(before_message_ids or [])
+            new_message_count = len([message_id for message_id in after_message_ids if message_id not in before])
+            if _draft_still_in_composer(text, composer_text):
+                detail = "The draft still appears to be sitting in the composer, so Discord did not submit it."
+            elif composer_text.strip():
+                detail = "The composer still contains text after Enter, so Discord likely blocked or redirected the send."
+            else:
+                detail = "The composer cleared, but Kabuki could not match a newly rendered Discord message."
+                if new_message_count > 0:
+                    return {
+                        "confirmed": False,
+                        "assumed_sent": True,
+                        "confirmation_warning": (
+                            "Discord cleared the composer and rendered a new message, but Kabuki "
+                            "could not text-match the new message. Treated as delivered to avoid a duplicate send."
+                        ),
+                    }
             raise RuntimeError(
                 "Discord did not confirm the message appeared after pressing Enter. "
                 f"url={state.get('url')}; has_composer={state.get('has_composer')}; "
                 f"has_messages={state.get('has_messages')}; notice={state.get('notice') or 'none'}. "
-                "The draft remains queued so you can inspect Discord before retrying."
+                f"{detail} The draft remains queued so you can inspect Discord before retrying."
             ) from exc
+
+    async def _prepare_reply_to_message(self, message_id: str) -> None:
+        safe_id = str(message_id or "").strip()
+        if not safe_id:
+            return
+        message = self.page.locator(f"#{safe_id}").first
+        try:
+            await message.wait_for(state="visible", timeout=8_000)
+            await message.scroll_into_view_if_needed(timeout=5_000)
+            await message.hover(timeout=5_000)
+        except Exception as exc:
+            raise RuntimeError(
+                "Discord could not find the selected message to reply to. "
+                "Refresh the channel, regenerate the draft from a recent poster, then retry. "
+                "No message was sent."
+            ) from exc
+
+        if await self._click_visible_reply_action(message):
+            await self.page.wait_for_timeout(500)
+            return
+
+        try:
+            await message.click(button="right", timeout=5_000)
+            await self.page.wait_for_timeout(350)
+            if await self._click_context_reply_action():
+                await self.page.wait_for_timeout(500)
+                return
+        except Exception:
+            pass
+
+        raise RuntimeError(
+            "Discord did not expose a Reply action for the selected message. "
+            "The draft remains queued and no message was sent."
+        )
+
+    async def _click_visible_reply_action(self, message) -> bool:
+        try:
+            return bool(
+                await message.evaluate(
+                    """
+                    (messageNode) => {
+                        const visible = (node) => {
+                            if (!node) return false;
+                            const rect = node.getBoundingClientRect();
+                            const style = window.getComputedStyle(node);
+                            return rect.width > 0
+                                && rect.height > 0
+                                && style.display !== "none"
+                                && style.visibility !== "hidden";
+                        };
+                        const msgRect = messageNode.getBoundingClientRect();
+                        const candidates = Array.from(document.querySelectorAll(
+                            'button[aria-label], [role="button"][aria-label], [aria-label]'
+                        )).filter((node) => {
+                            const label = `${node.getAttribute("aria-label") || ""} ${node.textContent || ""}`;
+                            if (!/\\breply\\b/i.test(label) || !visible(node)) return false;
+                            const rect = node.getBoundingClientRect();
+                            const nearVertically = rect.bottom >= msgRect.top - 80 && rect.top <= msgRect.bottom + 120;
+                            const toTheRight = rect.left >= msgRect.left;
+                            return nearVertically && toTheRight;
+                        }).sort((left, right) => {
+                            const a = left.getBoundingClientRect();
+                            const b = right.getBoundingClientRect();
+                            return Math.abs(a.top - msgRect.top) - Math.abs(b.top - msgRect.top);
+                        });
+                        if (!candidates.length) return false;
+                        candidates[0].click();
+                        return true;
+                    }
+                    """
+                )
+            )
+        except Exception:
+            return False
+
+    async def _click_context_reply_action(self) -> bool:
+        try:
+            return bool(
+                await self.page.evaluate(
+                    """
+                    () => {
+                        const visible = (node) => {
+                            if (!node) return false;
+                            const rect = node.getBoundingClientRect();
+                            const style = window.getComputedStyle(node);
+                            return rect.width > 0
+                                && rect.height > 0
+                                && style.display !== "none"
+                                && style.visibility !== "hidden";
+                        };
+                        const candidates = Array.from(document.querySelectorAll(
+                            '[role="menuitem"], [role="menuitemradio"], [aria-label], [role="button"]'
+                        )).filter((node) => {
+                            const label = `${node.getAttribute("aria-label") || ""} ${node.textContent || ""}`;
+                            return /\\breply\\b/i.test(label) && visible(node);
+                        });
+                        if (!candidates.length) return false;
+                        candidates[0].click();
+                        return true;
+                    }
+                    """
+                )
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                "Discord did not expose a Reply action for the selected message. "
+                "The draft remains queued and no message was sent."
+            ) from exc
+
+    async def _composer_text(self) -> str:
+        try:
+            return await self.page.evaluate(
+                """
+                () => {
+                    const visible = (node) => {
+                        if (!node) return false;
+                        const rect = node.getBoundingClientRect();
+                        const style = window.getComputedStyle(node);
+                        return rect.width > 0
+                            && rect.height > 0
+                            && style.display !== "none"
+                            && style.visibility !== "hidden";
+                    };
+                    const composers = Array.from(document.querySelectorAll(
+                        '[data-slate-editor="true"][role="textbox"], div[role="textbox"][contenteditable="true"]'
+                    )).filter(visible);
+                    const composer = composers[composers.length - 1];
+                    return (composer?.innerText || composer?.textContent || "").trim();
+                }
+                """
+            )
+        except Exception:
+            return ""
 
     async def _is_logged_in(self) -> bool:
         if "/login" in self.page.url:
@@ -679,6 +1217,74 @@ def _typing_duration(
     lower = max(float(min_seconds or 0), 0.0)
     upper = max(float(max_seconds or lower), lower)
     return min(max(chars / cps, lower), upper)
+
+
+def _normalized_message_text(value: str) -> str:
+    return " ".join(str(value or "").replace("\u200b", "").replace("\ufeff", "").split())
+
+
+def _draft_still_in_composer(expected: str, composer_text: str) -> bool:
+    expected_text = _normalized_message_text(expected)
+    actual_text = _normalized_message_text(composer_text)
+    if not expected_text or not actual_text:
+        return False
+    return expected_text in actual_text or actual_text in expected_text
+
+
+def _message_sort_value(message: MessageRecord) -> int:
+    try:
+        return int(str(message.message_id).rsplit("-", 1)[-1])
+    except ValueError:
+        return 0
+
+
+def _discord_message_token(message_id: str) -> str:
+    raw = str(message_id or "").strip()
+    if not raw:
+        return ""
+    if raw.startswith("chat-messages-"):
+        return raw.rsplit("-", 1)[-1]
+    return raw
+
+
+def _profile_in_use_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return (
+        "opening in existing browser session" in message
+        or "user data directory is already in use" in message
+        or "profile appears to be in use" in message
+        or "singletonlock" in message
+        or "processsingleton" in message
+    )
+
+
+def _close_profile_browsers(profile_dir: Path) -> None:
+    if sys.platform != "win32":
+        return
+    profile = str(profile_dir.resolve())
+    script = f"""
+$needle = "--user-data-dir={profile}"
+Get-CimInstance Win32_Process |
+  Where-Object {{
+    $_.CommandLine -and
+    $_.CommandLine.IndexOf($needle, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+  }} |
+  ForEach-Object {{
+    Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+  }}
+"""
+    kwargs = {"creationflags": subprocess.CREATE_NO_WINDOW}
+    try:
+        subprocess.run(
+            ["powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command", script],
+            check=False,
+            timeout=8,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            **kwargs,
+        )
+    except Exception:
+        return
 
 
 def discord_login_blocker_message(state: dict[str, object]) -> str:

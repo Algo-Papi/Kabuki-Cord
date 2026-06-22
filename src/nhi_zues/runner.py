@@ -38,7 +38,7 @@ class NhiZuesRunner:
             api_key=config.openai_api_key,
             model=config.openai_model,
             enabled=config.llm_enabled,
-            generate_drafts=(not config.dry_run) or config.draft_in_dry_run,
+            generate_drafts=(config.runtime_mode != "dry") or config.draft_in_dry_run,
             conversation_reply_enabled=config.conversation_reply_enabled,
             budget=self.budget,
             max_output_tokens=config.max_output_tokens,
@@ -218,7 +218,16 @@ class NhiZuesRunner:
                     self.memory.save()
                     continue
 
-                if decision.requires_approval or not target.auto_respond_enabled:
+                if self.config.runtime_mode == "dry":
+                    log.info("dry mode draft for %s: %s", target.channel_id, decision.draft)
+                    self.events.add(
+                        event_type="dry_run",
+                        server_id=target.server_id,
+                        channel_id=target.channel_id,
+                        summary=decision.reason,
+                        draft=decision.draft,
+                    )
+                elif _requires_approval(self.config.runtime_mode, decision.engagement_type):
                     existing = self.approvals.find_source_overlap(
                         channel_id=target.channel_id,
                         source_message_ids=source_ids,
@@ -248,16 +257,6 @@ class NhiZuesRunner:
                     log.info("queued approval=%s channel=%s", item.approval_id, target.channel_id)
                     self.events.add(
                         event_type="approval_queued",
-                        server_id=target.server_id,
-                        channel_id=target.channel_id,
-                        summary=decision.reason,
-                        draft=decision.draft,
-                    )
-                elif self.config.dry_run:
-                    mode = "auto_respond_dry_run" if target.auto_respond_enabled else "dry_run"
-                    log.info("%s draft for %s: %s", mode, target.channel_id, decision.draft)
-                    self.events.add(
-                        event_type=mode,
                         server_id=target.server_id,
                         channel_id=target.channel_id,
                         summary=decision.reason,
@@ -298,6 +297,16 @@ def _without_own_messages(messages, *, character_names: tuple[str, ...]):
 
 def _normalize_author(value: str) -> str:
     return " ".join(str(value or "").lower().split())
+
+
+def _requires_approval(runtime_mode: str, engagement_type: str) -> bool:
+    mode = str(runtime_mode or "dry").lower()
+    kind = str(engagement_type or "").lower()
+    if mode == "live_fire":
+        return True
+    if mode == "semi_auto":
+        return kind in {"proactive", "manual"}
+    return False
 
 
 def _stop_requested(stop_event) -> bool:

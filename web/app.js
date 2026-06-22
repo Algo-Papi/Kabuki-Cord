@@ -10,6 +10,7 @@ let refreshInFlight = false;
 const approvalTargets = {};
 const approvalDeliveryState = {};
 const approvalRegenerationState = {};
+const activeOperations = new Map();
 let knownEventKeys = new Set();
 
 const $ = (id) => document.getElementById(id);
@@ -24,14 +25,19 @@ async function loadSession() {
 async function api(path, options = {}) {
   if (!apiToken && path !== "/api/session") await loadSession();
   const { headers = {}, ...rest } = options;
-  const response = await fetch(path, {
-    headers: {
-      "Content-Type": "application/json",
-      ...(apiToken ? { "X-Kabuki-Token": apiToken } : {}),
-      ...headers,
-    },
-    ...rest,
-  });
+  let response;
+  try {
+    response = await fetch(path, {
+      headers: {
+        "Content-Type": "application/json",
+        ...(apiToken ? { "X-Kabuki-Token": apiToken } : {}),
+        ...headers,
+      },
+      ...rest,
+    });
+  } catch {
+    throw new Error("Kabuki-Cord did not respond. Restart the app, then retry. If it keeps happening, check Events for the last backend error.");
+  }
   if (!response.ok) {
     const errorText = await response.text();
     let message = errorText;
@@ -97,6 +103,7 @@ function render() {
   renderMetrics();
   renderEventsPanel();
   renderPreviewTabs();
+  renderOperationStatus();
 }
 
 function renderRail() {
@@ -159,7 +166,6 @@ function renderServerPanel() {
           <div class="channel-actions">
             <button class="pill-toggle observe ${chan.scan_enabled ? "on" : ""}" data-toggle="scan" data-channel="${index}">Observe</button>
             <button class="pill-toggle engage ${chan.engage_enabled ? "on" : ""}" data-toggle="engage" data-channel="${index}">Engage</button>
-            <button class="pill-toggle auto ${chan.auto_respond_enabled ? "on" : ""}" data-toggle="auto" data-channel="${index}">Auto</button>
           </div>
         </div>
       `;
@@ -178,14 +184,13 @@ function renderServerPanel() {
       const chan = channels()[Number(button.dataset.channel)];
       if (button.dataset.toggle === "scan") chan.scan_enabled = !chan.scan_enabled;
       if (button.dataset.toggle === "engage") chan.engage_enabled = !chan.engage_enabled;
-      if (button.dataset.toggle === "auto") chan.auto_respond_enabled = !chan.auto_respond_enabled;
       render();
     });
   });
 
   const current = channel();
   $("channelAutoRespond").checked = Boolean(current?.auto_respond_enabled);
-  $("approvalState").textContent = current?.auto_respond_enabled ? "auto allowed" : "required";
+  $("approvalState").textContent = runtimeModeLabel(currentRuntimeMode());
 }
 
 function renderCharacterCards() {
@@ -232,7 +237,7 @@ function renderCharacterEditor() {
   $("triggerKeywords").value = (card.trigger_keywords || []).join("\n");
   $("styleRules").value = (card.style_rules || []).join("\n");
   $("engagementRules").value = (card.engagement_rules || []).join("\n");
-  $("approvalRequired").checked = strBool(appState.env.NHI_ZUES_PROACTIVE_APPROVAL_REQUIRED, true);
+  $("approvalRequired").checked = currentRuntimeMode() !== "full_auto";
 }
 
 function renderSettings() {
@@ -252,11 +257,12 @@ function renderSettings() {
     : "GitHub origin is not configured yet. Update will be available after publishing.";
   $("openaiModel").value = appState.env.OPENAI_MODEL || appState.app.openai_model || "";
   renderModelOptions();
+  $("runtimeMode").value = currentRuntimeMode();
   $("llmEnabled").checked = strBool(appState.env.NHI_ZUES_LLM_ENABLED, false);
   $("draftDryRun").checked = strBool(appState.env.NHI_ZUES_DRAFT_IN_DRY_RUN, false);
   $("conversationReply").checked = strBool(appState.env.NHI_ZUES_CONVERSATION_REPLY_ENABLED, false);
   $("headlessMode").checked = strBool(appState.env.NHI_ZUES_HEADLESS, false);
-  $("dryRun").checked = strBool(appState.env.NHI_ZUES_DRY_RUN, true);
+  $("dryRun").checked = currentRuntimeMode() === "dry";
   $("dailyBudget").value = appState.env.NHI_ZUES_MAX_DAILY_USD || "0.25";
   $("sessionBudget").value = appState.env.NHI_ZUES_MAX_SESSION_USD || "0.05";
   $("maxCalls").value = appState.env.NHI_ZUES_MAX_LLM_CALLS_PER_RUN || "3";
@@ -308,15 +314,69 @@ function renderRuntime() {
     ? `<i class="bi bi-pause-fill"></i> Pause`
     : `<i class="bi bi-play-fill"></i> Start`;
   $("runtimeControl").className = running ? "secondary-button active-runtime" : "secondary-button";
+  const mode = runtimeModeLabel(currentRuntimeMode());
   if (running) {
-    $("runtimeStatus").textContent = appState.app.dry_run
-      ? `scanner running - dry-run - ${browserMode}`
-      : `scanner running - live sends allowed - ${browserMode}`;
+    $("runtimeStatus").textContent = `scanner running - ${mode} - ${browserMode}`;
   } else {
-    $("runtimeStatus").textContent = appState.app.dry_run
-      ? `paused - dry-run - ${browserMode}`
-      : `paused - live sends allowed - ${browserMode}`;
+    $("runtimeStatus").textContent = `paused - ${mode} - ${browserMode}`;
   }
+}
+
+function renderOperationStatus() {
+  const el = $("operationStatus");
+  if (!el) return;
+  const active = Array.from(activeOperations.values()).at(-1);
+  if (active) {
+    el.className = `operation-status active ${escapeAttr(active.kind || "working")}`;
+    el.innerHTML = `
+      <i class="bi ${escapeAttr(active.icon || "bi-arrow-repeat")}"></i>
+      <span>${escapeHtml(active.label)}</span>
+      ${active.detail ? `<small>${escapeHtml(active.detail)}</small>` : ""}
+    `;
+    return;
+  }
+  const runtime = appState?.runtime || {};
+  if (runtime.running) {
+    el.className = "operation-status scanning";
+    el.innerHTML = `
+      <i class="bi bi-radar"></i>
+      <span>Scanner running</span>
+      <small>${escapeHtml(formatRuntimeTime(runtime.last_run_at))}</small>
+    `;
+    return;
+  }
+  el.className = "operation-status idle";
+  el.innerHTML = `
+    <i class="bi bi-circle-fill"></i>
+    <span>Idle</span>
+    <small>${escapeHtml(runtime.last_error || runtimeModeLabel(currentRuntimeMode()))}</small>
+  `;
+}
+
+function startOperation(id, label, detail = "", kind = "working", icon = "bi-arrow-repeat") {
+  activeOperations.set(id, { label, detail, kind, icon });
+  renderOperationStatus();
+}
+
+function updateOperation(id, detail) {
+  const existing = activeOperations.get(id);
+  if (!existing) return;
+  activeOperations.set(id, { ...existing, detail });
+  renderOperationStatus();
+}
+
+function finishOperation(id, label = "", kind = "idle", icon = "bi-check-circle") {
+  if (label) {
+    activeOperations.set(id, { label, detail: "", kind, icon });
+    renderOperationStatus();
+    setTimeout(() => {
+      activeOperations.delete(id);
+      renderOperationStatus();
+    }, 1200);
+    return;
+  }
+  activeOperations.delete(id);
+  renderOperationStatus();
 }
 
 function renderGrowth() {
@@ -374,7 +434,7 @@ function renderApprovals() {
       .map((item) => {
         const delivery = approvalDeliveryState[item.approval_id] || null;
         const sending = delivery?.state === "sending";
-        const regenerating = Boolean(approvalRegenerationState[item.approval_id]);
+        const regenerating = approvalRegenerationState[item.approval_id]?.state === "regenerating";
         return `
         <div class="approval-item" data-approval-item="${escapeAttr(item.approval_id)}">
           <strong>${escapeHtml(item.character_name)} · #${escapeHtml(item.channel_id)}</strong>
@@ -387,11 +447,12 @@ function renderApprovals() {
           <div class="approval-actions">
             <button class="small-button" data-approval-save="${escapeAttr(item.approval_id)}"><i class="bi bi-save2"></i> Save</button>
             <button class="small-button" data-approval-regenerate="${escapeAttr(item.approval_id)}" ${regenerating ? "disabled" : ""}><i class="bi ${regenerating ? "bi-hourglass-split" : "bi-stars"}"></i> ${regenerating ? "Regenerating" : "Regenerate"}</button>
+            <button class="small-button" data-approval-open="${escapeAttr(item.approval_id)}"><i class="bi bi-box-arrow-up-right"></i> Open Conversation</button>
             <button class="small-button" data-copy="${escapeAttr(item.approval_id)}"><i class="bi bi-copy"></i> Copy</button>
             <button class="small-button" data-approval-discard="${escapeAttr(item.approval_id)}"><i class="bi bi-trash3"></i> Discard</button>
             <button class="primary-button approval-send" data-approval-send="${escapeAttr(item.approval_id)}" ${sending ? "disabled" : ""}><i class="bi ${sending ? "bi-hourglass-split" : "bi-send"}"></i> ${sending ? "Sending" : "Approve & Send"}</button>
           </div>
-          ${appState.app.dry_run ? `<div class="approval-warning">Dry-run is on. Approved messages will be blocked until Dry-run mode is turned off in API & Runtime.</div>` : ""}
+          ${currentRuntimeMode() === "dry" ? `<div class="approval-warning">Dry Mode is on. Approved messages will be blocked until Response Mode changes in API & Runtime.</div>` : ""}
         </div>
       `;
       })
@@ -410,6 +471,9 @@ function renderApprovals() {
   });
   document.querySelectorAll("[data-approval-regenerate]").forEach((button) => {
     button.addEventListener("click", () => regenerateApproval(button.dataset.approvalRegenerate));
+  });
+  document.querySelectorAll("[data-approval-open]").forEach((button) => {
+    button.addEventListener("click", () => openApprovalConversation(button.dataset.approvalOpen).catch((error) => toast(error.message)));
   });
   document.querySelectorAll("[data-approval-send]").forEach((button) => {
     button.addEventListener("click", () => sendApproval(button.dataset.approvalSend));
@@ -457,11 +521,13 @@ function approvalDeliveryStatus(approvalId) {
 }
 
 function approvalRegenerationStatus(approvalId) {
-  if (!approvalRegenerationState[approvalId]) return "";
+  const state = approvalRegenerationState[approvalId];
+  if (!state) return "";
+  const isFailed = state.state === "failed";
   return `
-    <div class="approval-delivery-status">
-      <i class="bi bi-hourglass-split"></i>
-      <span>Regenerating draft. Waiting for model response...</span>
+    <div class="approval-delivery-status ${isFailed ? "failed" : ""}">
+      <i class="bi ${isFailed ? "bi-exclamation-triangle" : "bi-hourglass-split"}"></i>
+      <span>${escapeHtml(state.message || "Regenerating draft. Waiting for model response...")}</span>
     </div>
   `;
 }
@@ -470,7 +536,11 @@ function insertReplyPrefix(approvalId, prefix) {
   const textarea = document.querySelector(`[data-approval-draft="${cssEscape(approvalId)}"]`);
   if (!textarea || !prefix) return;
   const current = textarea.value.trim();
-  textarea.value = current.startsWith(prefix) ? current : `${prefix} ${current}`;
+  const withoutOldPrefix = current
+    .replace(/^<@!?\d+>\s+/, "")
+    .replace(/^@\S+(?:\s+\S+){0,3}\s+/, "")
+    .trim();
+  textarea.value = current.startsWith(prefix) ? current : `${prefix} ${withoutOldPrefix || current}`;
   textarea.focus();
 }
 
@@ -501,10 +571,15 @@ async function discardApproval(approvalId) {
 }
 
 async function regenerateApproval(approvalId) {
-  if (approvalRegenerationState[approvalId]) return;
+  if (approvalRegenerationState[approvalId]?.state === "regenerating") return;
   const instruction = document.querySelector(`[data-approval-instruction="${cssEscape(approvalId)}"]`)?.value.trim() || "";
   const draft = approvalDraft(approvalId);
-  approvalRegenerationState[approvalId] = true;
+  const opId = `regenerate:${approvalId}`;
+  startOperation(opId, "Regenerating draft", "Waiting for OpenAI response", "api", "bi-stars");
+  approvalRegenerationState[approvalId] = {
+    state: "regenerating",
+    message: "Regenerating draft. Waiting for model response...",
+  };
   renderApprovals();
   toast("Regenerating draft...");
   try {
@@ -520,10 +595,15 @@ async function regenerateApproval(approvalId) {
     delete approvalRegenerationState[approvalId];
     appState = result.state || (await api("/api/state"));
     render();
+    finishOperation(opId, "Draft regenerated", "done", "bi-check-circle");
     toast("Approval regenerated");
   } catch (error) {
-    delete approvalRegenerationState[approvalId];
+    approvalRegenerationState[approvalId] = {
+      state: "failed",
+      message: error.message,
+    };
     renderApprovals();
+    finishOperation(opId, "Regeneration failed", "failed", "bi-exclamation-triangle");
     toast(error.message);
   }
 }
@@ -531,6 +611,8 @@ async function regenerateApproval(approvalId) {
 async function sendApproval(approvalId) {
   if (approvalDeliveryState[approvalId]?.state === "sending") return;
   const draft = approvalDraft(approvalId);
+  const opId = `send:${approvalId}`;
+  startOperation(opId, "Posting approved reply", "Opening Discord and waiting for delivery", "discord", "bi-send");
   approvalDeliveryState[approvalId] = {
     state: "sending",
     message: "Processing approved message. Waiting for Discord delivery...",
@@ -540,13 +622,19 @@ async function sendApproval(approvalId) {
   try {
     await api("/api/approval-send", {
       method: "POST",
-      body: JSON.stringify({ approval_id: approvalId, draft }),
+      body: JSON.stringify({
+        approval_id: approvalId,
+        draft,
+        reply_to_message_id: approvalReplyMessageId(approvalId),
+      }),
     });
     approvalDeliveryState[approvalId] = {
       state: "sent",
       message: "Posted successfully to Discord.",
     };
+    updateOperation(opId, "Refreshing channel and resuming scanner");
     await loadState();
+    finishOperation(opId, "Posted and scanning", "done", "bi-check-circle");
     toast("Posted successfully to Discord");
   } catch (error) {
     approvalDeliveryState[approvalId] = {
@@ -554,8 +642,27 @@ async function sendApproval(approvalId) {
       message: error.message,
     };
     await loadState().catch(() => {});
+    finishOperation(opId, "Post failed", "failed", "bi-exclamation-triangle");
     toast(error.message);
   }
+}
+
+function approvalReplyMessageId(approvalId) {
+  const target = approvalTargets[approvalId];
+  if (!appState) return "";
+  const approval = (appState.approvals || []).find((item) => item.approval_id === approvalId);
+  if (!approval?.channel_id) return "";
+  const fallbackSourceId = (approval.source_message_ids || []).at(-1) || "";
+  if (!target?.user_key) return fallbackSourceId;
+  const posters = appState.recent_posters?.[approval.channel_id] || [];
+  const poster = posters.find((item) => item.user_key === target.user_key);
+  return (
+    poster?.message_id ||
+    poster?.latest_message_id ||
+    poster?.source_message_id ||
+    fallbackSourceId ||
+    ""
+  );
 }
 
 async function clearApprovals() {
@@ -600,13 +707,12 @@ function renderRuntimeCheckSummary() {
   const runtime = appState.runtime || {};
   const activeChannels = configuredChannels().filter((item) => item.scan_enabled);
   const engagedChannels = activeChannels.filter((item) => item.engage_enabled);
-  const autoChannels = activeChannels.filter((item) => item.auto_respond_enabled);
   $("runtimeCheckSummary").innerHTML = `
     <div><span>Status</span><strong>${escapeHtml(runtime.running ? "running" : "paused")}</strong></div>
     <div><span>Last check</span><strong>${escapeHtml(formatRuntimeTime(runtime.last_run_at))}</strong></div>
     <div><span>Observed</span><strong>${activeChannels.length}</strong></div>
     <div><span>Engage</span><strong>${engagedChannels.length}</strong></div>
-    <div><span>Auto</span><strong>${autoChannels.length}</strong></div>
+    <div><span>Mode</span><strong>${escapeHtml(runtimeModeLabel(currentRuntimeMode()))}</strong></div>
     <div><span>Last issue</span><strong>${escapeHtml(runtime.last_error || "none")}</strong></div>
   `;
 }
@@ -684,17 +790,34 @@ function renderHistory() {
   $("historyMessages").innerHTML =
     messages
       .slice(-40)
+      .reverse()
       .map((message) => `
         <div class="history-item">
-          <strong>${escapeHtml(message.author)}</strong>
-          <span>${escapeHtml(formatTime(message.observed_at))}</span>
+          <div class="history-item-header">
+            <div>
+              <strong>${escapeHtml(message.author)}</strong>
+              <span>${escapeHtml(formatTime(message.observed_at))}</span>
+            </div>
+            <button
+              class="small-button"
+              data-respond-message="${escapeAttr(message.message_id || "")}"
+              data-respond-user="${escapeAttr(message.user_key || "")}"
+            ><i class="bi bi-reply"></i> Respond</button>
+          </div>
           <p>${escapeHtml(message.text)}</p>
         </div>
       `)
       .join("") || emptyHistoryMessage();
+  document.querySelectorAll("[data-respond-message]").forEach((button) => {
+    button.addEventListener("click", () => createMessageApproval(
+      button.dataset.respondMessage,
+      button.dataset.respondUser,
+    ));
+  });
   $("historyEvents").innerHTML =
     events
       .slice(-40)
+      .reverse()
       .map((event) => `
         <div class="history-item event">
           <strong>${escapeHtml(event.event_type)}</strong>
@@ -720,17 +843,60 @@ async function createSuggestedApproval(userKey) {
   const currentServer = server();
   const currentChannel = channel();
   if (!currentServer || !currentChannel) return;
-  await api("/api/approval-create", {
-    method: "POST",
-    body: JSON.stringify({
-      server_id: currentServer.server_id,
-      channel_id: currentChannel.channel_id,
-      target_user_key: userKey,
-      instruction: "Suggest a natural response to this user's recent point using the selected character.",
-    }),
-  });
-  await loadState();
-  toast("Suggested response queued for approval");
+  const opId = `suggest:${currentChannel.channel_id}:${userKey || "recent"}`;
+  startOperation(opId, "Drafting suggested reply", "Waiting for OpenAI response", "api", "bi-chat-left-text");
+  toast("Generating suggested response...");
+  try {
+    const result = await api("/api/approval-create", {
+      method: "POST",
+      body: JSON.stringify({
+        server_id: currentServer.server_id,
+        channel_id: currentChannel.channel_id,
+        target_user_key: userKey,
+        instruction: "Suggest a natural response to this user's recent point using the selected character.",
+      }),
+    });
+    appState = result.state || (await api("/api/state"));
+    render();
+    finishOperation(opId, "Approval queued", "done", "bi-check-circle");
+    toast("Suggested response queued for approval");
+  } catch (error) {
+    await loadState().catch(() => {});
+    finishOperation(opId, "Draft failed", "failed", "bi-exclamation-triangle");
+    toast(error.message);
+  }
+}
+
+async function createMessageApproval(messageId, userKey) {
+  const currentServer = server();
+  const currentChannel = channel();
+  if (!currentServer || !currentChannel || !messageId) {
+    toast("Select a remembered message first");
+    return;
+  }
+  const opId = `message-approval:${messageId}`;
+  startOperation(opId, "Drafting response", "Using selected message context", "api", "bi-reply");
+  toast("Generating response for selected message...");
+  try {
+    const result = await api("/api/approval-create", {
+      method: "POST",
+      body: JSON.stringify({
+        server_id: currentServer.server_id,
+        channel_id: currentChannel.channel_id,
+        target_user_key: userKey || "",
+        target_message_id: messageId,
+        instruction: "Suggest a natural response to this selected message using the selected character.",
+      }),
+    });
+    appState = result.state || (await api("/api/state"));
+    render();
+    finishOperation(opId, "Approval queued", "done", "bi-check-circle");
+    toast("Response queued for approval");
+  } catch (error) {
+    await loadState().catch(() => {});
+    finishOperation(opId, "Draft failed", "failed", "bi-exclamation-triangle");
+    toast(error.message);
+  }
 }
 
 function syncFormsToState() {
@@ -738,8 +904,6 @@ function syncFormsToState() {
   srv.label = $("serverLabel").value.trim();
   srv.character_card = $("serverCharacter").value || null;
   srv.poll_seconds = Number($("serverPoll").value || 120);
-  const current = channel();
-  if (current) current.auto_respond_enabled = $("channelAutoRespond").checked;
 
   const card = appState.active_character.card;
   card.name = $("cardName").value.trim();
@@ -751,50 +915,98 @@ function syncFormsToState() {
 }
 
 async function saveAll() {
-  syncFormsToState();
-  const settings = {
-    OPENAI_MODEL: $("openaiModel").value.trim(),
-    NHI_ZUES_LLM_ENABLED: $("llmEnabled").checked,
-    NHI_ZUES_DRAFT_IN_DRY_RUN: $("draftDryRun").checked,
-    NHI_ZUES_CONVERSATION_REPLY_ENABLED: $("conversationReply").checked,
-    NHI_ZUES_HEADLESS: $("headlessMode").checked,
-    NHI_ZUES_DRY_RUN: $("dryRun").checked,
-    NHI_ZUES_PROACTIVE_APPROVAL_REQUIRED: $("approvalRequired").checked,
-    NHI_ZUES_CHARACTER_CARD: appState.env.NHI_ZUES_CHARACTER_CARD || appState.active_character.path,
-    NHI_ZUES_MAX_DAILY_USD: $("dailyBudget").value,
-    NHI_ZUES_MAX_SESSION_USD: $("sessionBudget").value,
-    NHI_ZUES_MAX_LLM_CALLS_PER_RUN: $("maxCalls").value,
-    NHI_ZUES_WRITING_MISTAKE_RATE: String(Math.max(0, Math.min(Number($("mistakeRate").value || 0), 35)) / 100),
-    NHI_ZUES_WRITING_QUIRK: $("writingQuirk").value,
-    NHI_ZUES_WRITING_MISSPELLINGS: $("writingMisspellings").value.trim(),
-    NHI_ZUES_TYPING_INDICATOR_ENABLED: $("typingIndicatorEnabled").checked,
-    NHI_ZUES_TYPING_MIN_SECONDS: $("typingMinSeconds").value,
-    NHI_ZUES_TYPING_MAX_SECONDS: $("typingMaxSeconds").value,
-    NHI_ZUES_TYPING_CHARS_PER_SECOND: $("typingCharsPerSecond").value,
-  };
-  if ($("apiKey").value.trim()) settings.OPENAI_API_KEY = $("apiKey").value.trim();
-  await api("/api/servers", { method: "POST", body: JSON.stringify(appState.servers) });
-  await api("/api/character", {
-    method: "POST",
-    body: JSON.stringify(appState.active_character),
-  });
-  await api("/api/settings", { method: "POST", body: JSON.stringify(settings) });
-  $("apiKey").value = "";
-  await loadState();
-  toast("Settings saved");
+  const opId = "save-all";
+  startOperation(opId, "Saving settings", "Writing local config files", "working", "bi-save2");
+  try {
+    syncFormsToState();
+    const runtimeMode = currentRuntimeMode();
+    const settings = {
+      OPENAI_MODEL: $("openaiModel").value.trim(),
+      NHI_ZUES_LLM_ENABLED: $("llmEnabled").checked,
+      NHI_ZUES_RUNTIME_MODE: runtimeMode,
+      NHI_ZUES_DRAFT_IN_DRY_RUN: $("draftDryRun").checked,
+      NHI_ZUES_CONVERSATION_REPLY_ENABLED: $("conversationReply").checked,
+      NHI_ZUES_HEADLESS: $("headlessMode").checked,
+      NHI_ZUES_DRY_RUN: runtimeMode === "dry",
+      NHI_ZUES_PROACTIVE_APPROVAL_REQUIRED: runtimeMode !== "full_auto",
+      NHI_ZUES_CHARACTER_CARD: appState.env.NHI_ZUES_CHARACTER_CARD || appState.active_character.path,
+      NHI_ZUES_MAX_DAILY_USD: $("dailyBudget").value,
+      NHI_ZUES_MAX_SESSION_USD: $("sessionBudget").value,
+      NHI_ZUES_MAX_LLM_CALLS_PER_RUN: $("maxCalls").value,
+      NHI_ZUES_WRITING_MISTAKE_RATE: String(Math.max(0, Math.min(Number($("mistakeRate").value || 0), 35)) / 100),
+      NHI_ZUES_WRITING_QUIRK: $("writingQuirk").value,
+      NHI_ZUES_WRITING_MISSPELLINGS: $("writingMisspellings").value.trim(),
+      NHI_ZUES_TYPING_INDICATOR_ENABLED: $("typingIndicatorEnabled").checked,
+      NHI_ZUES_TYPING_MIN_SECONDS: $("typingMinSeconds").value,
+      NHI_ZUES_TYPING_MAX_SECONDS: $("typingMaxSeconds").value,
+      NHI_ZUES_TYPING_CHARS_PER_SECOND: $("typingCharsPerSecond").value,
+    };
+    if ($("apiKey").value.trim()) settings.OPENAI_API_KEY = $("apiKey").value.trim();
+    await api("/api/servers", { method: "POST", body: JSON.stringify(appState.servers) });
+    await api("/api/character", {
+      method: "POST",
+      body: JSON.stringify(appState.active_character),
+    });
+    await api("/api/settings", { method: "POST", body: JSON.stringify(settings) });
+    $("apiKey").value = "";
+    await loadState();
+    finishOperation(opId, "Settings saved", "done", "bi-check-circle");
+    toast("Settings saved");
+  } catch (error) {
+    finishOperation(opId, "Save failed", "failed", "bi-exclamation-triangle");
+    throw error;
+  }
 }
 
 async function syncDiscordServers() {
+  const opId = "sync-discord";
+  startOperation(opId, "Syncing Discord", "Reading servers and channels", "discord", "bi-diagram-3");
+  try {
+    syncFormsToState();
+    await api("/api/servers", { method: "POST", body: JSON.stringify(appState.servers) });
+    const result = await api("/api/discord-sync-servers", { method: "POST", body: JSON.stringify({}) });
+    appState = result.state;
+    selectedServer = Math.min(selectedServer, servers().length - 1);
+    if (selectedServer < 0) selectedServer = 0;
+    selectedChannel = Math.min(selectedChannel, channels().length - 1);
+    if (selectedChannel < 0) selectedChannel = 0;
+    render();
+    finishOperation(opId, "Discord synced", "done", "bi-check-circle");
+    toast(`Synced ${result.discovered} servers and ${result.channels_discovered || 0} channels`);
+  } catch (error) {
+    finishOperation(opId, "Sync failed", "failed", "bi-exclamation-triangle");
+    throw error;
+  }
+}
+
+async function repairDiscordServer() {
+  const currentServer = server();
+  if (!currentServer?.server_id) {
+    toast("Select a server first");
+    return;
+  }
   syncFormsToState();
   await api("/api/servers", { method: "POST", body: JSON.stringify(appState.servers) });
-  const result = await api("/api/discord-sync-servers", { method: "POST", body: JSON.stringify({}) });
-  appState = result.state;
-  selectedServer = Math.min(selectedServer, servers().length - 1);
-  if (selectedServer < 0) selectedServer = 0;
-  selectedChannel = Math.min(selectedChannel, channels().length - 1);
-  if (selectedChannel < 0) selectedChannel = 0;
-  render();
-  toast(`Synced ${result.discovered} servers and ${result.channels_discovered || 0} channels`);
+  const opId = `repair:${currentServer.server_id}`;
+  startOperation(opId, "Repairing channels", "Reading Discord channel list", "discord", "bi-wrench-adjustable");
+  toast("Repairing channel list...");
+  try {
+    const result = await api("/api/discord-repair-server", {
+      method: "POST",
+      body: JSON.stringify({ server_id: currentServer.server_id }),
+    });
+    appState = result.state;
+    selectedServer = servers().findIndex((item) => item.server_id === currentServer.server_id);
+    if (selectedServer < 0) selectedServer = 0;
+    selectedChannel = Math.min(selectedChannel, channels().length - 1);
+    if (selectedChannel < 0) selectedChannel = 0;
+    render();
+    finishOperation(opId, "Channels repaired", "done", "bi-check-circle");
+    toast(`Repair found ${result.discovered || 0} items, added ${result.added || 0}`);
+  } catch (error) {
+    finishOperation(opId, "Repair failed", "failed", "bi-exclamation-triangle");
+    throw error;
+  }
 }
 
 async function saveDiscordCredentials() {
@@ -848,6 +1060,85 @@ async function openDiscordChannel() {
   toast("Discord channel window launched");
 }
 
+async function openApprovalConversation(approvalId) {
+  const approval = (appState.approvals || []).find((item) => item.approval_id === approvalId);
+  if (!approval?.server_id || !approval?.channel_id) {
+    throw new Error("Approval no longer has a Discord channel target.");
+  }
+  const sourceMessageId = (approval.source_message_ids || []).at(-1) || "";
+  await api("/api/open-discord-channel", {
+    method: "POST",
+    body: JSON.stringify({
+      server_id: approval.server_id,
+      channel_id: approval.channel_id,
+      message_id: sourceMessageId,
+    }),
+  });
+  await loadState();
+  toast(sourceMessageId ? "Discord conversation opened at source message" : "Discord channel window launched");
+}
+
+async function backfillChannelHistory() {
+  const currentServer = server();
+  const currentChannel = channel();
+  if (!currentServer?.server_id || !currentChannel?.channel_id) {
+    toast("Select a channel first");
+    return;
+  }
+  const opId = `backfill:${currentChannel.channel_id}`;
+  syncFormsToState();
+  await api("/api/servers", { method: "POST", body: JSON.stringify(appState.servers) });
+  startOperation(opId, "Backfilling history", "Reading Discord channel history", "discord", "bi-clock-history");
+  toast("Backfilling channel history...");
+  try {
+    const result = await api("/api/channel-backfill", {
+      method: "POST",
+      body: JSON.stringify({
+        server_id: currentServer.server_id,
+        channel_id: currentChannel.channel_id,
+        limit: 160,
+      }),
+    });
+    appState = result.state;
+    render();
+    finishOperation(opId, "History updated", "done", "bi-check-circle");
+    toast(`Backfilled ${result.messages || 0} messages, ${result.new || 0} new`);
+  } catch (error) {
+    finishOperation(opId, "Backfill failed", "failed", "bi-exclamation-triangle");
+    throw error;
+  }
+}
+
+async function refreshChannelLatest() {
+  const currentServer = server();
+  const currentChannel = channel();
+  if (!currentServer?.server_id || !currentChannel?.channel_id) {
+    toast("Select a channel first");
+    return;
+  }
+  const opId = `latest:${currentChannel.channel_id}`;
+  syncFormsToState();
+  await api("/api/servers", { method: "POST", body: JSON.stringify(appState.servers) });
+  startOperation(opId, "Refreshing latest", "Reading visible Discord messages", "discord", "bi-arrow-clockwise");
+  toast("Refreshing latest messages...");
+  try {
+    const result = await api("/api/channel-refresh", {
+      method: "POST",
+      body: JSON.stringify({
+        server_id: currentServer.server_id,
+        channel_id: currentChannel.channel_id,
+      }),
+    });
+    appState = result.state;
+    render();
+    finishOperation(opId, "Latest refreshed", "done", "bi-check-circle");
+    toast(`Latest refresh found ${result.messages || 0}, ${result.new || 0} new`);
+  } catch (error) {
+    finishOperation(opId, "Refresh failed", "failed", "bi-exclamation-triangle");
+    throw error;
+  }
+}
+
 async function checkUpdates() {
   const result = await api("/api/update-check", { method: "POST", body: JSON.stringify({}) });
   renderUpdateResult(result);
@@ -859,26 +1150,54 @@ async function applyUpdate() {
 }
 
 async function refreshOpenAIModels() {
+  const opId = "openai-models";
+  startOperation(opId, "Fetching models", "Waiting for OpenAI model list", "api", "bi-cloud-arrow-down");
   $("modelListStatus").textContent = "Fetching models from OpenAI...";
-  const result = await api("/api/openai-models", { method: "POST", body: JSON.stringify({}) });
-  appState.model_options = result.models || appState.model_options || [];
-  appState.model_catalog = {
-    live: Boolean(result.live),
-    source: result.source || "",
-    message: result.message || "",
-    fetched_at: result.fetched_at || "",
-  };
-  renderModelOptions();
-  toast(result.message || "Model list refreshed");
+  try {
+    const result = await api("/api/openai-models", { method: "POST", body: JSON.stringify({}) });
+    appState.model_options = result.models || appState.model_options || [];
+    appState.model_catalog = {
+      live: Boolean(result.live),
+      source: result.source || "",
+      message: result.message || "",
+      fetched_at: result.fetched_at || "",
+    };
+    renderModelOptions();
+    finishOperation(opId, "Models refreshed", "done", "bi-check-circle");
+    toast(result.message || "Model list refreshed");
+  } catch (error) {
+    finishOperation(opId, "Model fetch failed", "failed", "bi-exclamation-triangle");
+    throw error;
+  }
+}
+
+async function refreshAppStateManual() {
+  const opId = "state-refresh";
+  startOperation(opId, "Refreshing app state", "Reading local runtime files", "working", "bi-arrow-clockwise");
+  try {
+    await loadState();
+    finishOperation(opId, "State refreshed", "done", "bi-check-circle");
+  } catch (error) {
+    finishOperation(opId, "Refresh failed", "failed", "bi-exclamation-triangle");
+    throw error;
+  }
 }
 
 async function toggleRuntime() {
+  const opId = "runtime-toggle";
+  startOperation(opId, appState.runtime?.running ? "Pausing scanner" : "Starting scanner", "", "working", "bi-power");
   const runtime = appState.runtime || {};
   const path = runtime.running ? "/api/runtime-pause" : "/api/runtime-start";
-  const result = await api(path, { method: "POST", body: JSON.stringify({}) });
-  appState = result.state;
-  render();
-  toast(appState.runtime.running ? "Scanner started" : "Scanner paused");
+  try {
+    const result = await api(path, { method: "POST", body: JSON.stringify({}) });
+    appState = result.state;
+    render();
+    finishOperation(opId, appState.runtime.running ? "Scanner started" : "Scanner paused", "done", "bi-check-circle");
+    toast(appState.runtime.running ? "Scanner started" : "Scanner paused");
+  } catch (error) {
+    finishOperation(opId, "Runtime change failed", "failed", "bi-exclamation-triangle");
+    throw error;
+  }
 }
 
 function renderUpdateResult(result) {
@@ -901,6 +1220,19 @@ function lines(id) {
 function strBool(value, fallback) {
   if (value === undefined || value === null || value === "") return fallback;
   return String(value).toLowerCase() === "true";
+}
+
+function currentRuntimeMode() {
+  return appState?.env?.NHI_ZUES_RUNTIME_MODE || appState?.app?.runtime_mode || $("runtimeMode")?.value || "dry";
+}
+
+function runtimeModeLabel(mode) {
+  return {
+    dry: "dry mode",
+    full_auto: "full auto",
+    semi_auto: "semi auto",
+    live_fire: "live fire",
+  }[mode] || "dry mode";
 }
 
 function historyCount(channelId) {
@@ -949,6 +1281,9 @@ function eventTypeLabel(event) {
     message_sent: "Auto response sent",
     dry_run: "Dry-run draft",
     auto_respond_dry_run: "Auto dry-run draft",
+    discord_repair: "Discord repair",
+    channel_backfilled: "Channel backfilled",
+    channel_refreshed: "Channel refreshed",
   };
   return labels[event.event_type] || event.event_type || "Event";
 }
@@ -1083,6 +1418,7 @@ function formatRuntimeTime(value) {
 }
 
 function channelTypeLabel(type) {
+  if (type === "thread") return "discussion thread";
   if (type === "forum") return "forum channel";
   if (type === "announcement") return "announcement channel";
   if (type === "voice") return "voice channel";
@@ -1093,7 +1429,7 @@ function channelTypeLabel(type) {
 
 function formatChannelName(name, type) {
   if (!name) return "";
-  if ((type === "text" || type === "forum" || type === "announcement" || !type) && !String(name).startsWith("#")) {
+  if ((type === "text" || type === "forum" || type === "announcement" || type === "thread" || !type) && !String(name).startsWith("#")) {
     return `# ${name}`;
   }
   return name;
@@ -1139,7 +1475,7 @@ document.querySelectorAll("[data-preview-tab]").forEach((tab) => {
   });
 });
 
-$("refresh").addEventListener("click", loadState);
+$("refresh").addEventListener("click", () => refreshAppStateManual().catch((error) => toast(error.message)));
 $("runtimeControl").addEventListener("click", () => toggleRuntime().catch((error) => toast(error.message)));
 $("saveAll").addEventListener("click", saveAll);
 $("saveServers").addEventListener("click", saveAll);
@@ -1147,10 +1483,22 @@ $("syncDiscordServers").addEventListener("click", () => syncDiscordServers().cat
 $("saveDiscord").addEventListener("click", saveDiscordCredentials);
 $("launchDiscordLogin").addEventListener("click", launchDiscordLogin);
 $("openDiscordChannel").addEventListener("click", () => openDiscordChannel().catch((error) => toast(error.message)));
+$("repairDiscordServer").addEventListener("click", () => repairDiscordServer().catch((error) => toast(error.message)));
+$("refreshChannelLatest").addEventListener("click", () => refreshChannelLatest().catch((error) => toast(error.message)));
+$("backfillChannel").addEventListener("click", () => backfillChannelHistory().catch((error) => toast(error.message)));
 $("refreshOpenAIModels").addEventListener("click", () => refreshOpenAIModels().catch((error) => toast(error.message)));
 $("clearApprovals").addEventListener("click", () => clearApprovals().catch((error) => toast(error.message)));
 $("checkUpdates").addEventListener("click", checkUpdates);
 $("applyUpdate").addEventListener("click", applyUpdate);
+$("runtimeMode").addEventListener("change", () => {
+  appState.env.NHI_ZUES_RUNTIME_MODE = $("runtimeMode").value;
+  appState.app.runtime_mode = $("runtimeMode").value;
+  $("dryRun").checked = currentRuntimeMode() === "dry";
+  $("approvalRequired").checked = currentRuntimeMode() !== "full_auto";
+  renderServerPanel();
+  renderApprovals();
+  renderRuntime();
+});
 
 $("addChannel").addEventListener("click", () => {
   const id = prompt("Discord channel ID");

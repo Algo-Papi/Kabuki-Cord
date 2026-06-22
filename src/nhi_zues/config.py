@@ -29,6 +29,7 @@ class AppConfig:
     servers_file: Path
     character_dir: Path
     character_card: str
+    runtime_mode: str
     dry_run: bool
     headless: bool
     poll_seconds: float
@@ -54,7 +55,7 @@ class AppConfig:
 
 
 def load_config() -> AppConfig:
-    load_dotenv()
+    load_dotenv(encoding="utf-8-sig")
 
     return AppConfig(
         profile_dir=Path(_env("NHI_ZUES_PROFILE_DIR", ".profiles/nhi-zues")),
@@ -63,6 +64,7 @@ def load_config() -> AppConfig:
         servers_file=Path(_env("NHI_ZUES_SERVERS_FILE", "config/servers.json")),
         character_dir=Path(_env("NHI_ZUES_CHARACTER_DIR", "character_cards")),
         character_card=_env("NHI_ZUES_CHARACTER_CARD", "default.json"),
+        runtime_mode=_runtime_mode(),
         dry_run=_env_bool("NHI_ZUES_DRY_RUN", default=True),
         headless=_env_bool("NHI_ZUES_HEADLESS", default=False),
         poll_seconds=float(_env("NHI_ZUES_POLL_SECONDS", "20")),
@@ -104,6 +106,33 @@ def _env_bool(name: str, default: bool) -> bool:
     if value is None or value.strip() == "":
         return default
     return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _runtime_mode() -> str:
+    value = os.getenv("NHI_ZUES_RUNTIME_MODE")
+    if value and value.strip():
+        cleaned = value.strip().lower().replace("-", "_").replace(" ", "_")
+        aliases = {
+            "dry": "dry",
+            "dry_mode": "dry",
+            "full": "full_auto",
+            "full_auto": "full_auto",
+            "full_auto_mode": "full_auto",
+            "semi": "semi_auto",
+            "semi_auto": "semi_auto",
+            "semi_auto_mode": "semi_auto",
+            "live": "live_fire",
+            "live_fire": "live_fire",
+            "live_fire_mode": "live_fire",
+        }
+        if cleaned in aliases:
+            return aliases[cleaned]
+
+    if _env_bool("NHI_ZUES_DRY_RUN", default=True):
+        return "dry"
+    if _env_bool("NHI_ZUES_PROACTIVE_APPROVAL_REQUIRED", default=True):
+        return "live_fire"
+    return "full_auto"
 
 
 def _env_float(name: str, default: float) -> float:
