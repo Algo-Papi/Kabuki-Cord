@@ -357,7 +357,10 @@ class DiscordWebSession:
                     const inTarget = location.href.includes(channelId);
                     const redirectedHome = location.href.includes("/channels/@me");
                     const hasRows = document.querySelectorAll('[id^="chat-messages-"]').length > 0;
-                    return (inTarget && hasRows) || (!inTarget && redirectedHome);
+                    const hasComposer = Boolean(document.querySelector(
+                        '[data-slate-editor="true"][role="textbox"], div[role="textbox"][contenteditable="true"]'
+                    ));
+                    return (inTarget && (hasRows || hasComposer)) || (!inTarget && redirectedHome);
                 }
                 """,
                 channel_id,
@@ -369,6 +372,94 @@ class DiscordWebSession:
             except Exception:
                 await self.page.wait_for_timeout(1500)
         return self.page.url
+
+    async def writable_channel_state(self) -> dict[str, object]:
+        return await self.page.evaluate(
+            """
+            () => {
+                const visible = (node) => {
+                    if (!node) return false;
+                    const rect = node.getBoundingClientRect();
+                    const style = window.getComputedStyle(node);
+                    return rect.width > 0
+                        && rect.height > 0
+                        && style.display !== "none"
+                        && style.visibility !== "hidden";
+                };
+                const composer = Array.from(document.querySelectorAll(
+                    '[data-slate-editor="true"][role="textbox"], div[role="textbox"][contenteditable="true"]'
+                )).find(visible);
+                const bodyText = (document.body?.innerText || "").replace(/\\s+/g, " ").trim();
+                const lowered = bodyText.toLowerCase();
+                const notices = [
+                    "you do not have permission to send messages in this channel",
+                    "sending messages in this channel has been disabled",
+                    "you must complete a few more steps before you can talk",
+                    "you do not have access to this channel",
+                    "this channel is read only",
+                    "this is a read-only channel",
+                    "follow channel"
+                ];
+                const notice = notices.find((term) => lowered.includes(term)) || "";
+                const titleNode =
+                    document.querySelector('section[aria-label*="Channel header"] h1')
+                    || document.querySelector('[class*="title"] h1')
+                    || document.querySelector('[aria-label$="(channel)"]');
+                return {
+                    url: location.href,
+                    title: (titleNode?.textContent || document.title || "").trim(),
+                    has_composer: Boolean(composer),
+                    has_messages: document.querySelectorAll('[id^="chat-messages-"]').length > 0,
+                    notice,
+                };
+            }
+            """
+        )
+
+    async def wait_for_writable_channel(self, *, timeout_ms: int = 15_000) -> dict[str, object]:
+        try:
+            await self.page.wait_for_function(
+                """
+                () => {
+                    const visible = (node) => {
+                        if (!node) return false;
+                        const rect = node.getBoundingClientRect();
+                        const style = window.getComputedStyle(node);
+                        return rect.width > 0
+                            && rect.height > 0
+                            && style.display !== "none"
+                            && style.visibility !== "hidden";
+                    };
+                    return Array.from(document.querySelectorAll(
+                        '[data-slate-editor="true"][role="textbox"], div[role="textbox"][contenteditable="true"]'
+                    )).some(visible);
+                }
+                """,
+                timeout=timeout_ms,
+            )
+        except Exception:
+            pass
+
+        state = await self.writable_channel_state()
+        if state.get("has_composer"):
+            return state
+
+        url = str(state.get("url") or "")
+        notice = str(state.get("notice") or "")
+        if "/channels/@me" in url:
+            raise RuntimeError("Discord redirected away from the target channel. The draft was not sent and remains queued.")
+        if notice:
+            raise RuntimeError(f"Discord is blocking sends here: {notice}. The draft was not sent and remains queued.")
+        if state.get("has_messages"):
+            raise RuntimeError(
+                "Discord loaded the channel messages but no writable message composer is visible. "
+                "This usually means the channel is read-only, the account lacks send permission, "
+                "or Discord is showing a gate/notice. The draft was not sent and remains queued."
+            )
+        raise RuntimeError(
+            "Discord did not finish loading a writable message composer for this channel. "
+            "The draft was not sent and remains queued."
+        )
 
     async def read_visible_messages(self, server_id: str, channel_id: str) -> list[MessageRecord]:
         rows = await self.page.evaluate(
@@ -423,6 +514,7 @@ class DiscordWebSession:
         typing_max_seconds: float = 18.0,
         typing_chars_per_second: float = 10.0,
     ) -> None:
+        await self.wait_for_writable_channel(timeout_ms=15_000)
         textbox = self.page.locator(TEXTBOX).last
         await textbox.wait_for(state="visible", timeout=15_000)
         await textbox.click()

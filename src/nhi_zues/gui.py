@@ -1095,6 +1095,16 @@ def _friendly_discord_send_error(raw_error: str) -> str:
             "Close any Kabuki-opened Discord channel or sign-in windows, then retry. "
             "The draft was not sent and remains queued."
         )
+    channel_markers = (
+        "no writable message composer",
+        "blocking sends here",
+        "did not finish loading a writable message composer",
+        "redirected away from the target channel",
+        "permission to send messages",
+        "read-only",
+    )
+    if any(marker in lowered for marker in channel_markers):
+        return _redact_secret_text(raw_error)
     return f"Discord send failed: {_redact_secret_text(raw_error)}"
 
 
