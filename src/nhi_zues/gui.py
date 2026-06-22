@@ -1035,34 +1035,48 @@ def send_approval(body: dict) -> None:
     config = load_config()
     if config.dry_run:
         raise RuntimeError("Dry-run is enabled. Turn off Dry-run mode in API & Runtime before sending.")
-    _acquire_discord_session_or_raise(pause_runtime=True)
+    queue = ApprovalQueue(config.state_dir / "approvals.json")
     try:
-        queue = ApprovalQueue(config.state_dir / "approvals.json")
-        try:
-            item = queue.update_draft(approval_id, draft)
-        except KeyError as exc:
-            raise RuntimeError("That approval was already cleared. Refresh the app before sending.") from exc
-        try:
-            asyncio.run(_send_approval_message(config, item.server_id, item.channel_id, draft))
-        except Exception as exc:
-            EventLog(config.state_dir / "events.json").add(
-                event_type="approval_send_failed",
-                server_id=item.server_id,
-                channel_id=item.channel_id,
-                summary=_friendly_discord_send_error(str(exc)),
-                draft=draft,
-            )
-            raise RuntimeError(_friendly_discord_send_error(str(exc))) from exc
+        item = queue.update_draft(approval_id, draft)
+    except KeyError as exc:
+        raise RuntimeError("That approval was already cleared. Refresh the app before sending.") from exc
+
+    event_log = EventLog(config.state_dir / "events.json")
+    event_log.add(
+        event_type="approval_send_started",
+        server_id=item.server_id,
+        channel_id=item.channel_id,
+        summary="Approved draft accepted. Waiting for Discord delivery.",
+        draft=draft,
+    )
+
+    lock_acquired = False
+    try:
+        _acquire_discord_session_or_raise(pause_runtime=True)
+        lock_acquired = True
+        asyncio.run(_send_approval_message(config, item.server_id, item.channel_id, draft))
+    except Exception as exc:
+        friendly_error = _friendly_discord_send_error(str(exc))
+        event_log.add(
+            event_type="approval_send_failed",
+            server_id=item.server_id,
+            channel_id=item.channel_id,
+            summary=friendly_error,
+            draft=draft,
+        )
+        raise RuntimeError(friendly_error) from exc
+    else:
         queue.remove(approval_id)
-        EventLog(config.state_dir / "events.json").add(
+        event_log.add(
             event_type="approval_sent",
             server_id=item.server_id,
             channel_id=item.channel_id,
-            summary="Approved draft sent by operator.",
+            summary="Approved draft posted successfully to Discord.",
             draft=draft,
         )
     finally:
-        DISCORD_SESSION_LOCK.release()
+        if lock_acquired:
+            DISCORD_SESSION_LOCK.release()
 
 
 def _friendly_discord_send_error(raw_error: str) -> str:

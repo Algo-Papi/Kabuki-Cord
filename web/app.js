@@ -8,6 +8,7 @@ let unreadEventCount = 0;
 let autoRefreshTimer = null;
 let refreshInFlight = false;
 const approvalTargets = {};
+const approvalDeliveryState = {};
 let knownEventKeys = new Set();
 
 const $ = (id) => document.getElementById(id);
@@ -366,23 +367,28 @@ function renderApprovals() {
   const approvals = appState.approvals || [];
   $("approvalList").innerHTML =
     approvals
-      .map((item) => `
+      .map((item) => {
+        const delivery = approvalDeliveryState[item.approval_id] || null;
+        const sending = delivery?.state === "sending";
+        return `
         <div class="approval-item" data-approval-item="${escapeAttr(item.approval_id)}">
           <strong>${escapeHtml(item.character_name)} · #${escapeHtml(item.channel_id)}</strong>
           <span>${escapeHtml(item.reason)}</span>
           <textarea class="approval-draft" data-approval-draft="${escapeAttr(item.approval_id)}" rows="5">${escapeHtml(item.draft)}</textarea>
           ${recentPosterChips(item.channel_id, item.approval_id)}
           <textarea class="approval-instruction" data-approval-instruction="${escapeAttr(item.approval_id)}" rows="2" placeholder="Regeneration note: say it more like x, disagree with y, make it shorter..."></textarea>
+          ${approvalDeliveryStatus(item.approval_id)}
           <div class="approval-actions">
             <button class="small-button" data-approval-save="${escapeAttr(item.approval_id)}"><i class="bi bi-save2"></i> Save</button>
             <button class="small-button" data-approval-regenerate="${escapeAttr(item.approval_id)}"><i class="bi bi-stars"></i> Regenerate</button>
             <button class="small-button" data-copy="${escapeAttr(item.approval_id)}"><i class="bi bi-copy"></i> Copy</button>
             <button class="small-button" data-approval-discard="${escapeAttr(item.approval_id)}"><i class="bi bi-trash3"></i> Discard</button>
-            <button class="primary-button approval-send" data-approval-send="${escapeAttr(item.approval_id)}"><i class="bi bi-send"></i> Approve & Send</button>
+            <button class="primary-button approval-send" data-approval-send="${escapeAttr(item.approval_id)}" ${sending ? "disabled" : ""}><i class="bi ${sending ? "bi-hourglass-split" : "bi-send"}"></i> ${sending ? "Sending" : "Approve & Send"}</button>
           </div>
           ${appState.app.dry_run ? `<div class="approval-warning">Dry-run is on. Approved messages will be blocked until Dry-run mode is turned off in API & Runtime.</div>` : ""}
         </div>
-      `)
+      `;
+      })
       .join("") || `<div class="approval-item"><strong>No queued approvals</strong><span>Proactive drafts will appear here.</span></div>`;
   document.querySelectorAll("[data-copy]").forEach((button) => {
     button.addEventListener("click", async () => {
@@ -426,6 +432,22 @@ function recentPosterChips(channelId, approvalId) {
 
 function approvalDraft(approvalId) {
   return document.querySelector(`[data-approval-draft="${cssEscape(approvalId)}"]`)?.value.trim() || "";
+}
+
+function approvalDeliveryStatus(approvalId) {
+  const delivery = approvalDeliveryState[approvalId];
+  if (!delivery) return "";
+  const icon = delivery.state === "failed"
+    ? "bi-exclamation-triangle"
+    : delivery.state === "sent"
+      ? "bi-check-circle"
+      : "bi-hourglass-split";
+  return `
+    <div class="approval-delivery-status ${escapeAttr(delivery.state)}">
+      <i class="bi ${icon}"></i>
+      <span>${escapeHtml(delivery.message)}</span>
+    </div>
+  `;
 }
 
 function insertReplyPrefix(approvalId, prefix) {
@@ -478,14 +500,30 @@ async function regenerateApproval(approvalId) {
 }
 
 async function sendApproval(approvalId) {
+  if (approvalDeliveryState[approvalId]?.state === "sending") return;
+  const draft = approvalDraft(approvalId);
+  approvalDeliveryState[approvalId] = {
+    state: "sending",
+    message: "Processing approved message. Waiting for Discord delivery...",
+  };
+  renderApprovals();
+  toast("Processing approved message...");
   try {
     await api("/api/approval-send", {
       method: "POST",
-      body: JSON.stringify({ approval_id: approvalId, draft: approvalDraft(approvalId) }),
+      body: JSON.stringify({ approval_id: approvalId, draft }),
     });
+    approvalDeliveryState[approvalId] = {
+      state: "sent",
+      message: "Posted successfully to Discord.",
+    };
     await loadState();
-    toast("Approved message sent");
+    toast("Posted successfully to Discord");
   } catch (error) {
+    approvalDeliveryState[approvalId] = {
+      state: "failed",
+      message: error.message,
+    };
     await loadState().catch(() => {});
     toast(error.message);
   }
@@ -551,6 +589,7 @@ function renderResponseHistory() {
       "approval_sent",
       "approval_queued",
       "manual_approval_created",
+      "approval_send_started",
       "approval_regenerated",
       "approval_send_failed",
       "dry_run",
@@ -871,6 +910,7 @@ function eventTypeLabel(event) {
     approval_updated: "Draft edited",
     approval_discarded: "Draft discarded",
     approvals_cleared: "Approvals cleared",
+    approval_send_started: "Delivery started",
     approval_sent: "Approved response sent",
     approval_send_failed: "Send failed",
     message_sent: "Auto response sent",
@@ -883,7 +923,7 @@ function eventTypeLabel(event) {
 function eventClass(event) {
   if (["approval_send_failed", "channel_unavailable"].includes(event.event_type)) return "failed";
   if (["message_sent", "approval_sent"].includes(event.event_type)) return "sent";
-  if (["approval_queued", "manual_approval_created"].includes(event.event_type)) return "attention";
+  if (["approval_queued", "manual_approval_created", "approval_send_started"].includes(event.event_type)) return "attention";
   return "";
 }
 
@@ -900,6 +940,7 @@ function isNotifiableEvent(event) {
   return [
     "approval_queued",
     "manual_approval_created",
+    "approval_send_started",
     "approval_sent",
     "approval_send_failed",
     "message_sent",

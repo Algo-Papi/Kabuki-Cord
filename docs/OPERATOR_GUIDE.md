@@ -170,6 +170,7 @@ Shows:
 - Drafts queued for approval.
 - Manual suggested drafts.
 - Regenerated drafts.
+- Delivery-started status after **Approve & Send** is clicked.
 - Approved sends.
 - Autonomous sends.
 - Dry-run drafts.

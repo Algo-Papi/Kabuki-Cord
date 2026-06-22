@@ -756,8 +756,39 @@ textarea:focus {
   margin-top: 10px;
 }
 
+button:disabled {
+  cursor: wait;
+  opacity: 0.72;
+}
+
 .approval-send {
   margin-left: auto;
+}
+
+.approval-delivery-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  border: 1px solid rgba(217, 185, 91, 0.32);
+  border-radius: 8px;
+  background: rgba(217, 185, 91, 0.08);
+  color: #ead391;
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 8px 10px;
+}
+
+.approval-delivery-status.sent {
+  border-color: rgba(95, 201, 120, 0.34);
+  background: rgba(95, 201, 120, 0.1);
+  color: #bff0cb;
+}
+
+.approval-delivery-status.failed {
+  border-color: rgba(239, 107, 120, 0.38);
+  background: rgba(239, 107, 120, 0.09);
+  color: #ffc1c8;
 }
 
 .approval-warning {
