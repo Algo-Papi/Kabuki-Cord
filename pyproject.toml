@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kabuki-cord"
-version = "1.0.16"
+version = "1.0.17"
 description = "Local Discord web automation and character orchestration app."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -19,6 +19,8 @@ dependencies = [
 [project.scripts]
 nhi-zues = "nhi_zues.cli:main"
 kabuki-cord = "nhi_zues.cli:main"
+
+[project.gui-scripts]
 kabuki-cord-desktop = "nhi_zues.desktop:main"
 kabuki-cord-gui = "nhi_zues.gui:main"
 

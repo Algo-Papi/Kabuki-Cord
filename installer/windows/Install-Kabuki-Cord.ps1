@@ -179,13 +179,13 @@ try {
 
   if (-not $NoShortcuts) {
     Write-Step "Creating shortcuts"
-    $runScript = Join-Path $RepoRoot "Run-Kabuki-Cord.cmd"
+    $desktopExe = Join-Path $RepoRoot ".venv\Scripts\kabuki-cord-desktop.exe"
     $desktop = [Environment]::GetFolderPath("Desktop")
     $programs = [Environment]::GetFolderPath("Programs")
     $startMenuDir = Join-Path $programs "Kabuki-Cord"
     New-Item -ItemType Directory -Force -Path $startMenuDir | Out-Null
-    New-Shortcut -ShortcutPath (Join-Path $desktop "Kabuki-Cord.lnk") -TargetPath $runScript -WorkingDirectory $RepoRoot -Description "Launch Kabuki-Cord"
-    New-Shortcut -ShortcutPath (Join-Path $startMenuDir "Kabuki-Cord.lnk") -TargetPath $runScript -WorkingDirectory $RepoRoot -Description "Launch Kabuki-Cord"
+    New-Shortcut -ShortcutPath (Join-Path $desktop "Kabuki-Cord.lnk") -TargetPath $desktopExe -WorkingDirectory $RepoRoot -Description "Launch Kabuki-Cord"
+    New-Shortcut -ShortcutPath (Join-Path $startMenuDir "Kabuki-Cord.lnk") -TargetPath $desktopExe -WorkingDirectory $RepoRoot -Description "Launch Kabuki-Cord"
   }
 
   Write-Step "Install complete"
@@ -193,7 +193,7 @@ try {
 
   if (-not $NoLaunch) {
     Write-Step "Launching Kabuki-Cord"
-    Start-Process -FilePath (Join-Path $RepoRoot "Run-Kabuki-Cord.cmd") -WorkingDirectory $RepoRoot
+    Start-Process -FilePath (Join-Path $RepoRoot ".venv\Scripts\kabuki-cord-desktop.exe") -WorkingDirectory $RepoRoot
   }
 } finally {
   try {

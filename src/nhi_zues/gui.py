@@ -45,6 +45,8 @@ DISCORD_SESSION_LOCK = threading.Lock()
 DISCORD_LOCK_WAIT_SECONDS = 45.0
 APPROVAL_REGENERATION_LOCKS: dict[str, threading.Lock] = {}
 APPROVAL_REGENERATION_LOCKS_LOCK = threading.Lock()
+APPROVAL_SEND_LOCKS: dict[str, threading.Lock] = {}
+APPROVAL_SEND_LOCKS_LOCK = threading.Lock()
 OPENAI_MODEL_FALLBACKS = [
     {
         "id": "gpt-5.4-nano",
@@ -1068,7 +1070,25 @@ def send_approval(body: dict) -> None:
     draft = str(body.get("draft") or "").strip()
     if not approval_id or not draft:
         raise RuntimeError("Missing approval id or draft text.")
+    lock = _approval_send_lock(approval_id)
+    if not lock.acquire(blocking=False):
+        raise RuntimeError("Send is already running for this approval.")
+    try:
+        _send_approval_locked(approval_id=approval_id, draft=draft)
+    finally:
+        lock.release()
 
+
+def _approval_send_lock(approval_id: str) -> threading.Lock:
+    with APPROVAL_SEND_LOCKS_LOCK:
+        lock = APPROVAL_SEND_LOCKS.get(approval_id)
+        if lock is None:
+            lock = threading.Lock()
+            APPROVAL_SEND_LOCKS[approval_id] = lock
+        return lock
+
+
+def _send_approval_locked(*, approval_id: str, draft: str) -> None:
     config = load_config()
     if config.dry_run:
         raise RuntimeError("Dry-run is enabled. Turn off Dry-run mode in API & Runtime before sending.")
@@ -1506,7 +1526,7 @@ def start_discord_channel(body: dict) -> None:
     if sys.platform == "win32":
         kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
     subprocess.Popen(
-        [sys.executable, "-m", "nhi_zues.cli", "--open-channel", server_id, channel_id],
+        [_background_python_executable(), "-m", "nhi_zues.cli", "--open-channel", server_id, channel_id],
         cwd=ROOT,
         close_fds=True,
         **kwargs,
@@ -1570,11 +1590,19 @@ def start_discord_login() -> None:
     if sys.platform == "win32":
         kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
     subprocess.Popen(
-        [sys.executable, "-m", "nhi_zues.cli", "--login"],
+        [_background_python_executable(), "-m", "nhi_zues.cli", "--login"],
         cwd=ROOT,
         close_fds=True,
         **kwargs,
     )
+
+
+def _background_python_executable() -> str:
+    if sys.platform == "win32":
+        pythonw = Path(sys.executable).with_name("pythonw.exe")
+        if pythonw.exists():
+            return str(pythonw)
+    return sys.executable
 
 
 def update_state() -> dict:
