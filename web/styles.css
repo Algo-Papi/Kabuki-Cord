@@ -598,6 +598,18 @@ textarea:focus {
   margin-bottom: 0;
 }
 
+.writing-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.writing-grid .field {
+  margin-bottom: 0;
+}
+
 .button-row {
   display: flex;
   flex-wrap: wrap;
@@ -664,6 +676,14 @@ textarea:focus {
   margin-bottom: 16px;
 }
 
+.compact-notes {
+  margin: 10px 0 0;
+}
+
+.selected-user-details {
+  margin-bottom: 14px;
+}
+
 .note-item,
 .user-item,
 .approval-item {
@@ -708,6 +728,11 @@ textarea:focus {
 .approval-draft {
   margin-top: 10px;
   min-height: 120px;
+}
+
+.approval-instruction {
+  margin-top: 10px;
+  min-height: 66px;
 }
 
 .approval-actions {
@@ -755,6 +780,69 @@ textarea:focus {
   cursor: pointer;
   font-size: 12px;
   padding: 5px 9px;
+}
+
+.poster-chips button.active {
+  border-color: rgba(149, 101, 255, 0.58);
+  background: rgba(149, 101, 255, 0.24);
+  color: #eee7ff;
+}
+
+.history-layout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+}
+
+.history-list,
+.observed-list {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.history-item,
+.observed-card {
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.025);
+  padding: 10px 12px;
+}
+
+.history-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 10px;
+}
+
+.history-item p {
+  grid-column: span 2;
+  margin: 0;
+  color: #c9d3dd;
+  line-height: 1.45;
+}
+
+.history-item span,
+.observed-card span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.history-item.event {
+  border-color: rgba(149, 101, 255, 0.25);
+}
+
+.observed-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+}
+
+.observed-card strong,
+.observed-card span {
+  display: block;
 }
 
 .preview-panel {

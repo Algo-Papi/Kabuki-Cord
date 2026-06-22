@@ -3,6 +3,7 @@ let selectedServer = 0;
 let selectedChannel = 0;
 let selectedUserKey = null;
 let apiToken = null;
+const approvalTargets = {};
 
 const $ = (id) => document.getElementById(id);
 
@@ -71,6 +72,8 @@ function render() {
   renderRuntime();
   renderGrowth();
   renderApprovals();
+  renderObserved();
+  renderHistory();
   renderMetrics();
 }
 
@@ -230,6 +233,9 @@ function renderSettings() {
   $("dailyBudget").value = appState.env.NHI_ZUES_MAX_DAILY_USD || "0.25";
   $("sessionBudget").value = appState.env.NHI_ZUES_MAX_SESSION_USD || "0.05";
   $("maxCalls").value = appState.env.NHI_ZUES_MAX_LLM_CALLS_PER_RUN || "3";
+  $("mistakeRate").value = Math.round(Number(appState.env.NHI_ZUES_WRITING_MISTAKE_RATE || "0.06") * 100);
+  $("writingQuirk").value = appState.env.NHI_ZUES_WRITING_QUIRK || "lowercase_no_commas";
+  $("writingMisspellings").value = appState.env.NHI_ZUES_WRITING_MISSPELLINGS || "definitely:definately,because:becuase,probably:prolly";
 }
 
 function renderRuntime() {
@@ -278,6 +284,24 @@ function renderGrowth() {
       renderGrowth();
     });
   });
+  renderSelectedUserDetails();
+}
+
+function renderSelectedUserDetails() {
+  const user = (appState.memory.users || []).find((item) => item.user_key === selectedUserKey);
+  const notes = (appState.user_instructions.items || []).filter((item) => item.user_key === selectedUserKey);
+  $("selectedUserDetails").innerHTML = user
+    ? `
+      <div class="note-item">
+        <strong>${escapeHtml(user.display_name || user.user_key)}</strong><br />
+        ${escapeHtml(user.summary || "No long-form summary yet.")}<br />
+        <span>Recent topics: ${escapeHtml((user.recent_topics || []).join(", ") || "none")}</span>
+      </div>
+      <div class="note-list compact-notes">
+        ${notes.map((item) => `<div class="note-item"><strong>${escapeHtml(scopeLabel(item))}</strong><br />${escapeHtml(item.note)}</div>`).join("") || `<div class="note-item">No behavior notes for this user yet.</div>`}
+      </div>
+    `
+    : `<div class="note-item">Select a user to add scoped behavior guidance.</div>`;
 }
 
 function renderApprovals() {
@@ -290,8 +314,10 @@ function renderApprovals() {
           <span>${escapeHtml(item.reason)}</span>
           <textarea class="approval-draft" data-approval-draft="${escapeAttr(item.approval_id)}" rows="5">${escapeHtml(item.draft)}</textarea>
           ${recentPosterChips(item.channel_id, item.approval_id)}
+          <textarea class="approval-instruction" data-approval-instruction="${escapeAttr(item.approval_id)}" rows="2" placeholder="Regeneration note: say it more like x, disagree with y, make it shorter..."></textarea>
           <div class="approval-actions">
             <button class="small-button" data-approval-save="${escapeAttr(item.approval_id)}"><i class="bi bi-save2"></i> Save</button>
+            <button class="small-button" data-approval-regenerate="${escapeAttr(item.approval_id)}"><i class="bi bi-stars"></i> Regenerate</button>
             <button class="small-button" data-copy="${escapeAttr(item.approval_id)}"><i class="bi bi-copy"></i> Copy</button>
             <button class="small-button" data-approval-discard="${escapeAttr(item.approval_id)}"><i class="bi bi-trash3"></i> Discard</button>
             <button class="primary-button approval-send" data-approval-send="${escapeAttr(item.approval_id)}"><i class="bi bi-send"></i> Approve & Send</button>
@@ -312,11 +338,14 @@ function renderApprovals() {
   document.querySelectorAll("[data-approval-discard]").forEach((button) => {
     button.addEventListener("click", () => discardApproval(button.dataset.approvalDiscard));
   });
+  document.querySelectorAll("[data-approval-regenerate]").forEach((button) => {
+    button.addEventListener("click", () => regenerateApproval(button.dataset.approvalRegenerate));
+  });
   document.querySelectorAll("[data-approval-send]").forEach((button) => {
     button.addEventListener("click", () => sendApproval(button.dataset.approvalSend));
   });
-  document.querySelectorAll("[data-poster-prefix]").forEach((button) => {
-    button.addEventListener("click", () => insertReplyPrefix(button.dataset.approvalId, button.dataset.posterPrefix));
+  document.querySelectorAll("[data-poster-target]").forEach((button) => {
+    button.addEventListener("click", () => selectApprovalTarget(button.dataset.approvalId, button.dataset.posterKey, button.dataset.posterPrefix));
   });
 }
 
@@ -328,7 +357,7 @@ function recentPosterChips(channelId, approvalId) {
       <span>Reply to</span>
       ${posters
         .map((poster) => `
-          <button type="button" data-approval-id="${escapeAttr(approvalId)}" data-poster-prefix="${escapeAttr(poster.reply_prefix)}">
+          <button type="button" class="${approvalTargets[approvalId]?.user_key === poster.user_key ? "active" : ""}" data-approval-id="${escapeAttr(approvalId)}" data-poster-key="${escapeAttr(poster.user_key)}" data-poster-prefix="${escapeAttr(poster.reply_prefix)}" data-poster-target="true">
             ${escapeHtml(poster.display_name)}
           </button>
         `)
@@ -349,6 +378,14 @@ function insertReplyPrefix(approvalId, prefix) {
   textarea.focus();
 }
 
+function selectApprovalTarget(approvalId, userKey, prefix) {
+  approvalTargets[approvalId] = { user_key: userKey, prefix };
+  insertReplyPrefix(approvalId, prefix);
+  document.querySelectorAll(`[data-approval-id="${cssEscape(approvalId)}"][data-poster-target]`).forEach((button) => {
+    button.classList.toggle("active", button.dataset.posterKey === userKey);
+  });
+}
+
 async function saveApproval(approvalId) {
   await api("/api/approval-update", {
     method: "POST",
@@ -365,6 +402,21 @@ async function discardApproval(approvalId) {
   });
   await loadState();
   toast("Approval discarded");
+}
+
+async function regenerateApproval(approvalId) {
+  const instruction = document.querySelector(`[data-approval-instruction="${cssEscape(approvalId)}"]`)?.value.trim() || "";
+  await api("/api/approval-regenerate", {
+    method: "POST",
+    body: JSON.stringify({
+      approval_id: approvalId,
+      draft: approvalDraft(approvalId),
+      instruction,
+      target_user_key: approvalTargets[approvalId]?.user_key || "",
+    }),
+  });
+  await loadState();
+  toast("Approval regenerated");
 }
 
 async function sendApproval(approvalId) {
@@ -386,6 +438,76 @@ function renderMetrics() {
   $("memoryUsers").textContent = appState.memory.user_count || 0;
   $("seenMessages").textContent = appState.memory.seen_ids || 0;
   $("triggerState").textContent = channel()?.engage_enabled ? "eligible" : "disabled";
+}
+
+function renderObserved() {
+  const current = channel();
+  const observed = current ? appState.observed?.[current.channel_id] : null;
+  if (!observed) {
+    $("observedConversation").innerHTML = `<div class="note-item">No observed messages for this channel yet.</div>`;
+    return;
+  }
+  $("observedConversation").innerHTML =
+    (observed.poster_summaries || [])
+      .map((poster) => `
+        <div class="observed-card">
+          <div>
+            <strong>${escapeHtml(poster.display_name)}</strong>
+            <span>${escapeHtml(poster.summary)}</span>
+          </div>
+          <button class="small-button" data-suggest-user="${escapeAttr(poster.user_key)}"><i class="bi bi-chat-left-text"></i> Suggest</button>
+        </div>
+      `)
+      .join("") || `<div class="note-item">No recent unique posters recorded.</div>`;
+  document.querySelectorAll("[data-suggest-user]").forEach((button) => {
+    button.addEventListener("click", () => createSuggestedApproval(button.dataset.suggestUser));
+  });
+}
+
+function renderHistory() {
+  const current = channel();
+  const history = current ? appState.history?.[current.channel_id] : null;
+  const messages = history?.messages || [];
+  const events = history?.events || [];
+  $("historyMessages").innerHTML =
+    messages
+      .slice(-40)
+      .map((message) => `
+        <div class="history-item">
+          <strong>${escapeHtml(message.author)}</strong>
+          <span>${escapeHtml(formatTime(message.observed_at))}</span>
+          <p>${escapeHtml(message.text)}</p>
+        </div>
+      `)
+      .join("") || `<div class="note-item">No channel history recorded yet.</div>`;
+  $("historyEvents").innerHTML =
+    events
+      .slice(-40)
+      .map((event) => `
+        <div class="history-item event">
+          <strong>${escapeHtml(event.event_type)}</strong>
+          <span>${escapeHtml(formatTime(event.created_at))}</span>
+          <p>${escapeHtml(event.summary || event.draft || "")}</p>
+        </div>
+      `)
+      .join("") || `<div class="note-item">No approval or response events recorded yet.</div>`;
+}
+
+async function createSuggestedApproval(userKey) {
+  const currentServer = server();
+  const currentChannel = channel();
+  if (!currentServer || !currentChannel) return;
+  await api("/api/approval-create", {
+    method: "POST",
+    body: JSON.stringify({
+      server_id: currentServer.server_id,
+      channel_id: currentChannel.channel_id,
+      target_user_key: userKey,
+      instruction: "Suggest a natural response to this user's recent point using the selected character.",
+    }),
+  });
+  await loadState();
+  toast("Suggested response queued for approval");
 }
 
 function syncFormsToState() {
@@ -417,6 +539,9 @@ async function saveAll() {
     NHI_ZUES_MAX_DAILY_USD: $("dailyBudget").value,
     NHI_ZUES_MAX_SESSION_USD: $("sessionBudget").value,
     NHI_ZUES_MAX_LLM_CALLS_PER_RUN: $("maxCalls").value,
+    NHI_ZUES_WRITING_MISTAKE_RATE: String(Math.max(0, Math.min(Number($("mistakeRate").value || 0), 35)) / 100),
+    NHI_ZUES_WRITING_QUIRK: $("writingQuirk").value,
+    NHI_ZUES_WRITING_MISSPELLINGS: $("writingMisspellings").value.trim(),
   };
   if ($("apiKey").value.trim()) settings.OPENAI_API_KEY = $("apiKey").value.trim();
   await api("/api/servers", { method: "POST", body: JSON.stringify(appState.servers) });
@@ -515,6 +640,48 @@ function lines(id) {
 function strBool(value, fallback) {
   if (value === undefined || value === null || value === "") return fallback;
   return String(value).toLowerCase() === "true";
+}
+
+function scopeLabel(item) {
+  if (item.channel_id) {
+    const match = findChannel(item.server_id, item.channel_id);
+    return `${match.serverLabel} / ${formatChannelName(match.channelLabel, match.channelType)}`;
+  }
+  if (item.server_id) return findServerLabel(item.server_id);
+  return "All servers";
+}
+
+function findServerLabel(serverId) {
+  const match = servers().find((srv) => srv.server_id === serverId);
+  return match?.label || `Server ${serverId}`;
+}
+
+function findChannel(serverId, channelId) {
+  const srv = servers().find((item) => item.server_id === serverId) || {};
+  const chan = (srv.channels || []).find((item) => item.channel_id === channelId) || {};
+  return {
+    serverLabel: srv.label || `Server ${serverId}`,
+    channelLabel: chan.label || channelId,
+    channelType: chan.channel_type || "text",
+  };
+}
+
+function userNoteScopePayload() {
+  const scope = $("userNoteScope").value;
+  if (scope === "channel" && channel()) {
+    return { server_id: server().server_id, channel_id: channel().channel_id };
+  }
+  if (scope === "server" && server()) {
+    return { server_id: server().server_id };
+  }
+  return {};
+}
+
+function formatTime(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
 function channelTypeLabel(type) {
@@ -621,7 +788,7 @@ $("addUserNote").addEventListener("click", async () => {
   if (!note) return;
   await api("/api/user-instruction", {
     method: "POST",
-    body: JSON.stringify({ user_key: selectedUserKey, note }),
+    body: JSON.stringify({ user_key: selectedUserKey, note, ...userNoteScopePayload() }),
   });
   $("newUserNote").value = "";
   await loadState();

@@ -22,8 +22,12 @@ from dotenv import load_dotenv
 from .approvals import ApprovalQueue
 from .browser import DiscordWebSession
 from .budget import BudgetManager
+from .character import CharacterCardStore
 from .character_memory import CharacterMemoryStore
 from .config import AppConfig, load_config
+from .events import EventLog
+from .llm import ReplyPlanner
+from .memory import ConversationMemory
 from .runner import NhiZuesRunner
 from .secrets import discord_credential_status, get_discord_credentials, set_discord_credentials
 from .user_instructions import UserInstructionStore
@@ -130,6 +134,22 @@ class GuiHandler(BaseHTTPRequestHandler):
                 return
             self._json({"ok": True, "state": app_state()})
             return
+        if parsed.path == "/api/approval-regenerate":
+            try:
+                regenerate_approval(body)
+            except RuntimeError as exc:
+                self._json({"ok": False, "error": str(exc)}, status=400)
+                return
+            self._json({"ok": True, "state": app_state()})
+            return
+        if parsed.path == "/api/approval-create":
+            try:
+                create_manual_approval(body)
+            except RuntimeError as exc:
+                self._json({"ok": False, "error": str(exc)}, status=400)
+                return
+            self._json({"ok": True, "state": app_state()})
+            return
         if parsed.path == "/api/update-check":
             self._json(check_update(apply_update=False))
             return
@@ -163,10 +183,17 @@ class GuiHandler(BaseHTTPRequestHandler):
             config = load_config()
             user_key = str(body.get("user_key") or "")
             note = str(body.get("note") or "")
+            server_id = str(body.get("server_id") or "") or None
+            channel_id = str(body.get("channel_id") or "") or None
             if not user_key or not note:
                 self._json({"ok": False, "error": "Missing user key or note."}, status=400)
                 return
-            UserInstructionStore(config.state_dir / "user_instructions.json").add(user_key, note)
+            UserInstructionStore(config.state_dir / "user_instructions.json").add(
+                user_key,
+                note,
+                server_id=server_id,
+                channel_id=channel_id,
+            )
             self._json({"ok": True, "state": app_state()})
             return
         self._json({"ok": False, "error": "Unknown endpoint."}, status=404)
@@ -330,6 +357,9 @@ def app_state() -> dict:
             "max_daily_usd": config.max_daily_usd,
             "max_session_usd": config.max_session_usd,
             "max_llm_calls_per_run": config.max_llm_calls_per_run,
+            "writing_mistake_rate": config.writing_mistake_rate,
+            "writing_quirk": config.writing_quirk,
+            "writing_misspellings": config.writing_misspellings,
         },
         "discord": discord_credential_status(),
         "runtime": RUNTIME.state(),
@@ -346,6 +376,12 @@ def app_state() -> dict:
             "NHI_ZUES_MAX_DAILY_USD": env.get("NHI_ZUES_MAX_DAILY_USD", "0.25"),
             "NHI_ZUES_MAX_SESSION_USD": env.get("NHI_ZUES_MAX_SESSION_USD", "0.05"),
             "NHI_ZUES_MAX_LLM_CALLS_PER_RUN": env.get("NHI_ZUES_MAX_LLM_CALLS_PER_RUN", "3"),
+            "NHI_ZUES_WRITING_MISTAKE_RATE": env.get("NHI_ZUES_WRITING_MISTAKE_RATE", "0.06"),
+            "NHI_ZUES_WRITING_QUIRK": env.get("NHI_ZUES_WRITING_QUIRK", "lowercase_no_commas"),
+            "NHI_ZUES_WRITING_MISSPELLINGS": env.get(
+                "NHI_ZUES_WRITING_MISSPELLINGS",
+                "definitely:definately,because:becuase,probably:prolly",
+            ),
         },
         "servers": _read_json(config.servers_file, default={"servers": []}),
         "characters": character_cards(config.character_dir),
@@ -355,6 +391,11 @@ def app_state() -> dict:
         "usage": usage_state(),
         "approvals": [asdict(item) for item in ApprovalQueue(config.state_dir / "approvals.json").list()],
         "recent_posters": recent_posters_state(config.state_dir / "memory.json"),
+        "observed": observed_conversation_state(config.state_dir / "memory.json"),
+        "history": conversation_history_state(
+            config.state_dir / "memory.json",
+            config.state_dir / "events.json",
+        ),
         "memory": memory_state(config.state_dir / "memory.json"),
     }
 
@@ -557,6 +598,56 @@ def memory_state(path: Path) -> dict:
     }
 
 
+def observed_conversation_state(path: Path) -> dict:
+    payload = _read_json(path, default={"channels": {}, "users": {}})
+    result: dict[str, dict] = {}
+    for channel_id, rows in payload.get("channels", {}).items():
+        recent = rows[-16:]
+        poster_summaries = []
+        seen: set[str] = set()
+        for row in reversed(recent):
+            key = _message_user_key(row)
+            if key in seen:
+                continue
+            seen.add(key)
+            user_messages = [
+                item for item in reversed(rows) if _message_user_key(item) == key and str(item.get("text") or "").strip()
+            ][:4]
+            texts = [str(item.get("text") or "").strip() for item in reversed(user_messages)]
+            poster_summaries.append(
+                {
+                    "user_key": key,
+                    "display_name": str(row.get("author") or "unknown"),
+                    "message_count": len(user_messages),
+                    "summary": _summarize_messages(texts),
+                    "recent_text": texts[-1] if texts else "",
+                }
+            )
+            if len(poster_summaries) >= 6:
+                break
+        result[str(channel_id)] = {
+            "recent_messages": [_message_preview(row) for row in recent[-12:]],
+            "poster_summaries": poster_summaries,
+        }
+    return result
+
+
+def conversation_history_state(memory_path: Path, event_path: Path) -> dict:
+    memory_payload = _read_json(memory_path, default={"channels": {}})
+    event_payload = _read_json(event_path, default={"items": []})
+    events_by_channel: dict[str, list[dict]] = {}
+    for event in event_payload.get("items", []):
+        channel_id = str(event.get("channel_id") or "")
+        events_by_channel.setdefault(channel_id, []).append(event)
+    return {
+        str(channel_id): {
+            "messages": [_message_preview(row) for row in rows[-60:]],
+            "events": events_by_channel.get(str(channel_id), [])[-60:],
+        }
+        for channel_id, rows in memory_payload.get("channels", {}).items()
+    }
+
+
 def recent_posters_state(path: Path) -> dict:
     payload = _read_json(path, default={"channels": {}})
     result: dict[str, list[dict]] = {}
@@ -568,7 +659,7 @@ def recent_posters_state(path: Path) -> dict:
             if not author:
                 continue
             author_id = row.get("author_id")
-            key = f"discord:{author_id}" if author_id else f"name:{author.lower()}"
+            key = _message_user_key(row)
             if key in seen:
                 continue
             seen.add(key)
@@ -602,7 +693,14 @@ def update_approval(body: dict) -> None:
     if not approval_id or not draft:
         raise ValueError("Missing approval id or draft text.")
     config = load_config()
-    ApprovalQueue(config.state_dir / "approvals.json").update_draft(approval_id, draft)
+    item = ApprovalQueue(config.state_dir / "approvals.json").update_draft(approval_id, draft)
+    EventLog(config.state_dir / "events.json").add(
+        event_type="approval_updated",
+        server_id=item.server_id,
+        channel_id=item.channel_id,
+        summary="Approval draft edited by operator.",
+        draft=draft,
+    )
 
 
 def discard_approval(body: dict) -> None:
@@ -610,7 +708,16 @@ def discard_approval(body: dict) -> None:
     if not approval_id:
         return
     config = load_config()
-    ApprovalQueue(config.state_dir / "approvals.json").remove(approval_id)
+    queue = ApprovalQueue(config.state_dir / "approvals.json")
+    item = queue.get(approval_id)
+    if queue.remove(approval_id) and item:
+        EventLog(config.state_dir / "events.json").add(
+            event_type="approval_discarded",
+            server_id=item.server_id,
+            channel_id=item.channel_id,
+            summary="Approval draft discarded by operator.",
+            draft=item.draft,
+        )
 
 
 def send_approval(body: dict) -> None:
@@ -629,8 +736,219 @@ def send_approval(body: dict) -> None:
         item = queue.update_draft(approval_id, draft)
         asyncio.run(_send_approval_message(config, item.server_id, item.channel_id, draft))
         queue.remove(approval_id)
+        EventLog(config.state_dir / "events.json").add(
+            event_type="approval_sent",
+            server_id=item.server_id,
+            channel_id=item.channel_id,
+            summary="Approved draft sent by operator.",
+            draft=draft,
+        )
     finally:
         DISCORD_SESSION_LOCK.release()
+
+
+def regenerate_approval(body: dict) -> None:
+    approval_id = str(body.get("approval_id") or "")
+    operator_instruction = str(body.get("instruction") or "").strip()
+    target_user_key = str(body.get("target_user_key") or "")
+    current_draft = str(body.get("draft") or "").strip()
+    if not approval_id:
+        raise RuntimeError("Missing approval id.")
+    config = load_config()
+    queue = ApprovalQueue(config.state_dir / "approvals.json")
+    item = queue.get(approval_id)
+    if item is None:
+        raise RuntimeError("Unknown approval.")
+    decision = asyncio.run(
+        _generate_manual_decision(
+            config,
+            server_id=item.server_id,
+            channel_id=item.channel_id,
+            target_user_key=target_user_key,
+            current_draft=current_draft or item.draft,
+            operator_instruction=operator_instruction,
+        )
+    )
+    if not decision.draft:
+        raise RuntimeError(decision.reason)
+    queue.update_draft(approval_id, decision.draft)
+    EventLog(config.state_dir / "events.json").add(
+        event_type="approval_regenerated",
+        server_id=item.server_id,
+        channel_id=item.channel_id,
+        summary=operator_instruction or decision.reason,
+        draft=decision.draft,
+        user_key=target_user_key,
+    )
+
+
+def create_manual_approval(body: dict) -> None:
+    server_id = str(body.get("server_id") or "")
+    channel_id = str(body.get("channel_id") or "")
+    target_user_key = str(body.get("target_user_key") or "")
+    operator_instruction = str(body.get("instruction") or "").strip()
+    if not server_id or not channel_id:
+        raise RuntimeError("Missing server or channel.")
+    config = load_config()
+    decision = asyncio.run(
+        _generate_manual_decision(
+            config,
+            server_id=server_id,
+            channel_id=channel_id,
+            target_user_key=target_user_key,
+            current_draft="",
+            operator_instruction=operator_instruction,
+        )
+    )
+    if not decision.draft:
+        raise RuntimeError(decision.reason)
+    context = _memory_context(config.state_dir / "memory.json", channel_id)
+    character = CharacterCardStore(config.character_dir, config.character_card).for_server(
+        server_id,
+        _server_character_card(config, server_id),
+    )
+    item = ApprovalQueue(config.state_dir / "approvals.json").add(
+        server_id=server_id,
+        channel_id=channel_id,
+        character_name=character.name,
+        engagement_type="manual",
+        reason=operator_instruction or decision.reason,
+        draft=decision.draft,
+        source_messages=context[-8:],
+    )
+    EventLog(config.state_dir / "events.json").add(
+        event_type="manual_approval_created",
+        server_id=server_id,
+        channel_id=channel_id,
+        summary=operator_instruction or decision.reason,
+        draft=item.draft,
+        user_key=target_user_key,
+    )
+
+
+def _message_preview(row: dict) -> dict:
+    return {
+        "server_id": str(row.get("server_id") or ""),
+        "channel_id": str(row.get("channel_id") or ""),
+        "message_id": str(row.get("message_id") or ""),
+        "author": str(row.get("author") or "unknown"),
+        "author_id": row.get("author_id"),
+        "user_key": _message_user_key(row),
+        "text": str(row.get("text") or ""),
+        "observed_at": str(row.get("observed_at") or ""),
+    }
+
+
+def _message_user_key(row: dict) -> str:
+    author_id = row.get("author_id")
+    if author_id:
+        return f"discord:{author_id}"
+    author = " ".join(str(row.get("author") or "unknown").lower().strip().split())
+    return f"name:{author or 'unknown'}"
+
+
+def _summarize_messages(texts: list[str]) -> str:
+    if not texts:
+        return "No recent readable message text."
+    terms: list[str] = []
+    ignored = {
+        "that",
+        "this",
+        "with",
+        "from",
+        "they",
+        "have",
+        "just",
+        "like",
+        "what",
+        "your",
+        "about",
+        "there",
+        "would",
+        "could",
+        "really",
+    }
+    for text in texts:
+        for raw in text.split():
+            term = raw.strip(".,!?;:()[]{}\"'").lower()
+            if len(term) >= 5 and term not in ignored and term not in terms:
+                terms.append(term)
+            if len(terms) >= 5:
+                break
+        if len(terms) >= 5:
+            break
+    topic_text = ", ".join(terms) if terms else "the current thread"
+    latest = texts[-1]
+    if len(latest) > 130:
+        latest = latest[:127].rstrip() + "..."
+    return f"Talking about {topic_text}. Latest: {latest}"
+
+
+def _memory_context(memory_path: Path, channel_id: str):
+    memory = ConversationMemory(memory_path)
+    memory.load()
+    return memory.context(channel_id, limit=24)
+
+
+def _server_character_card(config: AppConfig, server_id: str) -> str | None:
+    payload = _read_json(config.servers_file, default={"servers": []})
+    for server in payload.get("servers", []):
+        if str(server.get("server_id") or "") == server_id:
+            return server.get("character_card") or None
+    return None
+
+
+async def _generate_manual_decision(
+    config: AppConfig,
+    *,
+    server_id: str,
+    channel_id: str,
+    target_user_key: str,
+    current_draft: str,
+    operator_instruction: str,
+):
+    memory = ConversationMemory(config.state_dir / "memory.json")
+    memory.load()
+    context = memory.context(channel_id, limit=24)
+    user_memories = memory.user_context_for(context, limit=10)
+    user_notes = UserInstructionStore(config.state_dir / "user_instructions.json").for_users(
+        [user.user_key for user in user_memories],
+        server_id=server_id,
+        channel_id=channel_id,
+    )
+    card_id = _server_character_card(config, server_id) or config.character_card
+    character = CharacterCardStore(config.character_dir, config.character_card).for_server(server_id, card_id)
+    character_memory = CharacterMemoryStore(config.state_dir / "character_memory").load(card_id)
+    planner = ReplyPlanner(
+        api_key=config.openai_api_key,
+        model=config.openai_model,
+        enabled=config.llm_enabled,
+        generate_drafts=True,
+        budget=BudgetManager(
+            config.state_dir / "usage.json",
+            model=config.openai_model,
+            max_daily_usd=config.max_daily_usd,
+            max_session_usd=config.max_session_usd,
+            max_calls_per_run=config.max_llm_calls_per_run,
+        ),
+        max_output_tokens=config.max_output_tokens,
+        max_input_chars=config.max_input_chars,
+        proactive_approval_required=True,
+        writing_mistake_rate=config.writing_mistake_rate,
+        writing_quirk=config.writing_quirk,
+        writing_misspellings=config.writing_misspellings,
+    )
+    return await planner.regenerate(
+        channel_id=channel_id,
+        character=character,
+        character_memory=character_memory,
+        context=context,
+        user_memories=user_memories,
+        user_instructions=user_notes,
+        current_draft=current_draft,
+        operator_instruction=operator_instruction,
+        target_user_key=target_user_key,
+    )
 
 
 async def _send_approval_message(config: AppConfig, server_id: str, channel_id: str, draft: str) -> None:
@@ -680,6 +998,9 @@ def update_env(values: dict) -> None:
         "NHI_ZUES_MAX_DAILY_USD",
         "NHI_ZUES_MAX_SESSION_USD",
         "NHI_ZUES_MAX_LLM_CALLS_PER_RUN",
+        "NHI_ZUES_WRITING_MISTAKE_RATE",
+        "NHI_ZUES_WRITING_QUIRK",
+        "NHI_ZUES_WRITING_MISSPELLINGS",
     }
     for key, value in values.items():
         if key not in allowed:

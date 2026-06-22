@@ -8,6 +8,7 @@ from .character_memory import CharacterMemory
 from .models import DraftDecision, MessageRecord, UserMemory
 from .topics import TopicSnapshot
 from .user_instructions import UserInstruction
+from .writing_style import apply_human_writing_noise, writing_style_prompt
 
 
 class ReplyPlanner:
@@ -22,6 +23,9 @@ class ReplyPlanner:
         max_output_tokens: int,
         max_input_chars: int,
         proactive_approval_required: bool,
+        writing_mistake_rate: float,
+        writing_quirk: str,
+        writing_misspellings: str,
     ) -> None:
         self.model = model
         self.enabled = enabled
@@ -30,6 +34,9 @@ class ReplyPlanner:
         self.max_output_tokens = max_output_tokens
         self.max_input_chars = max_input_chars
         self.proactive_approval_required = proactive_approval_required
+        self.writing_mistake_rate = writing_mistake_rate
+        self.writing_quirk = writing_quirk
+        self.writing_misspellings = writing_misspellings
         self.client = AsyncOpenAI(api_key=api_key) if api_key else None
 
     async def plan(
@@ -95,6 +102,7 @@ class ReplyPlanner:
         memory_prompt = character_memory.prompt_text()
         if memory_prompt:
             instructions = f"{instructions}\n\nPersistent character continuity:\n{memory_prompt}"
+        instructions = f"{instructions}\n\n{writing_style_prompt(mistake_rate=self.writing_mistake_rate, quirk=self.writing_quirk, misspellings=self.writing_misspellings)}"
         estimated_input_tokens = BudgetManager.approx_tokens(instructions + "\n" + user_prompt)
         budget_check = self.budget.check(
             estimated_input_tokens=estimated_input_tokens,
@@ -118,12 +126,94 @@ class ReplyPlanner:
         input_tokens, output_tokens = _usage_tokens(response, estimated_input_tokens)
         record = self.budget.record(input_tokens=input_tokens, output_tokens=output_tokens)
         draft = getattr(response, "output_text", "") or ""
+        draft = self._finalize_draft(draft, seed=f"{channel_id}:{','.join(message.message_id for message in new_messages)}")
         return DraftDecision(
             True,
             f"tracked topic or direct name cue; api_cost=${record.cost_usd:.6f}",
             draft=draft.strip(),
             engagement_type=engagement_type,
             requires_approval=requires_approval,
+        )
+
+    async def regenerate(
+        self,
+        *,
+        channel_id: str,
+        character: CharacterCard,
+        character_memory: CharacterMemory,
+        context: list[MessageRecord],
+        user_memories: list[UserMemory],
+        user_instructions: dict[str, list[UserInstruction]],
+        current_draft: str,
+        operator_instruction: str,
+        target_user_key: str = "",
+    ) -> DraftDecision:
+        if not self.enabled:
+            return DraftDecision(True, "would regenerate; LLM disabled by NHI_ZUES_LLM_ENABLED")
+        if self.client is None:
+            return DraftDecision(True, "would regenerate; no OPENAI_API_KEY configured")
+
+        transcript = _fit_text(
+            "\n".join(f"{message.author}: {message.text}" for message in context[-24:]),
+            self.max_input_chars,
+        )
+        target = _target_user_line(target_user_key, user_memories)
+        user_memory = _format_user_memories(user_memories, user_instructions)
+        user_prompt = (
+            f"Channel: {channel_id}\n"
+            f"Character: {character.name}\n"
+            f"Target user: {target}\n\n"
+            f"Known user context:\n{user_memory}\n\n"
+            f"Recent conversation:\n{transcript}\n\n"
+            f"Current draft:\n{current_draft or '(none)'}\n\n"
+            f"Operator direction:\n{operator_instruction or 'Make a better natural response for the selected context.'}\n\n"
+            "Generate one revised Discord reply for approval, 1-2 sentences max."
+        )
+        instructions = character.prompt_text()
+        memory_prompt = character_memory.prompt_text()
+        if memory_prompt:
+            instructions = f"{instructions}\n\nPersistent character continuity:\n{memory_prompt}"
+        instructions = f"{instructions}\n\n{writing_style_prompt(mistake_rate=self.writing_mistake_rate, quirk=self.writing_quirk, misspellings=self.writing_misspellings)}"
+
+        estimated_input_tokens = BudgetManager.approx_tokens(instructions + "\n" + user_prompt)
+        budget_check = self.budget.check(
+            estimated_input_tokens=estimated_input_tokens,
+            max_output_tokens=self.max_output_tokens,
+        )
+        if not budget_check.allowed:
+            return DraftDecision(
+                True,
+                f"would regenerate; {budget_check.reason} (${budget_check.estimated_cost_usd:.6f} est.)",
+                draft=None,
+                engagement_type="manual",
+                requires_approval=True,
+            )
+
+        response = await self.client.responses.create(
+            model=self.model,
+            instructions=instructions,
+            input=user_prompt,
+            max_output_tokens=self.max_output_tokens,
+        )
+        input_tokens, output_tokens = _usage_tokens(response, estimated_input_tokens)
+        record = self.budget.record(input_tokens=input_tokens, output_tokens=output_tokens)
+        draft = getattr(response, "output_text", "") or ""
+        draft = self._finalize_draft(draft, seed=f"{channel_id}:{target_user_key}:{operator_instruction}")
+        return DraftDecision(
+            True,
+            f"manual approval draft generated; api_cost=${record.cost_usd:.6f}",
+            draft=draft.strip(),
+            engagement_type="manual",
+            requires_approval=True,
+        )
+
+    def _finalize_draft(self, draft: str, *, seed: str) -> str:
+        return apply_human_writing_noise(
+            draft,
+            mistake_rate=self.writing_mistake_rate,
+            quirk=self.writing_quirk,
+            misspellings=self.writing_misspellings,
+            seed=seed,
         )
 
 
@@ -161,6 +251,15 @@ def _format_user_memories(
             f"- {user.display_name}: {user.message_count} observed messages; recent topics: {topics}.{summary}{instruction_text}"
         )
     return "\n".join(lines)
+
+
+def _target_user_line(target_user_key: str, user_memories: list[UserMemory]) -> str:
+    if not target_user_key:
+        return "none selected"
+    for user in user_memories:
+        if user.user_key == target_user_key:
+            return f"{user.display_name} ({user.user_key})"
+    return target_user_key
 
 
 def _fit_text(text: str, max_chars: int) -> str:

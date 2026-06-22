@@ -10,6 +10,7 @@ from .budget import BudgetManager
 from .character import CharacterCardStore
 from .character_memory import CharacterMemoryStore
 from .config import AppConfig
+from .events import EventLog
 from .llm import ReplyPlanner
 from .memory import ConversationMemory
 from .secrets import get_discord_credentials
@@ -41,11 +42,15 @@ class NhiZuesRunner:
             max_output_tokens=config.max_output_tokens,
             max_input_chars=config.max_input_chars,
             proactive_approval_required=config.proactive_approval_required,
+            writing_mistake_rate=config.writing_mistake_rate,
+            writing_quirk=config.writing_quirk,
+            writing_misspellings=config.writing_misspellings,
         )
         self.characters = CharacterCardStore(config.character_dir, config.character_card)
         self.character_memory = CharacterMemoryStore(config.state_dir / "character_memory")
         self.approvals = ApprovalQueue(config.state_dir / "approvals.json")
         self.user_instructions = UserInstructionStore(config.state_dir / "user_instructions.json")
+        self.events = EventLog(config.state_dir / "events.json")
 
     async def run_once(self) -> None:
         await self._run(loop=False)
@@ -106,7 +111,11 @@ class NhiZuesRunner:
             snapshot = self.topics.update(target.channel_id, fresh)
             context = self.memory.context(target.channel_id)
             user_memories = self.memory.user_context_for(context)
-            user_notes = self.user_instructions.for_users([user.user_key for user in user_memories])
+            user_notes = self.user_instructions.for_users(
+                [user.user_key for user in user_memories],
+                server_id=target.server_id,
+                channel_id=target.channel_id,
+            )
             character = self.characters.for_server(target.server_id, target.character_card)
             card_id = target.character_card or self.config.character_card
             character_memory = self.character_memory.load(card_id)
@@ -155,10 +164,31 @@ class NhiZuesRunner:
                         source_messages=fresh,
                     )
                     log.info("queued approval=%s channel=%s", item.approval_id, target.channel_id)
+                    self.events.add(
+                        event_type="approval_queued",
+                        server_id=target.server_id,
+                        channel_id=target.channel_id,
+                        summary=decision.reason,
+                        draft=decision.draft,
+                    )
                 elif self.config.dry_run:
                     mode = "auto_respond_dry_run" if target.auto_respond_enabled else "dry_run"
                     log.info("%s draft for %s: %s", mode, target.channel_id, decision.draft)
+                    self.events.add(
+                        event_type=mode,
+                        server_id=target.server_id,
+                        channel_id=target.channel_id,
+                        summary=decision.reason,
+                        draft=decision.draft,
+                    )
                 else:
                     await session.send_message(decision.draft)
+                    self.events.add(
+                        event_type="message_sent",
+                        server_id=target.server_id,
+                        channel_id=target.channel_id,
+                        summary=decision.reason,
+                        draft=decision.draft,
+                    )
 
             self.memory.save()

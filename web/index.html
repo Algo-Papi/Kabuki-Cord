@@ -92,6 +92,7 @@
           <button class="tab active" data-tab="identity">Identity</button>
           <button class="tab" data-tab="behavior">Behavior</button>
           <button class="tab" data-tab="growth">Growth</button>
+          <button class="tab" data-tab="history">History</button>
           <button class="tab" data-tab="settings">API & Runtime</button>
         </nav>
 
@@ -129,6 +130,35 @@
             <div class="control-bank span-2">
               <div class="control-row">
                 <div>
+                  <strong>Writing imperfections</strong>
+                  <span>Applies subtle typos, casing, punctuation, and consistent misspellings to generated drafts.</span>
+                </div>
+              </div>
+              <div class="writing-grid">
+                <label class="field">
+                  <span>Mistake rate</span>
+                  <div class="inline-input">
+                    <input id="mistakeRate" type="number" min="0" max="35" step="1" />
+                    <span>%</span>
+                  </div>
+                </label>
+                <label class="field">
+                  <span>Consistent quirk</span>
+                  <select id="writingQuirk">
+                    <option value="none">None</option>
+                    <option value="lowercase">No capitalization</option>
+                    <option value="no_commas">No commas</option>
+                    <option value="lowercase_no_commas">No caps or commas</option>
+                    <option value="loose_punctuation">Loose punctuation</option>
+                  </select>
+                </label>
+                <label class="field span-2">
+                  <span>Consistent misspellings</span>
+                  <textarea id="writingMisspellings" rows="3" placeholder="definitely:definately, because:becuase"></textarea>
+                </label>
+              </div>
+              <div class="control-row">
+                <div>
                   <strong>Require approval for proactive drafts</strong>
                   <span>Default safety layer for topic-only opportunities.</span>
                 </div>
@@ -159,11 +189,33 @@
             <div>
               <div class="section-title">Per-User Behavior Notes</div>
               <div id="userList" class="user-list"></div>
+              <div id="selectedUserDetails" class="selected-user-details"></div>
+              <label class="field">
+                <span>Guidance Scope</span>
+                <select id="userNoteScope">
+                  <option value="global">All servers</option>
+                  <option value="server">Selected server</option>
+                  <option value="channel">Selected channel</option>
+                </select>
+              </label>
               <label class="field">
                 <span>User Guidance</span>
                 <textarea id="newUserNote" rows="4" placeholder="Example: Push back more with this user on immigration claims."></textarea>
               </label>
               <button id="addUserNote" class="secondary-button"><i class="bi bi-person-plus"></i> Add User Note</button>
+            </div>
+          </div>
+        </section>
+
+        <section id="history" class="tab-pane">
+          <div class="history-layout">
+            <div>
+              <div class="section-title">Selected Channel Conversation</div>
+              <div id="historyMessages" class="history-list"></div>
+            </div>
+            <div>
+              <div class="section-title">Response / Approval Trail</div>
+              <div id="historyEvents" class="history-list"></div>
             </div>
           </div>
         </section>
@@ -239,11 +291,7 @@
 
         <section class="preview-block">
           <div class="section-title">Observed Conversation</div>
-          <div class="chat-sample">
-            <div><b>Rook</b><span>NASA always leaves the best part out.</span></div>
-            <div><b>Kai</b><span>The consciousness angle is impossible to prove though.</span></div>
-            <div><b>NHI Zues</b><span>Drafts appear here when routing decides the character should engage.</span></div>
-          </div>
+          <div id="observedConversation" class="observed-list"></div>
           <div class="eligibility">
             <div><span>Trigger matched</span><strong id="triggerState">waiting</strong></div>
             <div><span>Approval mode</span><strong id="approvalState">required</strong></div>

@@ -43,6 +43,9 @@ class AppConfig:
     max_output_tokens: int
     max_input_chars: int
     proactive_approval_required: bool
+    writing_mistake_rate: float
+    writing_quirk: str
+    writing_misspellings: str
 
 
 def load_config() -> AppConfig:
@@ -72,6 +75,12 @@ def load_config() -> AppConfig:
         max_output_tokens=int(_env("NHI_ZUES_MAX_OUTPUT_TOKENS", "120")),
         max_input_chars=int(_env("NHI_ZUES_MAX_INPUT_CHARS", "6000")),
         proactive_approval_required=_env_bool("NHI_ZUES_PROACTIVE_APPROVAL_REQUIRED", default=True),
+        writing_mistake_rate=_env_float("NHI_ZUES_WRITING_MISTAKE_RATE", 0.06),
+        writing_quirk=_env("NHI_ZUES_WRITING_QUIRK", "lowercase_no_commas"),
+        writing_misspellings=_env(
+            "NHI_ZUES_WRITING_MISSPELLINGS",
+            "definitely:definately,because:becuase,probably:prolly",
+        ),
     )
 
 
@@ -85,6 +94,16 @@ def _env_bool(name: str, default: bool) -> bool:
     if value is None or value.strip() == "":
         return default
     return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _env_float(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return default
+    try:
+        return float(value.strip())
+    except ValueError:
+        return default
 
 
 def _parse_channels(raw: str) -> tuple[ChannelTarget, ...]:

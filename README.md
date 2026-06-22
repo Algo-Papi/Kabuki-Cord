@@ -14,7 +14,7 @@ The first version is intentionally conservative:
 
 ## Screenshots
 
-Generic sample data is shown here; real server names, channels, users, approvals, and icons stay in ignored local state.
+Generic fictional sample data is shown here; real server names, channels, users, approvals, and icons stay in ignored local state.
 
 ![Kabuki-Cord dashboard](docs/screenshots/kabuki-cord-dashboard.png)
 
@@ -142,6 +142,8 @@ Per-channel auto-respond can be enabled from the Behavior tab, but it is off by 
 
 The top-bar **Start/Pause** control runs or pauses the local scanner loop. **Dry-run mode** means the scanner can observe, remember, and draft, but approved messages are blocked until dry-run is turned off in **API & Runtime**.
 
+The **Behavior** tab includes writing-imperfection controls. `NHI_ZUES_WRITING_MISTAKE_RATE` sets typo intensity, `NHI_ZUES_WRITING_QUIRK` controls the consistent style quirk, and `NHI_ZUES_WRITING_MISSPELLINGS` stores repeatable replacements such as `definitely:definately`.
+
 ## Privacy Boundary
 
 By default, Kabuki-Cord does not send Discord conversation text to OpenAI because LLM drafting is disabled. When you enable LLM drafting, the prompt can include recent visible Discord messages, lightweight per-user memory summaries, character memory, and per-user behavior notes so the model can draft context-aware replies. Use channel-level observe/engage toggles and budget limits to control that exposure.
@@ -152,7 +154,7 @@ The GUI includes an update check under **API & Runtime**. It only updates from t
 
 ## Approvals
 
-Approval cards can be edited before sending. Use **Save** to persist draft edits, **Reply to** chips to prefix a recent poster's display name, **Discard** to remove an unwanted draft, and **Approve & Send** to send only when dry-run is off.
+Approval cards can be edited before sending. Use **Save** to persist draft edits, **Reply to** chips to target a recent poster and prefix their display name, **Regenerate** to rewrite the draft using your mini prompt, **Discard** to remove an unwanted draft, and **Approve & Send** to send only when dry-run is off.
 
 ## Character Cards
 
@@ -191,6 +193,7 @@ Runtime memory is stored in `.state/memory.json`. It tracks:
 - Per-user memory keyed by stable Discord user ID when available, including message count, last seen time, and lightweight recent topic terms.
 - Per-user behavior notes under `.state/user_instructions.json`.
 - Character continuity overlays under `.state/character_memory/`.
+- Approval/response events under `.state/events.json`.
 
 Display-name memory is a starting point. The next improvement is extracting stable user IDs from Discord's DOM when available.
 
@@ -221,7 +224,9 @@ Kabuki-Cord is intended to grow into a local control panel with:
 - Servers: select scanned/engaged channels and per-server character cards.
 - Characters: edit base cards and runtime continuity notes.
 - Conversations: inspect per-user memory and add person-specific behavior notes.
-- Approvals: review proactive draft opportunities before anything is sent.
+- Observed conversations: summarize recent posters and queue suggested responses for approval.
+- Approvals: review or regenerate proactive draft opportunities before anything is sent.
+- History: review remembered channel messages and approval/response events.
 - Events: show redirects, login/session issues, budget stops, and attention-needed items.
 - Updates: check GitHub and pull fast-forward updates from the public repo.
 
