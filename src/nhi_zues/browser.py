@@ -327,6 +327,7 @@ class DiscordWebSession:
         email: str | None = None,
         password: str | None = None,
         timeout_seconds: int = 180,
+        allow_human_challenge: bool = True,
     ) -> bool:
         await self.open_home()
         if await self._is_logged_in():
@@ -344,6 +345,11 @@ class DiscordWebSession:
             await password_input.wait_for(state="visible", timeout=15_000)
             await password_input.fill(password)
             await password_input.press("Enter")
+            if not allow_human_challenge:
+                await self.page.wait_for_timeout(2500)
+                blocker = await self.login_blocker_state()
+                if blocker.get("human_verification"):
+                    return False
 
         try:
             await self.page.wait_for_function(
@@ -357,6 +363,39 @@ class DiscordWebSession:
         except Exception:
             return await self._is_logged_in()
         return True
+
+    async def login_blocker_state(self) -> dict[str, object]:
+        return await self.page.evaluate(
+            """
+            () => {
+                const visible = (node) => {
+                    if (!node) return false;
+                    const rect = node.getBoundingClientRect();
+                    const style = window.getComputedStyle(node);
+                    return rect.width > 0
+                        && rect.height > 0
+                        && style.display !== "none"
+                        && style.visibility !== "hidden";
+                };
+                const bodyText = (document.body?.innerText || "").replace(/\\s+/g, " ").trim();
+                const lowered = bodyText.toLowerCase();
+                return {
+                    url: location.href,
+                    login_form_visible: Boolean(Array.from(
+                        document.querySelectorAll('input[name="email"], input[type="email"]')
+                    ).find(visible)),
+                    human_verification: lowered.includes("are you human")
+                        || lowered.includes("not a robot")
+                        || lowered.includes("confirm you're not a robot")
+                        || lowered.includes("confirm you’re not a robot"),
+                    two_factor: lowered.includes("two-factor")
+                        || lowered.includes("2fa")
+                        || lowered.includes("authentication code"),
+                    body_preview: bodyText.slice(0, 240),
+                };
+            }
+            """
+        )
 
     async def navigate_channel(self, server_id: str, channel_id: str) -> str:
         await self.page.goto(
@@ -640,3 +679,25 @@ def _typing_duration(
     lower = max(float(min_seconds or 0), 0.0)
     upper = max(float(max_seconds or lower), lower)
     return min(max(chars / cps, lower), upper)
+
+
+def discord_login_blocker_message(state: dict[str, object]) -> str:
+    if state.get("human_verification"):
+        return (
+            "Discord is showing a human verification check. Click Sign In, complete the "
+            "visible Discord check, then retry. No message was sent."
+        )
+    if state.get("two_factor"):
+        return (
+            "Discord is asking for an authentication code. Click Sign In, complete the "
+            "visible Discord login, then retry. No message was sent."
+        )
+    if state.get("login_form_visible"):
+        return (
+            "Discord is on the login screen. Click Sign In, complete the visible Discord "
+            "login, then retry. No message was sent."
+        )
+    return (
+        "Discord is not signed in. Click Sign In, complete the visible Discord login, "
+        "then retry. No message was sent."
+    )

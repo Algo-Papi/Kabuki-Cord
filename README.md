@@ -168,6 +168,8 @@ The GUI includes an update check under **API & Runtime**. It only updates from t
 
 Approval cards can be edited before sending. Use **Save** to persist draft edits, **Reply to** chips to target a recent poster and prefix their display name, **Regenerate** to rewrite the draft using your mini prompt, **Discard** to remove an unwanted draft, and **Approve & Send** to send only when dry-run is off.
 
+If Discord shows a human verification, 2FA, or login checkpoint, Kabuki-Cord keeps the approval queued and reports the blocker. Use **Sign In** to complete the visible Discord check, then retry the approval.
+
 Use **Open** in the channel panel to launch the selected Discord channel in the persistent browser profile. This pauses the local scanner first so the browser profile is not shared by two Playwright sessions at once.
 
 ## Character Cards

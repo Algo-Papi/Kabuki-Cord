@@ -5,7 +5,7 @@ import logging
 import time
 
 from .approvals import ApprovalQueue
-from .browser import DiscordWebSession
+from .browser import DiscordWebSession, discord_login_blocker_message
 from .budget import BudgetManager
 from .character import CharacterCardStore
 from .character_memory import CharacterMemoryStore
@@ -77,7 +77,14 @@ class NhiZuesRunner:
             headless=self.config.headless,
         ) as session:
             credentials = get_discord_credentials()
-            await session.login_if_needed(email=credentials.email, password=credentials.password)
+            logged_in = await session.login_if_needed(
+                email=credentials.email,
+                password=credentials.password,
+                timeout_seconds=45,
+                allow_human_challenge=False,
+            )
+            if not logged_in:
+                raise RuntimeError(discord_login_blocker_message(await session.login_blocker_state()))
             last_checked: dict[tuple[str, str], float] = {}
             while not _stop_requested(stop_event):
                 targets = self._due_targets(last_checked) if loop else list(self.config.channels)

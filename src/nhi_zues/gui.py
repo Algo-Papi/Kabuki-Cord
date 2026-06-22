@@ -23,7 +23,7 @@ from urllib.parse import unquote, urlparse
 from dotenv import load_dotenv
 
 from .approvals import ApprovalQueue
-from .browser import DiscordWebSession
+from .browser import DiscordWebSession, discord_login_blocker_message
 from .budget import BudgetManager
 from .character import CharacterCardStore
 from .character_memory import CharacterMemoryStore
@@ -874,9 +874,10 @@ async def _discover_discord_workspace(config: AppConfig) -> list[dict]:
             email=credentials.email,
             password=credentials.password,
             timeout_seconds=120,
+            allow_human_challenge=False,
         )
         if not logged_in:
-            raise RuntimeError("Discord is not signed in. Use Sign In first, then Sync Servers.")
+            raise RuntimeError(discord_login_blocker_message(await session.login_blocker_state()))
         servers = await session.discover_servers()
         for server in servers:
             server["channels"] = await session.discover_channels(server["server_id"])
@@ -1212,6 +1213,11 @@ def _friendly_discord_send_error(raw_error: str) -> str:
         "read-only",
         "duplicate reply blocked",
         "already sent or cleared",
+        "human verification",
+        "visible discord login",
+        "authentication code",
+        "discord is on the login screen",
+        "discord is not signed in",
     )
     if any(marker in lowered for marker in channel_markers):
         return _redact_secret_text(raw_error)
@@ -1512,10 +1518,11 @@ async def _send_approval_message(config: AppConfig, server_id: str, channel_id: 
         logged_in = await session.login_if_needed(
             email=credentials.email,
             password=credentials.password,
-            timeout_seconds=120,
+            timeout_seconds=45,
+            allow_human_challenge=False,
         )
         if not logged_in:
-            raise RuntimeError("Discord is not signed in. Use Sign In first.")
+            raise RuntimeError(discord_login_blocker_message(await session.login_blocker_state()))
         current_url = await session.navigate_channel(server_id, channel_id)
         if channel_id not in current_url:
             raise RuntimeError("Discord redirected away from the approval channel.")
