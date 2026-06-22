@@ -1122,6 +1122,7 @@ def _send_approval_locked(*, approval_id: str, draft: str) -> None:
     )
 
     lock_acquired = False
+    resume_runtime = bool(RUNTIME.status().get("running"))
     try:
         _acquire_discord_session_or_raise(pause_runtime=True)
         lock_acquired = True
@@ -1172,6 +1173,8 @@ def _send_approval_locked(*, approval_id: str, draft: str) -> None:
     finally:
         if lock_acquired:
             DISCORD_SESSION_LOCK.release()
+        if resume_runtime:
+            RUNTIME.start()
 
 
 def _friendly_discord_send_error(raw_error: str) -> str:
