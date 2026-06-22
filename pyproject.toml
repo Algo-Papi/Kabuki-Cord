@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kabuki-cord"
+version = "1.0.0"
+description = "Local Discord web automation and character orchestration app."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "keyring>=25.0.0",
+    "openai>=1.0.0",
+    "playwright>=1.44.0",
+    "python-dotenv>=1.0.0",
+    "pywebview>=5.0",
+]
+
+[project.scripts]
+nhi-zues = "nhi_zues.cli:main"
+kabuki-cord = "nhi_zues.cli:main"
+kabuki-cord-desktop = "nhi_zues.desktop:main"
+kabuki-cord-gui = "nhi_zues.gui:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
