@@ -590,6 +590,7 @@ function renderResponseHistory() {
       "approval_queued",
       "manual_approval_created",
       "approval_send_started",
+      "duplicate_reply_blocked",
       "approval_regenerated",
       "approval_send_failed",
       "dry_run",
@@ -911,6 +912,7 @@ function eventTypeLabel(event) {
     approval_discarded: "Draft discarded",
     approvals_cleared: "Approvals cleared",
     approval_send_started: "Delivery started",
+    duplicate_reply_blocked: "Duplicate blocked",
     approval_sent: "Approved response sent",
     approval_send_failed: "Send failed",
     message_sent: "Auto response sent",
@@ -923,7 +925,12 @@ function eventTypeLabel(event) {
 function eventClass(event) {
   if (["approval_send_failed", "channel_unavailable"].includes(event.event_type)) return "failed";
   if (["message_sent", "approval_sent"].includes(event.event_type)) return "sent";
-  if (["approval_queued", "manual_approval_created", "approval_send_started"].includes(event.event_type)) return "attention";
+  if ([
+    "approval_queued",
+    "manual_approval_created",
+    "approval_send_started",
+    "duplicate_reply_blocked",
+  ].includes(event.event_type)) return "attention";
   return "";
 }
 
@@ -941,6 +948,7 @@ function isNotifiableEvent(event) {
     "approval_queued",
     "manual_approval_created",
     "approval_send_started",
+    "duplicate_reply_blocked",
     "approval_sent",
     "approval_send_failed",
     "message_sent",

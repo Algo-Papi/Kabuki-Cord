@@ -22,6 +22,7 @@ def apply_human_writing_noise(
 
     cleaned = _apply_consistent_misspellings(cleaned, _parse_misspellings(misspellings))
     cleaned = _apply_quirk(cleaned, quirk)
+    cleaned = _reduce_dash_punctuation(cleaned)
 
     rate = max(0.0, min(float(mistake_rate or 0), 0.35))
     if rate <= 0:
@@ -55,6 +56,7 @@ def writing_style_prompt(*, mistake_rate: float, quirk: str, misspellings: str) 
         f"- Add small typos or missing punctuation at roughly {percent}% intensity.\n"
         f"- Consistent quirk: {quirk_text}.\n"
         f"- Consistent misspellings: {typo_text}.\n"
+        "- Avoid em dashes and frequent hyphen constructions; use plain sentence breaks instead.\n"
         "- Keep mistakes subtle; do not make the reply unreadable."
     )
 
@@ -100,6 +102,12 @@ def _apply_quirk(text: str, quirk: str) -> str:
         if text.endswith("."):
             text = text[:-1]
     return text
+
+
+def _reduce_dash_punctuation(text: str) -> str:
+    text = text.replace("—", " ").replace("–", " ")
+    text = re.sub(r"\s+-\s+", " ", text)
+    return " ".join(text.split())
 
 
 def _can_mistype(word: str) -> bool:

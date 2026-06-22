@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import ipaddress
 import json
 import mimetypes
 import os
@@ -30,6 +31,8 @@ from .config import AppConfig, load_config
 from .events import EventLog
 from .llm import ReplyPlanner
 from .memory import ConversationMemory
+from .models import MessageRecord
+from .reply_ledger import ReplyLedger, duplicate_reply_message
 from .runner import NhiZuesRunner
 from .secrets import discord_credential_status, get_discord_credentials, set_discord_credentials
 from .user_instructions import UserInstructionStore
@@ -64,19 +67,29 @@ OPENAI_MODEL_FALLBACKS = [
 ]
 
 
+def _is_loopback_host(host: str) -> bool:
+    normalized = host.strip("[]").lower()
+    if normalized == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(normalized).is_loopback
+    except ValueError:
+        return False
+
+
 class GuiHandler(BaseHTTPRequestHandler):
     server_version = "KabukiCord/0.1"
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/api/session":
-            if not self._host_allowed():
+            if not self._request_allowed():
                 self._json({"ok": False, "error": "Forbidden."}, status=403)
                 return
             self._json({"ok": True, "token": SESSION_TOKEN})
             return
         if parsed.path.startswith("/api/server-icons/"):
-            if not self._host_allowed():
+            if not self._request_allowed():
                 self._json({"ok": False, "error": "Forbidden."}, status=403)
                 return
             self._file(_server_icon_path(parsed.path.removeprefix("/api/server-icons/")))
@@ -113,7 +126,11 @@ class GuiHandler(BaseHTTPRequestHandler):
                 self._json({"ok": False, "error": str(exc)}, status=400)
             return
         if parsed.path == "/api/settings":
-            update_env(body)
+            try:
+                update_env(body)
+            except ValueError as exc:
+                self._json({"ok": False, "error": str(exc)}, status=400)
+                return
             self._json({"ok": True, "state": app_state()})
             return
         if parsed.path == "/api/openai-models":
@@ -281,7 +298,7 @@ class GuiHandler(BaseHTTPRequestHandler):
         return target
 
     def _authorized_api(self, *, require_json: bool) -> bool:
-        if not self._host_allowed():
+        if not self._request_allowed():
             return False
         if self.headers.get("X-Kabuki-Token") != SESSION_TOKEN:
             return False
@@ -292,14 +309,23 @@ class GuiHandler(BaseHTTPRequestHandler):
             return False
         return True
 
+    def _request_allowed(self) -> bool:
+        return self._host_allowed() and _is_loopback_host(str(self.client_address[0]))
+
     def _host_allowed(self) -> bool:
-        host = (self.headers.get("Host") or "").split(":", 1)[0].strip("[]").lower()
-        return host in {"127.0.0.1", "localhost", "::1"}
+        raw_host = (self.headers.get("Host") or "").strip().lower()
+        if raw_host.startswith("["):
+            host = raw_host[1:].split("]", 1)[0]
+        else:
+            host = raw_host.split(":", 1)[0]
+        return _is_loopback_host(host)
 
     def _same_origin(self, value: str) -> bool:
         parsed = urlparse(value)
         host = (parsed.hostname or "").lower()
-        return host in {"127.0.0.1", "localhost", "::1"}
+        port = parsed.port
+        server_port = int(getattr(self.server, "server_port", 0) or 0)
+        return _is_loopback_host(host) and (port is None or port == server_port)
 
 
 class RuntimeController:
@@ -454,6 +480,7 @@ def app_state() -> dict:
         ),
         "events": events_state(config.state_dir / "events.json"),
         "memory": memory_state(config.state_dir / "memory.json"),
+        "reply_ledger": reply_ledger_state(config.state_dir / "sent_replies.json"),
     }
 
 
@@ -878,6 +905,15 @@ def memory_state(path: Path) -> dict:
     }
 
 
+def reply_ledger_state(path: Path) -> dict:
+    payload = _read_json(path, default={"items": []})
+    items = payload.get("items", [])
+    return {
+        "count": len(items),
+        "recent": items[-20:],
+    }
+
+
 def observed_conversation_state(path: Path) -> dict:
     payload = _read_json(path, default={"channels": {}, "users": {}})
     result: dict[str, dict] = {}
@@ -1041,6 +1077,20 @@ def send_approval(body: dict) -> None:
     except KeyError as exc:
         raise RuntimeError("That approval was already cleared. Refresh the app before sending.") from exc
 
+    ledger = ReplyLedger(config.state_dir / "sent_replies.json")
+    duplicate_message = duplicate_reply_message(
+        ledger.find_overlap(channel_id=item.channel_id, source_message_ids=item.source_message_ids)
+    )
+    if duplicate_message:
+        EventLog(config.state_dir / "events.json").add(
+            event_type="duplicate_reply_blocked",
+            server_id=item.server_id,
+            channel_id=item.channel_id,
+            summary=duplicate_message,
+            draft=draft,
+        )
+        raise RuntimeError(duplicate_message)
+
     event_log = EventLog(config.state_dir / "events.json")
     event_log.add(
         event_type="approval_send_started",
@@ -1054,18 +1104,42 @@ def send_approval(body: dict) -> None:
     try:
         _acquire_discord_session_or_raise(pause_runtime=True)
         lock_acquired = True
+        current_item = queue.get(approval_id)
+        if current_item is None:
+            raise RuntimeError("That approval was already sent or cleared. Refresh the app before sending.")
+        item = current_item
+        duplicate_message = duplicate_reply_message(
+            ledger.find_overlap(channel_id=item.channel_id, source_message_ids=item.source_message_ids)
+        )
+        if duplicate_message:
+            event_log.add(
+                event_type="duplicate_reply_blocked",
+                server_id=item.server_id,
+                channel_id=item.channel_id,
+                summary=duplicate_message,
+                draft=draft,
+            )
+            raise RuntimeError(duplicate_message)
         asyncio.run(_send_approval_message(config, item.server_id, item.channel_id, draft))
     except Exception as exc:
         friendly_error = _friendly_discord_send_error(str(exc))
-        event_log.add(
-            event_type="approval_send_failed",
-            server_id=item.server_id,
-            channel_id=item.channel_id,
-            summary=friendly_error,
-            draft=draft,
-        )
+        if not _is_non_delivery_block(friendly_error):
+            event_log.add(
+                event_type="approval_send_failed",
+                server_id=item.server_id,
+                channel_id=item.channel_id,
+                summary=friendly_error,
+                draft=draft,
+            )
         raise RuntimeError(friendly_error) from exc
     else:
+        ledger.record(
+            server_id=item.server_id,
+            channel_id=item.channel_id,
+            mode=item.engagement_type,
+            draft=draft,
+            source_message_ids=item.source_message_ids,
+        )
         queue.remove(approval_id)
         event_log.add(
             event_type="approval_sent",
@@ -1102,10 +1176,17 @@ def _friendly_discord_send_error(raw_error: str) -> str:
         "redirected away from the target channel",
         "permission to send messages",
         "read-only",
+        "duplicate reply blocked",
+        "already sent or cleared",
     )
     if any(marker in lowered for marker in channel_markers):
         return _redact_secret_text(raw_error)
     return f"Discord send failed: {_redact_secret_text(raw_error)}"
+
+
+def _is_non_delivery_block(message: str) -> bool:
+    lowered = message.lower()
+    return "duplicate reply blocked" in lowered or "already sent or cleared" in lowered
 
 
 def regenerate_approval(body: dict) -> None:
@@ -1151,6 +1232,32 @@ def create_manual_approval(body: dict) -> None:
     if not server_id or not channel_id:
         raise RuntimeError("Missing server or channel.")
     config = load_config()
+    context = _memory_context(config.state_dir / "memory.json", channel_id)
+    source_messages = _manual_source_messages(context, target_user_key)
+    source_ids = tuple(message.message_id for message in source_messages)
+    ledger = ReplyLedger(config.state_dir / "sent_replies.json")
+    duplicate_message = duplicate_reply_message(
+        ledger.find_overlap(channel_id=channel_id, source_message_ids=source_ids)
+    )
+    if duplicate_message:
+        EventLog(config.state_dir / "events.json").add(
+            event_type="duplicate_reply_blocked",
+            server_id=server_id,
+            channel_id=channel_id,
+            summary=duplicate_message,
+            draft="",
+            user_key=target_user_key,
+        )
+        raise RuntimeError(duplicate_message)
+    existing = ApprovalQueue(config.state_dir / "approvals.json").find_source_overlap(
+        channel_id=channel_id,
+        source_message_ids=source_ids,
+    )
+    if existing:
+        raise RuntimeError(
+            "An approval is already queued for this recent message. "
+            "Use Regenerate on the existing approval instead of creating another reply."
+        )
     decision = asyncio.run(
         _generate_manual_decision(
             config,
@@ -1163,7 +1270,6 @@ def create_manual_approval(body: dict) -> None:
     )
     if not decision.draft:
         raise RuntimeError(decision.reason)
-    context = _memory_context(config.state_dir / "memory.json", channel_id)
     character = CharacterCardStore(config.character_dir, config.character_card).for_server(
         server_id,
         _server_character_card(config, server_id),
@@ -1175,7 +1281,7 @@ def create_manual_approval(body: dict) -> None:
         engagement_type="manual",
         reason=operator_instruction or decision.reason,
         draft=decision.draft,
-        source_messages=context[-8:],
+        source_messages=source_messages,
     )
     EventLog(config.state_dir / "events.json").add(
         event_type="manual_approval_created",
@@ -1205,6 +1311,26 @@ def _message_user_key(row: dict) -> str:
     if author_id:
         return f"discord:{author_id}"
     author = " ".join(str(row.get("author") or "unknown").lower().strip().split())
+    return f"name:{author or 'unknown'}"
+
+
+def _manual_source_messages(context: list[MessageRecord], target_user_key: str) -> list[MessageRecord]:
+    if not context:
+        return []
+    if target_user_key:
+        targeted = [
+            message
+            for message in reversed(context)
+            if _message_record_user_key(message) == target_user_key
+        ]
+        return list(reversed(targeted[:2]))
+    return [context[-1]]
+
+
+def _message_record_user_key(message: MessageRecord) -> str:
+    if message.author_id:
+        return f"discord:{message.author_id}"
+    author = " ".join(str(message.author or "unknown").lower().strip().split())
     return f"name:{author or 'unknown'}"
 
 
@@ -1394,10 +1520,18 @@ def update_env(values: dict) -> None:
     for key, value in values.items():
         if key not in allowed:
             continue
-        if key == "OPENAI_API_KEY" and not str(value).strip():
+        cleaned = _clean_env_value(key, value)
+        if key == "OPENAI_API_KEY" and not cleaned:
             continue
-        existing[key] = str(value).strip()
+        existing[key] = cleaned
     env_path.write_text("\n".join(f"{key}={value}" for key, value in existing.items()) + "\n", encoding="utf-8")
+
+
+def _clean_env_value(key: str, value) -> str:
+    cleaned = str(value).strip()
+    if "\n" in cleaned or "\r" in cleaned:
+        raise ValueError(f"{key} cannot contain line breaks.")
+    return cleaned
 
 
 def start_discord_login() -> None:
@@ -1512,9 +1646,13 @@ def _safe_character_path(card_path: str, *, card_dir: Path | None = None) -> Pat
 
 
 def _cache_server_icon(state_dir: Path, server_id: str, icon_url: str) -> str:
-    if not icon_url.startswith(("https://", "http://")):
+    parsed = urlparse(icon_url)
+    if parsed.scheme != "https" or (parsed.hostname or "").lower() not in {
+        "cdn.discordapp.com",
+        "media.discordapp.net",
+    }:
         return ""
-    suffix = Path(urlparse(icon_url).path).suffix.lower()
+    suffix = Path(parsed.path).suffix.lower()
     if suffix not in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
         suffix = ".webp"
     filename = f"{server_id}-{hashlib.sha256(icon_url.encode('utf-8')).hexdigest()[:12]}{suffix}"
@@ -1524,7 +1662,13 @@ def _cache_server_icon(state_dir: Path, server_id: str, icon_url: str) -> str:
         target_dir.mkdir(parents=True, exist_ok=True)
         request = urllib.request.Request(icon_url, headers={"User-Agent": "Kabuki-Cord"})
         with urllib.request.urlopen(request, timeout=20) as response:
-            target.write_bytes(response.read())
+            content_length = int(response.headers.get("Content-Length") or "0")
+            if content_length > 2_000_000:
+                return ""
+            data = response.read(2_000_001)
+            if len(data) > 2_000_000:
+                return ""
+            target.write_bytes(data)
     return f"/api/server-icons/{filename}"
 
 
@@ -1552,6 +1696,8 @@ def _write_json(path: Path, payload: dict) -> None:
 def main() -> None:
     host = os.getenv("KABUKI_CORD_HOST", "127.0.0.1")
     port = int(os.getenv("KABUKI_CORD_PORT", "8765"))
+    if not _is_loopback_host(host):
+        raise RuntimeError("Kabuki-Cord GUI must bind to a loopback host such as 127.0.0.1 or localhost.")
     server = ThreadingHTTPServer((host, port), GuiHandler)
     print(f"Kabuki-Cord GUI: http://{host}:{port}")
     server.serve_forever()

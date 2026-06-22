@@ -65,6 +65,24 @@ class ApprovalQueue:
     def get(self, approval_id: str) -> ApprovalItem | None:
         return next((item for item in self._items if item.approval_id == approval_id), None)
 
+    def find_source_overlap(
+        self,
+        *,
+        channel_id: str,
+        source_message_ids: tuple[str, ...] | list[str],
+    ) -> ApprovalItem | None:
+        source_ids = {str(value).strip() for value in source_message_ids if str(value or "").strip()}
+        if not source_ids:
+            return None
+        return next(
+            (
+                item
+                for item in self._items
+                if item.channel_id == channel_id and source_ids.intersection(item.source_message_ids)
+            ),
+            None,
+        )
+
     def update_draft(self, approval_id: str, draft: str) -> ApprovalItem:
         for index, item in enumerate(self._items):
             if item.approval_id != approval_id:

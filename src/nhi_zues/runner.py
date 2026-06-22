@@ -13,6 +13,7 @@ from .config import AppConfig
 from .events import EventLog
 from .llm import ReplyPlanner
 from .memory import ConversationMemory
+from .reply_ledger import ReplyLedger, duplicate_reply_message
 from .secrets import get_discord_credentials
 from .topics import TopicTracker
 from .user_instructions import UserInstructionStore
@@ -49,6 +50,7 @@ class NhiZuesRunner:
         self.characters = CharacterCardStore(config.character_dir, config.character_card)
         self.character_memory = CharacterMemoryStore(config.state_dir / "character_memory")
         self.approvals = ApprovalQueue(config.state_dir / "approvals.json")
+        self.reply_ledger = ReplyLedger(config.state_dir / "sent_replies.json")
         self.user_instructions = UserInstructionStore(config.state_dir / "user_instructions.json")
         self.events = EventLog(config.state_dir / "events.json")
 
@@ -114,6 +116,8 @@ class NhiZuesRunner:
 
             visible_messages = await session.read_visible_messages(target.server_id, target.channel_id)
             fresh = self.memory.ingest(target.channel_id, visible_messages)
+            character = self.characters.for_server(target.server_id, target.character_card)
+            fresh = _without_own_messages(fresh, character_names=(character.name, *character.aliases))
             snapshot = self.topics.update(target.channel_id, fresh)
             context = self.memory.context(target.channel_id)
             user_memories = self.memory.user_context_for(context)
@@ -122,7 +126,6 @@ class NhiZuesRunner:
                 server_id=target.server_id,
                 channel_id=target.channel_id,
             )
-            character = self.characters.for_server(target.server_id, target.character_card)
             card_id = target.character_card or self.config.character_card
             character_memory = self.character_memory.load(card_id)
             if not target.engage_enabled:
@@ -177,7 +180,43 @@ class NhiZuesRunner:
                 ),
             )
             if decision.should_reply and decision.draft:
-                if decision.requires_approval and not target.auto_respond_enabled:
+                source_ids = tuple(message.message_id for message in fresh)
+                duplicate_message = duplicate_reply_message(
+                    self.reply_ledger.find_overlap(
+                        channel_id=target.channel_id,
+                        source_message_ids=source_ids,
+                    )
+                )
+                if duplicate_message:
+                    log.info("duplicate reply blocked channel=%s", target.channel_id)
+                    self.events.add(
+                        event_type="duplicate_reply_blocked",
+                        server_id=target.server_id,
+                        channel_id=target.channel_id,
+                        summary=duplicate_message,
+                        draft=decision.draft,
+                    )
+                    self.memory.save()
+                    continue
+
+                if not target.auto_respond_enabled:
+                    existing = self.approvals.find_source_overlap(
+                        channel_id=target.channel_id,
+                        source_message_ids=source_ids,
+                    )
+                    if existing:
+                        self.events.add(
+                            event_type="duplicate_reply_blocked",
+                            server_id=target.server_id,
+                            channel_id=target.channel_id,
+                            summary=(
+                                "Duplicate approval skipped: an approval is already queued "
+                                "for one or more of the same source messages."
+                            ),
+                            draft=decision.draft,
+                        )
+                        self.memory.save()
+                        continue
                     item = self.approvals.add(
                         server_id=target.server_id,
                         channel_id=target.channel_id,
@@ -220,5 +259,23 @@ class NhiZuesRunner:
                         summary=decision.reason,
                         draft=decision.draft,
                     )
+                    self.reply_ledger.record(
+                        server_id=target.server_id,
+                        channel_id=target.channel_id,
+                        mode="auto",
+                        draft=decision.draft,
+                        source_message_ids=source_ids,
+                    )
 
             self.memory.save()
+
+
+def _without_own_messages(messages, *, character_names: tuple[str, ...]):
+    names = {_normalize_author(name) for name in character_names if name}
+    if not names:
+        return list(messages)
+    return [message for message in messages if _normalize_author(message.author) not in names]
+
+
+def _normalize_author(value: str) -> str:
+    return " ".join(str(value or "").lower().split())

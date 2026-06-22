@@ -142,11 +142,13 @@ The **API & Runtime** tab has a **Models** button next to the model field. It ca
 
 The routing path is deliberately conservative: new messages are read first, local topic/name triggers decide whether a draft is worth generating, then budget checks run before any API request. Drafts generated during dry-run are logged but not sent.
 
-Per-channel auto-respond can be enabled from the Behavior tab, but it is off by default. Dry-run still prevents sending even if auto-respond is enabled.
+Per-channel auto-respond can be enabled from the Behavior tab, but it is off by default. When Auto is off, generated replies are queued for approval even if they came from a direct name/alias cue. Dry-run still prevents sending even if auto-respond is enabled.
 
 The top-bar **Start/Pause** control runs or pauses the local scanner loop. **Dry-run mode** means the scanner can observe, remember, and draft, but approved messages are blocked until dry-run is turned off in **API & Runtime**.
 
 The right-side **Events** view shows the live activity trail: routine channel checks, queued approvals, delivery-started status, regenerated drafts, approved sends, autonomous sends, dry-run drafts, and send failures. The GUI auto-refreshes while you are not editing a form and raises an in-app toast for important new events.
+
+Successful sends are also recorded in `.state/sent_replies.json`. Before queuing or sending another response, Kabuki-Cord checks that ledger against the source Discord message IDs so stale approvals or repeated scans do not double-reply to the same message.
 
 The **Behavior** tab includes writing-imperfection controls. `NHI_ZUES_WRITING_MISTAKE_RATE` sets typo intensity, `NHI_ZUES_WRITING_QUIRK` controls the consistent style quirk, and `NHI_ZUES_WRITING_MISSPELLINGS` stores repeatable replacements such as `definitely:definately`.
 
