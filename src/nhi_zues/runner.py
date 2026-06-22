@@ -104,6 +104,12 @@ class NhiZuesRunner:
                     target.channel_id,
                     current_url,
                 )
+                self.events.add(
+                    event_type="channel_unavailable",
+                    server_id=target.server_id,
+                    channel_id=target.channel_id,
+                    summary=f"Checked channel but Discord redirected to {current_url}.",
+                )
                 continue
 
             visible_messages = await session.read_visible_messages(target.server_id, target.channel_id)
@@ -126,6 +132,15 @@ class NhiZuesRunner:
                     target.channel_id,
                     len(visible_messages),
                     len(fresh),
+                )
+                self.events.add(
+                    event_type="channel_checked",
+                    server_id=target.server_id,
+                    channel_id=target.channel_id,
+                    summary=(
+                        f"Reviewed {len(visible_messages)} visible message(s), "
+                        f"{len(fresh)} new; Engage is off."
+                    ),
                 )
                 self.memory.save()
                 continue
@@ -151,6 +166,15 @@ class NhiZuesRunner:
                 len(user_memories),
                 snapshot.top_topics,
                 decision.reason,
+            )
+            self.events.add(
+                event_type="channel_checked",
+                server_id=target.server_id,
+                channel_id=target.channel_id,
+                summary=(
+                    f"Reviewed {len(visible_messages)} visible message(s), "
+                    f"{len(fresh)} new; {decision.reason}."
+                ),
             )
             if decision.should_reply and decision.draft:
                 if decision.requires_approval and not target.auto_respond_enabled:

@@ -53,7 +53,7 @@ class EventLog:
     def _load(self) -> list[EventItem]:
         if not self.event_file.exists():
             return []
-        payload = json.loads(self.event_file.read_text(encoding="utf-8"))
+        payload = json.loads(self.event_file.read_text(encoding="utf-8-sig"))
         return [EventItem(**row) for row in payload.get("items", [])]
 
     def _save(self) -> None:

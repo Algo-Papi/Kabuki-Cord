@@ -144,6 +144,8 @@ Per-channel auto-respond can be enabled from the Behavior tab, but it is off by 
 
 The top-bar **Start/Pause** control runs or pauses the local scanner loop. **Dry-run mode** means the scanner can observe, remember, and draft, but approved messages are blocked until dry-run is turned off in **API & Runtime**.
 
+The right-side **Events** view shows the live activity trail: routine channel checks, queued approvals, regenerated drafts, approved sends, autonomous sends, dry-run drafts, and send failures. The GUI auto-refreshes while you are not editing a form and raises an in-app toast for important new events.
+
 The **Behavior** tab includes writing-imperfection controls. `NHI_ZUES_WRITING_MISTAKE_RATE` sets typo intensity, `NHI_ZUES_WRITING_QUIRK` controls the consistent style quirk, and `NHI_ZUES_WRITING_MISSPELLINGS` stores repeatable replacements such as `definitely:definately`.
 
 Approved live sends can also be human-paced. `NHI_ZUES_TYPING_INDICATOR_ENABLED=true` makes Kabuki-Cord type the final approved message into Discord over a bounded duration so Discord has time to show the normal typing indicator. The min/max duration and characters-per-second controls live in the **Behavior** tab.

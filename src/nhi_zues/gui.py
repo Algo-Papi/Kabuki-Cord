@@ -452,6 +452,7 @@ def app_state() -> dict:
             config.state_dir / "memory.json",
             config.state_dir / "events.json",
         ),
+        "events": events_state(config.state_dir / "events.json"),
         "memory": memory_state(config.state_dir / "memory.json"),
     }
 
@@ -924,6 +925,17 @@ def conversation_history_state(memory_path: Path, event_path: Path) -> dict:
             "events": events_by_channel.get(str(channel_id), [])[-60:],
         }
         for channel_id, rows in memory_payload.get("channels", {}).items()
+    }
+
+
+def events_state(event_path: Path) -> dict:
+    payload = _read_json(event_path, default={"items": []})
+    items = payload.get("items", [])
+    if not isinstance(items, list):
+        items = []
+    return {
+        "items": list(reversed(items[-120:])),
+        "count": len(items),
     }
 
 
@@ -1505,7 +1517,7 @@ def _server_icon_path(filename: str) -> Path | None:
 def _read_json(path: Path, *, default: dict) -> dict:
     if not path.exists():
         return default
-    return json.loads(path.read_text(encoding="utf-8"))
+    return json.loads(path.read_text(encoding="utf-8-sig"))
 
 
 def _write_json(path: Path, payload: dict) -> None:

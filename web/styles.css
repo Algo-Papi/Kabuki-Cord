@@ -876,11 +876,37 @@ textarea:focus {
   background: transparent;
   color: var(--muted);
   padding-bottom: 12px;
+  cursor: pointer;
 }
 
 .preview-tab.active {
   color: #fff;
   border-color: var(--purple);
+}
+
+.event-badge {
+  display: none;
+  min-width: 18px;
+  margin-left: 5px;
+  border-radius: 999px;
+  background: var(--red);
+  color: #fff;
+  font-size: 11px;
+  line-height: 18px;
+  padding: 0 5px;
+  text-align: center;
+}
+
+.event-badge.visible {
+  display: inline-block;
+}
+
+.preview-mode {
+  display: none;
+}
+
+.preview-mode.active {
+  display: block;
 }
 
 .preview-block {
@@ -889,6 +915,49 @@ textarea:focus {
   border-radius: 8px;
   background: #121920;
   padding: 16px;
+}
+
+.event-feed {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.event-card {
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.025);
+  padding: 10px 12px;
+}
+
+.event-card.attention {
+  border-color: rgba(217, 185, 91, 0.38);
+}
+
+.event-card.sent {
+  border-color: rgba(95, 201, 120, 0.34);
+}
+
+.event-card.failed {
+  border-color: rgba(239, 107, 120, 0.38);
+}
+
+.event-card strong {
+  display: block;
+  color: #edf3f8;
+  font-size: 13px;
+}
+
+.event-card span,
+.event-card p {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.event-card p {
+  margin: 7px 0 0;
+  color: #c9d3dd;
 }
 
 .chat-sample {

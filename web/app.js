@@ -3,7 +3,12 @@ let selectedServer = 0;
 let selectedChannel = 0;
 let selectedUserKey = null;
 let apiToken = null;
+let previewPanelMode = "preview";
+let unreadEventCount = 0;
+let autoRefreshTimer = null;
+let refreshInFlight = false;
 const approvalTargets = {};
+let knownEventKeys = new Set();
 
 const $ = (id) => document.getElementById(id);
 
@@ -38,13 +43,26 @@ async function api(path, options = {}) {
   return response.json();
 }
 
-async function loadState() {
-  appState = await api("/api/state");
-  selectedServer = Math.min(selectedServer, servers().length - 1);
-  if (selectedServer < 0) selectedServer = 0;
-  selectedChannel = Math.min(selectedChannel, channels().length - 1);
-  if (selectedChannel < 0) selectedChannel = 0;
-  render();
+async function loadState(options = {}) {
+  if (refreshInFlight && options.background) return;
+  refreshInFlight = true;
+  const previousEventKeys = new Set(knownEventKeys);
+  const hadState = Boolean(appState);
+  try {
+    appState = await api("/api/state");
+    selectedServer = Math.min(selectedServer, servers().length - 1);
+    if (selectedServer < 0) selectedServer = 0;
+    selectedChannel = Math.min(selectedChannel, channels().length - 1);
+    if (selectedChannel < 0) selectedChannel = 0;
+    render();
+    syncEventNotifications({
+      previousEventKeys,
+      notify: Boolean(options.notify && hadState),
+    });
+    startAutoRefresh();
+  } finally {
+    refreshInFlight = false;
+  }
 }
 
 function servers() {
@@ -75,6 +93,8 @@ function render() {
   renderObserved();
   renderHistory();
   renderMetrics();
+  renderEventsPanel();
+  renderPreviewTabs();
 }
 
 function renderRail() {
@@ -494,6 +514,72 @@ function renderMetrics() {
   $("triggerState").textContent = channel()?.engage_enabled ? "eligible" : "disabled";
 }
 
+function renderPreviewTabs() {
+  document.querySelectorAll("[data-preview-tab]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.previewTab === previewPanelMode);
+  });
+  $("previewMode").classList.toggle("active", previewPanelMode === "preview");
+  $("eventsMode").classList.toggle("active", previewPanelMode === "events");
+  renderEventBadge();
+}
+
+function renderEventsPanel() {
+  renderRuntimeCheckSummary();
+  renderResponseHistory();
+  renderEventFeed();
+}
+
+function renderRuntimeCheckSummary() {
+  const runtime = appState.runtime || {};
+  const activeChannels = configuredChannels().filter((item) => item.scan_enabled);
+  const engagedChannels = activeChannels.filter((item) => item.engage_enabled);
+  const autoChannels = activeChannels.filter((item) => item.auto_respond_enabled);
+  $("runtimeCheckSummary").innerHTML = `
+    <div><span>Status</span><strong>${escapeHtml(runtime.running ? "running" : "paused")}</strong></div>
+    <div><span>Last check</span><strong>${escapeHtml(formatRuntimeTime(runtime.last_run_at))}</strong></div>
+    <div><span>Observed</span><strong>${activeChannels.length}</strong></div>
+    <div><span>Engage</span><strong>${engagedChannels.length}</strong></div>
+    <div><span>Auto</span><strong>${autoChannels.length}</strong></div>
+    <div><span>Last issue</span><strong>${escapeHtml(runtime.last_error || "none")}</strong></div>
+  `;
+}
+
+function renderResponseHistory() {
+  const responseEvents = allEvents()
+    .filter((event) => [
+      "message_sent",
+      "approval_sent",
+      "approval_queued",
+      "manual_approval_created",
+      "approval_regenerated",
+      "approval_send_failed",
+      "dry_run",
+      "auto_respond_dry_run",
+    ].includes(event.event_type))
+    .slice(0, 30);
+  $("responseHistory").innerHTML =
+    responseEvents.map(renderEventCard).join("") ||
+    `<div class="note-item">No drafts, approvals, or sent responses recorded yet.</div>`;
+}
+
+function renderEventFeed() {
+  const events = allEvents().slice(0, 60);
+  $("eventFeed").innerHTML =
+    events.map(renderEventCard).join("") ||
+    `<div class="note-item">No runtime events recorded yet.</div>`;
+}
+
+function renderEventCard(event) {
+  const detail = event.draft || event.summary || "";
+  return `
+    <div class="event-card ${eventClass(event)}">
+      <strong>${escapeHtml(eventTypeLabel(event))}</strong>
+      <span>${escapeHtml(formatTime(event.created_at))} · ${escapeHtml(eventScope(event))}</span>
+      ${detail ? `<p>${escapeHtml(detail)}</p>` : ""}
+    </div>
+  `;
+}
+
 function renderObserved() {
   const current = channel();
   const observed = current ? appState.observed?.[current.channel_id] : null;
@@ -750,6 +836,122 @@ function historyCount(channelId) {
   return appState.history?.[channelId]?.messages?.length || 0;
 }
 
+function configuredChannels() {
+  return servers().flatMap((srv) =>
+    (srv.channels || []).map((chan) => ({
+      ...chan,
+      server_id: srv.server_id,
+      server_label: srv.label,
+    }))
+  );
+}
+
+function allEvents() {
+  return Array.isArray(appState.events?.items) ? appState.events.items : [];
+}
+
+function eventKey(event) {
+  return [
+    event.created_at || "",
+    event.event_type || "",
+    event.server_id || "",
+    event.channel_id || "",
+    event.summary || "",
+    event.draft || "",
+  ].join("|");
+}
+
+function eventTypeLabel(event) {
+  const labels = {
+    channel_checked: "Channel checked",
+    channel_unavailable: "Channel unavailable",
+    approval_queued: "Approval queued",
+    manual_approval_created: "Draft queued",
+    approval_regenerated: "Draft regenerated",
+    approval_updated: "Draft edited",
+    approval_discarded: "Draft discarded",
+    approvals_cleared: "Approvals cleared",
+    approval_sent: "Approved response sent",
+    approval_send_failed: "Send failed",
+    message_sent: "Auto response sent",
+    dry_run: "Dry-run draft",
+    auto_respond_dry_run: "Auto dry-run draft",
+  };
+  return labels[event.event_type] || event.event_type || "Event";
+}
+
+function eventClass(event) {
+  if (["approval_send_failed", "channel_unavailable"].includes(event.event_type)) return "failed";
+  if (["message_sent", "approval_sent"].includes(event.event_type)) return "sent";
+  if (["approval_queued", "manual_approval_created"].includes(event.event_type)) return "attention";
+  return "";
+}
+
+function eventScope(event) {
+  if (event.channel_id) {
+    const match = findChannel(event.server_id, event.channel_id);
+    return `${match.serverLabel} / ${formatChannelName(match.channelLabel, match.channelType)}`;
+  }
+  if (event.server_id) return findServerLabel(event.server_id);
+  return "All servers";
+}
+
+function isNotifiableEvent(event) {
+  return [
+    "approval_queued",
+    "manual_approval_created",
+    "approval_sent",
+    "approval_send_failed",
+    "message_sent",
+    "channel_unavailable",
+  ].includes(event.event_type);
+}
+
+function syncEventNotifications({ previousEventKeys, notify }) {
+  const events = allEvents();
+  const nextKeys = new Set(events.map(eventKey));
+  if (notify) {
+    const newEvents = events.filter((event) => !previousEventKeys.has(eventKey(event)));
+    const important = newEvents.filter(isNotifiableEvent);
+    if (important.length) {
+      unreadEventCount += important.length;
+      const latest = important[0];
+      const detail = latest.summary || latest.draft || "";
+      toast(`${eventTypeLabel(latest)}: ${truncateText(detail, 96)}`);
+    }
+  }
+  knownEventKeys = nextKeys;
+  renderEventBadge();
+}
+
+function renderEventBadge() {
+  const badge = $("eventBadge");
+  if (!badge) return;
+  badge.textContent = unreadEventCount > 99 ? "99+" : String(unreadEventCount);
+  badge.classList.toggle("visible", unreadEventCount > 0);
+}
+
+function startAutoRefresh() {
+  if (autoRefreshTimer) return;
+  autoRefreshTimer = setInterval(() => {
+    if (!appState || isUserEditing()) return;
+    loadState({ notify: true, background: true }).catch((error) => console.warn(error));
+  }, 10_000);
+}
+
+function isUserEditing() {
+  const active = document.activeElement;
+  if (!active) return false;
+  const tag = active.tagName?.toLowerCase();
+  return active.isContentEditable || ["input", "textarea", "select"].includes(tag);
+}
+
+function truncateText(value, maxLength) {
+  const text = String(value || "").trim();
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength - 3)}...`;
+}
+
 function scopeLabel(item) {
   if (item.channel_id) {
     const match = findChannel(item.server_id, item.channel_id);
@@ -789,6 +991,13 @@ function formatTime(value) {
   if (!value) return "";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+function formatRuntimeTime(value) {
+  if (!value) return "never";
+  const date = typeof value === "number" ? new Date(value * 1000) : new Date(value);
+  if (Number.isNaN(date.getTime())) return "unknown";
   return date.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
@@ -838,6 +1047,14 @@ document.querySelectorAll(".tab").forEach((tab) => {
     document.querySelectorAll(".tab-pane").forEach((item) => item.classList.remove("active"));
     tab.classList.add("active");
     $(tab.dataset.tab).classList.add("active");
+  });
+});
+
+document.querySelectorAll("[data-preview-tab]").forEach((tab) => {
+  tab.addEventListener("click", () => {
+    previewPanelMode = tab.dataset.previewTab;
+    if (previewPanelMode === "events") unreadEventCount = 0;
+    renderPreviewTabs();
   });
 });
 

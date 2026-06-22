@@ -314,36 +314,55 @@
 
       <aside class="preview-panel">
         <div class="preview-tabs">
-          <button class="preview-tab active">Preview</button>
-          <button class="preview-tab">Events</button>
+          <button class="preview-tab active" data-preview-tab="preview">Preview</button>
+          <button class="preview-tab" data-preview-tab="events">Events <span id="eventBadge" class="event-badge"></span></button>
         </div>
 
-        <section class="preview-block">
-          <div class="section-title">Observed Conversation</div>
-          <div id="observedConversation" class="observed-list"></div>
-          <div class="eligibility">
-            <div><span>Trigger matched</span><strong id="triggerState">waiting</strong></div>
-            <div><span>Approval mode</span><strong id="approvalState">required</strong></div>
-          </div>
-        </section>
+        <div id="previewMode" class="preview-mode active">
+          <section class="preview-block">
+            <div class="section-title">Observed Conversation</div>
+            <div id="observedConversation" class="observed-list"></div>
+            <div class="eligibility">
+              <div><span>Trigger matched</span><strong id="triggerState">waiting</strong></div>
+              <div><span>Approval mode</span><strong id="approvalState">required</strong></div>
+            </div>
+          </section>
 
-        <section class="preview-block">
-          <div class="section-title with-action">
-            <span>Approvals</span>
-            <button id="clearApprovals" class="small-button" type="button"><i class="bi bi-x-circle"></i> Clear All</button>
-          </div>
-          <div id="approvalList" class="approval-list"></div>
-        </section>
+          <section class="preview-block">
+            <div class="section-title with-action">
+              <span>Approvals</span>
+              <button id="clearApprovals" class="small-button" type="button"><i class="bi bi-x-circle"></i> Clear All</button>
+            </div>
+            <div id="approvalList" class="approval-list"></div>
+          </section>
 
-        <section class="preview-block">
-          <div class="section-title">Usage</div>
-          <div class="metric-grid">
-            <div><span>Daily</span><strong id="dailySpend">$0.000000</strong></div>
-            <div><span>Calls</span><strong id="usageCalls">0</strong></div>
-            <div><span>Users</span><strong id="memoryUsers">0</strong></div>
-            <div><span>Seen</span><strong id="seenMessages">0</strong></div>
-          </div>
-        </section>
+          <section class="preview-block">
+            <div class="section-title">Usage</div>
+            <div class="metric-grid">
+              <div><span>Daily</span><strong id="dailySpend">$0.000000</strong></div>
+              <div><span>Calls</span><strong id="usageCalls">0</strong></div>
+              <div><span>Users</span><strong id="memoryUsers">0</strong></div>
+              <div><span>Seen</span><strong id="seenMessages">0</strong></div>
+            </div>
+          </section>
+        </div>
+
+        <div id="eventsMode" class="preview-mode">
+          <section class="preview-block">
+            <div class="section-title">Runtime Checks</div>
+            <div id="runtimeCheckSummary" class="metric-grid"></div>
+          </section>
+
+          <section class="preview-block">
+            <div class="section-title">Response History</div>
+            <div id="responseHistory" class="event-feed"></div>
+          </section>
+
+          <section class="preview-block">
+            <div class="section-title">Activity Feed</div>
+            <div id="eventFeed" class="event-feed"></div>
+          </section>
+        </div>
       </aside>
     </div>
 
