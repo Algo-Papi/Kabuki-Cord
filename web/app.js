@@ -466,8 +466,24 @@ async function sendApproval(approvalId) {
     await loadState();
     toast("Approved message sent");
   } catch (error) {
+    await loadState().catch(() => {});
     toast(error.message);
   }
+}
+
+async function clearApprovals() {
+  const approvals = appState.approvals || [];
+  if (!approvals.length) {
+    toast("No queued approvals");
+    return;
+  }
+  if (!confirm(`Clear ${approvals.length} queued approval draft${approvals.length === 1 ? "" : "s"}? Nothing will be sent.`)) {
+    return;
+  }
+  const result = await api("/api/approvals-clear", { method: "POST", body: JSON.stringify({}) });
+  appState = result.state;
+  render();
+  toast(`Cleared ${result.cleared || 0} queued approval${result.cleared === 1 ? "" : "s"}`);
 }
 
 function renderMetrics() {
@@ -834,6 +850,7 @@ $("saveDiscord").addEventListener("click", saveDiscordCredentials);
 $("launchDiscordLogin").addEventListener("click", launchDiscordLogin);
 $("openDiscordChannel").addEventListener("click", () => openDiscordChannel().catch((error) => toast(error.message)));
 $("refreshOpenAIModels").addEventListener("click", () => refreshOpenAIModels().catch((error) => toast(error.message)));
+$("clearApprovals").addEventListener("click", () => clearApprovals().catch((error) => toast(error.message)));
 $("checkUpdates").addEventListener("click", checkUpdates);
 $("applyUpdate").addEventListener("click", applyUpdate);
 

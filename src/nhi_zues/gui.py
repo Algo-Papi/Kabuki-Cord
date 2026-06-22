@@ -39,6 +39,7 @@ ROOT = Path.cwd()
 WEB_ROOT = ROOT / "web"
 SESSION_TOKEN = token_secrets.token_urlsafe(32)
 DISCORD_SESSION_LOCK = threading.Lock()
+DISCORD_LOCK_WAIT_SECONDS = 45.0
 OPENAI_MODEL_FALLBACKS = [
     {
         "id": "gpt-5.4-nano",
@@ -160,6 +161,10 @@ class GuiHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/approval-discard":
             discard_approval(body)
             self._json({"ok": True, "state": app_state()})
+            return
+        if parsed.path == "/api/approvals-clear":
+            count = clear_approvals()
+            self._json({"ok": True, "cleared": count, "state": app_state()})
             return
         if parsed.path == "/api/approval-send":
             try:
@@ -672,8 +677,7 @@ def _redact_secret_text(value: str) -> str:
 
 def sync_discord_servers() -> dict:
     config = load_config()
-    if not DISCORD_SESSION_LOCK.acquire(blocking=False):
-        raise RuntimeError("Discord browser profile is busy. Pause scanning or close the sign-in window, then try again.")
+    _acquire_discord_session_or_raise(pause_runtime=True)
     try:
         try:
             discovered = asyncio.run(_discover_discord_workspace(config))
@@ -748,6 +752,23 @@ def sync_discord_servers() -> dict:
         "channels_updated": channels_updated,
         "state": app_state(),
     }
+
+
+def _acquire_discord_session_or_raise(*, pause_runtime: bool = False) -> None:
+    if pause_runtime:
+        RUNTIME.pause()
+
+    deadline = time.monotonic() + DISCORD_LOCK_WAIT_SECONDS
+    while time.monotonic() < deadline:
+        if DISCORD_SESSION_LOCK.acquire(blocking=False):
+            return
+        time.sleep(0.25)
+
+    raise RuntimeError(
+        "Discord browser profile is busy. Scanner was paused, but another Kabuki Discord "
+        "window is still using the profile. Close any Kabuki-opened Discord sign-in/channel "
+        "windows, then try again."
+    )
 
 
 def _merge_channels(server: dict, discovered_channels: list[dict]) -> dict[str, int]:
@@ -978,6 +999,21 @@ def discard_approval(body: dict) -> None:
         )
 
 
+def clear_approvals() -> int:
+    config = load_config()
+    queue = ApprovalQueue(config.state_dir / "approvals.json")
+    count = queue.clear()
+    if count:
+        EventLog(config.state_dir / "events.json").add(
+            event_type="approvals_cleared",
+            server_id="",
+            channel_id="",
+            summary=f"Cleared {count} queued approval draft(s).",
+            draft="",
+        )
+    return count
+
+
 def send_approval(body: dict) -> None:
     approval_id = str(body.get("approval_id") or "")
     draft = str(body.get("draft") or "").strip()
@@ -987,12 +1023,24 @@ def send_approval(body: dict) -> None:
     config = load_config()
     if config.dry_run:
         raise RuntimeError("Dry-run is enabled. Turn off Dry-run mode in API & Runtime before sending.")
-    if not DISCORD_SESSION_LOCK.acquire(blocking=False):
-        raise RuntimeError("Discord browser profile is busy. Pause scanning or close the sign-in window, then try again.")
+    _acquire_discord_session_or_raise(pause_runtime=True)
     try:
         queue = ApprovalQueue(config.state_dir / "approvals.json")
-        item = queue.update_draft(approval_id, draft)
-        asyncio.run(_send_approval_message(config, item.server_id, item.channel_id, draft))
+        try:
+            item = queue.update_draft(approval_id, draft)
+        except KeyError as exc:
+            raise RuntimeError("That approval was already cleared. Refresh the app before sending.") from exc
+        try:
+            asyncio.run(_send_approval_message(config, item.server_id, item.channel_id, draft))
+        except Exception as exc:
+            EventLog(config.state_dir / "events.json").add(
+                event_type="approval_send_failed",
+                server_id=item.server_id,
+                channel_id=item.channel_id,
+                summary=_friendly_discord_send_error(str(exc)),
+                draft=draft,
+            )
+            raise RuntimeError(_friendly_discord_send_error(str(exc))) from exc
         queue.remove(approval_id)
         EventLog(config.state_dir / "events.json").add(
             event_type="approval_sent",
@@ -1003,6 +1051,25 @@ def send_approval(body: dict) -> None:
         )
     finally:
         DISCORD_SESSION_LOCK.release()
+
+
+def _friendly_discord_send_error(raw_error: str) -> str:
+    lowered = raw_error.lower()
+    profile_markers = (
+        "processsingleton",
+        "singletonlock",
+        "user data directory is already in use",
+        "profile appears to be in use",
+        "browser has been closed",
+        "target page, context or browser has been closed",
+    )
+    if any(marker in lowered for marker in profile_markers):
+        return (
+            "Discord profile is already open in another Kabuki/Chrome window. "
+            "Close any Kabuki-opened Discord channel or sign-in windows, then retry. "
+            "The draft was not sent and remains queued."
+        )
+    return f"Discord send failed: {_redact_secret_text(raw_error)}"
 
 
 def regenerate_approval(body: dict) -> None:
@@ -1240,10 +1307,8 @@ def start_discord_channel(body: dict) -> None:
     channel_id = str(body.get("channel_id") or "")
     if not server_id or not channel_id:
         raise RuntimeError("Missing server or channel.")
-    if not DISCORD_SESSION_LOCK.acquire(blocking=False):
-        raise RuntimeError("Discord browser profile is busy. Pause scanning or close the sign-in window, then try again.")
+    _acquire_discord_session_or_raise(pause_runtime=True)
     DISCORD_SESSION_LOCK.release()
-    RUNTIME.pause()
     kwargs = {}
     if sys.platform == "win32":
         kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW

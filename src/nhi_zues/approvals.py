@@ -93,10 +93,17 @@ class ApprovalQueue:
             self._save()
         return changed
 
+    def clear(self) -> int:
+        count = len(self._items)
+        if count:
+            self._items = []
+            self._save()
+        return count
+
     def _load(self) -> list[ApprovalItem]:
         if not self.queue_file.exists():
             return []
-        payload = json.loads(self.queue_file.read_text(encoding="utf-8"))
+        payload = json.loads(self.queue_file.read_text(encoding="utf-8-sig"))
         return [
             ApprovalItem(
                 approval_id=row["approval_id"],
