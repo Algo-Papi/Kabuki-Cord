@@ -43,6 +43,8 @@ WEB_ROOT = ROOT / "web"
 SESSION_TOKEN = token_secrets.token_urlsafe(32)
 DISCORD_SESSION_LOCK = threading.Lock()
 DISCORD_LOCK_WAIT_SECONDS = 45.0
+APPROVAL_REGENERATION_LOCKS: dict[str, threading.Lock] = {}
+APPROVAL_REGENERATION_LOCKS_LOCK = threading.Lock()
 OPENAI_MODEL_FALLBACKS = [
     {
         "id": "gpt-5.4-nano",
@@ -1195,6 +1197,36 @@ def regenerate_approval(body: dict) -> None:
     current_draft = str(body.get("draft") or "").strip()
     if not approval_id:
         raise RuntimeError("Missing approval id.")
+    lock = _approval_regeneration_lock(approval_id)
+    if not lock.acquire(blocking=False):
+        raise RuntimeError("Regeneration is already running for this approval.")
+    try:
+        _regenerate_approval_locked(
+            approval_id=approval_id,
+            operator_instruction=operator_instruction,
+            target_user_key=target_user_key,
+            current_draft=current_draft,
+        )
+    finally:
+        lock.release()
+
+
+def _approval_regeneration_lock(approval_id: str) -> threading.Lock:
+    with APPROVAL_REGENERATION_LOCKS_LOCK:
+        lock = APPROVAL_REGENERATION_LOCKS.get(approval_id)
+        if lock is None:
+            lock = threading.Lock()
+            APPROVAL_REGENERATION_LOCKS[approval_id] = lock
+        return lock
+
+
+def _regenerate_approval_locked(
+    *,
+    approval_id: str,
+    operator_instruction: str,
+    target_user_key: str,
+    current_draft: str,
+) -> None:
     config = load_config()
     queue = ApprovalQueue(config.state_dir / "approvals.json")
     item = queue.get(approval_id)

@@ -9,6 +9,7 @@ let autoRefreshTimer = null;
 let refreshInFlight = false;
 const approvalTargets = {};
 const approvalDeliveryState = {};
+const approvalRegenerationState = {};
 let knownEventKeys = new Set();
 
 const $ = (id) => document.getElementById(id);
@@ -370,6 +371,7 @@ function renderApprovals() {
       .map((item) => {
         const delivery = approvalDeliveryState[item.approval_id] || null;
         const sending = delivery?.state === "sending";
+        const regenerating = Boolean(approvalRegenerationState[item.approval_id]);
         return `
         <div class="approval-item" data-approval-item="${escapeAttr(item.approval_id)}">
           <strong>${escapeHtml(item.character_name)} · #${escapeHtml(item.channel_id)}</strong>
@@ -377,10 +379,11 @@ function renderApprovals() {
           <textarea class="approval-draft" data-approval-draft="${escapeAttr(item.approval_id)}" rows="5">${escapeHtml(item.draft)}</textarea>
           ${recentPosterChips(item.channel_id, item.approval_id)}
           <textarea class="approval-instruction" data-approval-instruction="${escapeAttr(item.approval_id)}" rows="2" placeholder="Regeneration note: say it more like x, disagree with y, make it shorter..."></textarea>
+          ${approvalRegenerationStatus(item.approval_id)}
           ${approvalDeliveryStatus(item.approval_id)}
           <div class="approval-actions">
             <button class="small-button" data-approval-save="${escapeAttr(item.approval_id)}"><i class="bi bi-save2"></i> Save</button>
-            <button class="small-button" data-approval-regenerate="${escapeAttr(item.approval_id)}"><i class="bi bi-stars"></i> Regenerate</button>
+            <button class="small-button" data-approval-regenerate="${escapeAttr(item.approval_id)}" ${regenerating ? "disabled" : ""}><i class="bi ${regenerating ? "bi-hourglass-split" : "bi-stars"}"></i> ${regenerating ? "Regenerating" : "Regenerate"}</button>
             <button class="small-button" data-copy="${escapeAttr(item.approval_id)}"><i class="bi bi-copy"></i> Copy</button>
             <button class="small-button" data-approval-discard="${escapeAttr(item.approval_id)}"><i class="bi bi-trash3"></i> Discard</button>
             <button class="primary-button approval-send" data-approval-send="${escapeAttr(item.approval_id)}" ${sending ? "disabled" : ""}><i class="bi ${sending ? "bi-hourglass-split" : "bi-send"}"></i> ${sending ? "Sending" : "Approve & Send"}</button>
@@ -450,6 +453,16 @@ function approvalDeliveryStatus(approvalId) {
   `;
 }
 
+function approvalRegenerationStatus(approvalId) {
+  if (!approvalRegenerationState[approvalId]) return "";
+  return `
+    <div class="approval-delivery-status">
+      <i class="bi bi-hourglass-split"></i>
+      <span>Regenerating draft. Waiting for model response...</span>
+    </div>
+  `;
+}
+
 function insertReplyPrefix(approvalId, prefix) {
   const textarea = document.querySelector(`[data-approval-draft="${cssEscape(approvalId)}"]`);
   if (!textarea || !prefix) return;
@@ -485,18 +498,31 @@ async function discardApproval(approvalId) {
 }
 
 async function regenerateApproval(approvalId) {
+  if (approvalRegenerationState[approvalId]) return;
   const instruction = document.querySelector(`[data-approval-instruction="${cssEscape(approvalId)}"]`)?.value.trim() || "";
-  await api("/api/approval-regenerate", {
-    method: "POST",
-    body: JSON.stringify({
-      approval_id: approvalId,
-      draft: approvalDraft(approvalId),
-      instruction,
-      target_user_key: approvalTargets[approvalId]?.user_key || "",
-    }),
-  });
-  await loadState();
-  toast("Approval regenerated");
+  const draft = approvalDraft(approvalId);
+  approvalRegenerationState[approvalId] = true;
+  renderApprovals();
+  toast("Regenerating draft...");
+  try {
+    const result = await api("/api/approval-regenerate", {
+      method: "POST",
+      body: JSON.stringify({
+        approval_id: approvalId,
+        draft,
+        instruction,
+        target_user_key: approvalTargets[approvalId]?.user_key || "",
+      }),
+    });
+    delete approvalRegenerationState[approvalId];
+    appState = result.state || (await api("/api/state"));
+    render();
+    toast("Approval regenerated");
+  } catch (error) {
+    delete approvalRegenerationState[approvalId];
+    renderApprovals();
+    toast(error.message);
+  }
 }
 
 async function sendApproval(approvalId) {
@@ -989,6 +1015,7 @@ function startAutoRefresh() {
 }
 
 function isUserEditing() {
+  if (Object.keys(approvalRegenerationState).length) return true;
   const active = document.activeElement;
   if (!active) return false;
   const tag = active.tagName?.toLowerCase();
