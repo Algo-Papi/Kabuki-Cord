@@ -14,6 +14,38 @@ The first version is intentionally conservative:
 
 ## Setup
 
+### Simple Windows Install
+
+For normal use, download the Windows release ZIP, extract it somewhere you plan to keep it, then double-click:
+
+```text
+Install-Kabuki-Cord.exe
+```
+
+If Windows blocks the EXE or you downloaded the source ZIP instead, double-click:
+
+```text
+Install-Kabuki-Cord.cmd
+```
+
+The installer handles:
+
+- Python 3.11+ detection, with `winget` install fallback when available.
+- Virtual environment creation under `.venv/`.
+- Python dependency installation.
+- Playwright browser support installation.
+- `.env` creation from `.env.example` when missing.
+- Desktop and Start Menu shortcuts.
+- First app launch after setup.
+
+After install, launch from the **Kabuki-Cord** desktop shortcut or:
+
+```text
+Run-Kabuki-Cord.cmd
+```
+
+### Manual Dev Setup
+
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python -m pip install -e .

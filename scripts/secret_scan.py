@@ -16,6 +16,8 @@ PATTERNS = {
 }
 TEXT_SUFFIXES = {
     ".css",
+    ".cmd",
+    ".cs",
     ".html",
     ".ini",
     ".js",

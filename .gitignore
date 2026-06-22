@@ -10,6 +10,8 @@ __pycache__/
 .playwright/
 playwright-report/
 test-results/
+dist/
+Install-Kabuki-Cord.exe
 
 *.log
 *.sqlite
