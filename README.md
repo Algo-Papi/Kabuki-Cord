@@ -83,6 +83,8 @@ The desktop control panel is the preferred entrypoint:
 
 The app starts a local backend and opens its own window. Use **API & Runtime -> Discord Session** to save Discord credentials locally or open the Discord sign-in window. Future runs reuse the persistent browser profile.
 
+Enable **Silent automation** in **API & Runtime -> Discord Session** to run scanner, sync, and approved delivery in an off-screen Playwright browser. Manual **Sign In** and **Open** channel actions still launch visible Discord windows because those flows require direct operator interaction. If Discord logs the persistent profile out, complete **Sign In** once and routine automation can return to off-screen mode.
+
 After signing in, click **Sync Discord** in the top bar to read the Discord server rail and available text/forum channels from that persistent browser profile. Discovered servers and channels are merged into your ignored local server config, while newly discovered channels stay inactive until you enable Observe or Engage. The public sample `config/servers.json` stays as a placeholder for GitHub.
 
 Synced server icons are cached under ignored runtime state and displayed in the left rail when Discord exposes an icon URL.

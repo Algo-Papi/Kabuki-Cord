@@ -255,6 +255,7 @@ function renderSettings() {
   $("llmEnabled").checked = strBool(appState.env.NHI_ZUES_LLM_ENABLED, false);
   $("draftDryRun").checked = strBool(appState.env.NHI_ZUES_DRAFT_IN_DRY_RUN, false);
   $("conversationReply").checked = strBool(appState.env.NHI_ZUES_CONVERSATION_REPLY_ENABLED, false);
+  $("headlessMode").checked = strBool(appState.env.NHI_ZUES_HEADLESS, false);
   $("dryRun").checked = strBool(appState.env.NHI_ZUES_DRY_RUN, true);
   $("dailyBudget").value = appState.env.NHI_ZUES_MAX_DAILY_USD || "0.25";
   $("sessionBudget").value = appState.env.NHI_ZUES_MAX_SESSION_USD || "0.05";
@@ -302,18 +303,19 @@ function renderModelOptions() {
 function renderRuntime() {
   const runtime = appState.runtime || {};
   const running = Boolean(runtime.running);
+  const browserMode = appState.app.headless ? "hidden browser" : "visible browser";
   $("runtimeControl").innerHTML = running
     ? `<i class="bi bi-pause-fill"></i> Pause`
     : `<i class="bi bi-play-fill"></i> Start`;
   $("runtimeControl").className = running ? "secondary-button active-runtime" : "secondary-button";
   if (running) {
     $("runtimeStatus").textContent = appState.app.dry_run
-      ? "scanner running - dry-run"
-      : "scanner running - live sends allowed";
+      ? `scanner running - dry-run - ${browserMode}`
+      : `scanner running - live sends allowed - ${browserMode}`;
   } else {
     $("runtimeStatus").textContent = appState.app.dry_run
-      ? "paused - dry-run"
-      : "paused - live sends allowed";
+      ? `paused - dry-run - ${browserMode}`
+      : `paused - live sends allowed - ${browserMode}`;
   }
 }
 
@@ -755,6 +757,7 @@ async function saveAll() {
     NHI_ZUES_LLM_ENABLED: $("llmEnabled").checked,
     NHI_ZUES_DRAFT_IN_DRY_RUN: $("draftDryRun").checked,
     NHI_ZUES_CONVERSATION_REPLY_ENABLED: $("conversationReply").checked,
+    NHI_ZUES_HEADLESS: $("headlessMode").checked,
     NHI_ZUES_DRY_RUN: $("dryRun").checked,
     NHI_ZUES_PROACTIVE_APPROVAL_REQUIRED: $("approvalRequired").checked,
     NHI_ZUES_CHARACTER_CARD: appState.env.NHI_ZUES_CHARACTER_CARD || appState.active_character.path,

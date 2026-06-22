@@ -422,6 +422,7 @@ def app_state() -> dict:
             "state_dir": str(config.state_dir),
             "servers_file": str(config.servers_file),
             "active_character_card": config.character_card,
+            "headless": config.headless,
             "llm_enabled": config.llm_enabled,
             "draft_in_dry_run": config.draft_in_dry_run,
             "conversation_reply_enabled": config.conversation_reply_enabled,
@@ -457,6 +458,7 @@ def app_state() -> dict:
             "NHI_ZUES_CONVERSATION_REPLY_ENABLED": env.get(
                 "NHI_ZUES_CONVERSATION_REPLY_ENABLED", "false"
             ),
+            "NHI_ZUES_HEADLESS": env.get("NHI_ZUES_HEADLESS", "false"),
             "NHI_ZUES_DRY_RUN": env.get("NHI_ZUES_DRY_RUN", "true"),
             "NHI_ZUES_PROACTIVE_APPROVAL_REQUIRED": env.get(
                 "NHI_ZUES_PROACTIVE_APPROVAL_REQUIRED", "true"
@@ -1566,6 +1568,7 @@ def update_env(values: dict) -> None:
         "NHI_ZUES_LLM_ENABLED",
         "NHI_ZUES_DRAFT_IN_DRY_RUN",
         "NHI_ZUES_CONVERSATION_REPLY_ENABLED",
+        "NHI_ZUES_HEADLESS",
         "NHI_ZUES_DRY_RUN",
         "NHI_ZUES_PROACTIVE_APPROVAL_REQUIRED",
         "NHI_ZUES_CHARACTER_CARD",

@@ -21,12 +21,19 @@ class DiscordWebSession:
     async def __aenter__(self) -> "DiscordWebSession":
         self.profile_dir.mkdir(parents=True, exist_ok=True)
         self._playwright = await async_playwright().start()
+        args = ["--disable-blink-features=AutomationControlled"]
+        launch_headless = self.headless
+        if self.headless:
+            # Discord does not reliably reuse the signed-in profile in true headless mode.
+            # Use an off-screen headful window for silent automation instead.
+            launch_headless = False
+            args.extend(["--window-position=-32000,-32000", "--window-size=1440,1000"])
         self._context = await self._playwright.chromium.launch_persistent_context(
             user_data_dir=str(self.profile_dir),
             channel=self.browser_channel,
-            headless=self.headless,
+            headless=launch_headless,
             viewport={"width": 1440, "height": 1000},
-            args=["--disable-blink-features=AutomationControlled"],
+            args=args,
         )
         self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
         return self
@@ -326,9 +333,15 @@ class DiscordWebSession:
             return True
 
         login_form = self.page.locator('input[name="email"], input[type="email"]').first
+        if email and password:
+            try:
+                await login_form.wait_for(state="visible", timeout=15_000)
+            except Exception:
+                pass
         if await login_form.count() and email and password:
             await login_form.fill(email)
             password_input = self.page.locator('input[name="password"], input[type="password"]').first
+            await password_input.wait_for(state="visible", timeout=15_000)
             await password_input.fill(password)
             await password_input.press("Enter")
 
