@@ -116,13 +116,15 @@ function renderServerPanel() {
   $("channelList").innerHTML = channels()
     .map((chan, index) => {
       const name = chan.label || chan.channel_id;
+      const type = channelTypeLabel(chan.channel_type);
+      const meta = [type, chan.category].filter(Boolean).join(" - ") || `ID ${chan.channel_id || ""}`;
       return `
         <div class="channel-row ${index === selectedChannel ? "active" : ""}">
-          <div class="channel-name" data-channel="${index}">
+          <div class="channel-name" data-channel="${index}" title="Channel ID: ${escapeAttr(chan.channel_id || "")}">
             <img src="/assets/placeholders/channel.svg" alt="" />
             <div>
-              <strong>${escapeHtml(name)}</strong>
-              <span>${escapeHtml(chan.channel_id || "")}</span>
+              <strong>${escapeHtml(formatChannelName(name, chan.channel_type))}</strong>
+              <span>${escapeHtml(meta)}</span>
             </div>
           </div>
           <div class="channel-actions">
@@ -340,7 +342,7 @@ async function syncDiscordServers() {
   selectedChannel = Math.min(selectedChannel, channels().length - 1);
   if (selectedChannel < 0) selectedChannel = 0;
   render();
-  toast(`Synced ${result.discovered} servers (${result.added} new)`);
+  toast(`Synced ${result.discovered} servers and ${result.channels_discovered || 0} channels`);
 }
 
 async function saveDiscordCredentials() {
@@ -406,6 +408,23 @@ function lines(id) {
 function strBool(value, fallback) {
   if (value === undefined || value === null || value === "") return fallback;
   return String(value).toLowerCase() === "true";
+}
+
+function channelTypeLabel(type) {
+  if (type === "forum") return "forum channel";
+  if (type === "announcement") return "announcement channel";
+  if (type === "voice") return "voice channel";
+  if (type === "stage") return "stage channel";
+  if (type === "text") return "text channel";
+  return "";
+}
+
+function formatChannelName(name, type) {
+  if (!name) return "";
+  if ((type === "text" || type === "forum" || type === "announcement" || !type) && !String(name).startsWith("#")) {
+    return `# ${name}`;
+  }
+  return name;
 }
 
 function escapeHtml(value) {

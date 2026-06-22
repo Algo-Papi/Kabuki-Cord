@@ -128,6 +128,186 @@ class DiscordWebSession:
             if row.get("server_id")
         ]
 
+    async def discover_channels(self, server_id: str) -> list[dict[str, str]]:
+        await self._open_server(server_id)
+        try:
+            await self.page.wait_for_function(
+                """
+                (serverId) => Array.from(
+                    document.querySelectorAll('[data-list-item-id^="channels___"]')
+                ).some((node) => {
+                    const marker = node.getAttribute("data-list-item-id") || "";
+                    const href = node.getAttribute("href") || "";
+                    return /^channels___\\d{5,}$/.test(marker)
+                        && (href.includes(`/channels/${serverId}/`) || node.getAttribute("aria-label"));
+                })
+                """,
+                server_id,
+                timeout=18_000,
+            )
+        except Exception:
+            await self.page.wait_for_timeout(1500)
+
+        await self._reset_channel_sidebar_scroll()
+        seen: dict[str, dict[str, str]] = {}
+        last_count = -1
+        stable_rounds = 0
+        for _ in range(12):
+            rows = await self._visible_channel_rows(server_id)
+            for row in rows:
+                seen[row["channel_id"]] = row
+
+            if len(seen) == last_count:
+                stable_rounds += 1
+            else:
+                stable_rounds = 0
+            last_count = len(seen)
+
+            at_bottom = await self._scroll_channel_sidebar()
+            if at_bottom and stable_rounds >= 1:
+                break
+
+        return list(seen.values())
+
+    async def _open_server(self, server_id: str) -> None:
+        selector = f'[data-list-item-id="guildsnav___{server_id}"]'
+        try:
+            item = self.page.locator(selector).first
+            if await item.count():
+                await item.scroll_into_view_if_needed(timeout=5_000)
+                await item.click(timeout=10_000)
+            else:
+                await self.page.goto(f"https://discord.com/channels/{server_id}", wait_until="domcontentloaded")
+        except Exception:
+            await self.page.goto(f"https://discord.com/channels/{server_id}", wait_until="domcontentloaded")
+
+        try:
+            await self.page.wait_for_function(
+                "(serverId) => location.href.includes(`/channels/${serverId}`)",
+                server_id,
+                timeout=15_000,
+            )
+        except Exception:
+            await self.page.wait_for_timeout(1500)
+
+    async def _visible_channel_rows(self, server_id: str) -> list[dict[str, str]]:
+        rows = await self.page.evaluate(
+            """
+            (serverId) => {
+                const rows = [];
+                const cleanLabel = (value) => String(value || "")
+                    .replace(/^\\s*unread,\\s*/i, "")
+                    .replace(/^\\s*unread messages?,\\s*/i, "")
+                    .replace(/^\\s*\\d+\\s+mentions?,\\s*/i, "")
+                    .replace(/^\\s*\\d+\\s+unread messages?,\\s*/i, "")
+                    .replace(/\\s*\\((text|forum|voice|stage|announcement) channel\\)\\s*$/i, "")
+                    .replace(/\\s*\\(voice chat\\)\\s*$/i, "")
+                    .trim();
+                const channelType = (value, text) => {
+                    const raw = `${value || ""} ${text || ""}`.toLowerCase();
+                    if (raw.includes("(announcement channel)") || raw.startsWith("announcement")) return "announcement";
+                    if (raw.includes("(forum channel)") || raw.startsWith("forum")) return "forum";
+                    if (raw.includes("(voice channel)") || raw.startsWith("voice")) return "voice";
+                    if (raw.includes("(stage channel)") || raw.startsWith("stage")) return "stage";
+                    return "text";
+                };
+                const categoryFor = (node) => {
+                    let cursor = node;
+                    while (cursor) {
+                        cursor = cursor.previousElementSibling;
+                        const category = cursor?.querySelector?.('[aria-label$="(category)"]');
+                        const categoryLabel = category?.getAttribute("aria-label");
+                        if (categoryLabel) {
+                            return categoryLabel
+                                .replace(/\\s*\\(category\\)\\s*$/i, "")
+                                .replace(/^\\s*[-\\u2500]+\\s*/, "")
+                                .trim();
+                        }
+                    }
+                    return "";
+                };
+                const candidates = Array.from(
+                    document.querySelectorAll('[data-list-item-id^="channels___"]')
+                );
+                for (const node of candidates) {
+                    const marker = node.getAttribute("data-list-item-id") || "";
+                    const markerMatch = marker.match(/^channels___(\\d{5,})$/);
+                    if (!markerMatch) continue;
+                    const href = node.getAttribute("href") || "";
+                    const hrefMatch = href.match(new RegExp(`/channels/${serverId}/(\\\\d{5,})`));
+                    const channelId = hrefMatch?.[1] || markerMatch[1];
+                    const rawLabel = node.getAttribute("aria-label") || node.textContent || "";
+                    const type = channelType(rawLabel, node.textContent || "");
+                    const canScan = Boolean(hrefMatch) && (
+                        type === "text" || type === "forum" || type === "announcement"
+                    );
+                    if (!rawLabel || !canScan) continue;
+                    rows.push({
+                        channel_id: channelId,
+                        label: cleanLabel(rawLabel),
+                        channel_type: type,
+                        category: categoryFor(node),
+                        can_scan: String(canScan),
+                    });
+                }
+                return rows;
+            }
+            """,
+            server_id,
+        )
+        return [
+            {
+                "channel_id": str(row["channel_id"]),
+                "label": str(row.get("label") or ""),
+                "channel_type": str(row.get("channel_type") or "text"),
+                "category": str(row.get("category") or ""),
+                "can_scan": str(row.get("can_scan") or "false"),
+            }
+            for row in rows
+            if row.get("channel_id") and row.get("label")
+        ]
+
+    async def _scroll_channel_sidebar(self) -> bool:
+        return bool(
+            await self.page.evaluate(
+                """
+                () => {
+                    const firstChannel = document.querySelector('[data-list-item-id^="channels___"]');
+                    let scroller = firstChannel?.parentElement || null;
+                    while (scroller && scroller !== document.body) {
+                        if (scroller.scrollHeight > scroller.clientHeight + 20) break;
+                        scroller = scroller.parentElement;
+                    }
+                    if (!scroller || scroller === document.body) return true;
+                    const before = scroller.scrollTop;
+                    scroller.scrollTop = Math.min(
+                        scroller.scrollTop + Math.max(scroller.clientHeight * 0.8, 400),
+                        scroller.scrollHeight
+                    );
+                    const atBottom = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 4;
+                    return atBottom || scroller.scrollTop === before;
+                }
+                """
+            )
+        )
+
+    async def _reset_channel_sidebar_scroll(self) -> None:
+        await self.page.evaluate(
+            """
+            () => {
+                const firstChannel = document.querySelector('[data-list-item-id^="channels___"]');
+                let scroller = firstChannel?.parentElement || null;
+                while (scroller && scroller !== document.body) {
+                    if (scroller.scrollHeight > scroller.clientHeight + 20) break;
+                    scroller = scroller.parentElement;
+                }
+                if (scroller && scroller !== document.body) {
+                    scroller.scrollTop = 0;
+                }
+            }
+            """
+        )
+
     async def login_if_needed(
         self,
         *,

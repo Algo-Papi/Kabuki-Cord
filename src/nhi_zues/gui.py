@@ -258,7 +258,7 @@ def usage_state() -> dict:
 def sync_discord_servers() -> dict:
     config = load_config()
     try:
-        discovered = asyncio.run(_discover_discord_servers(config))
+        discovered = asyncio.run(_discover_discord_workspace(config))
     except RuntimeError:
         raise
     except Exception as exc:
@@ -277,6 +277,10 @@ def sync_discord_servers() -> dict:
 
     added = 0
     updated = 0
+    channels_discovered = 0
+    channels_added = 0
+    channels_updated = 0
+    next_server_list: list[dict] = []
     for server in discovered:
         server_id = str(server["server_id"])
         label = str(server.get("label") or "")
@@ -292,23 +296,88 @@ def sync_discord_servers() -> dict:
             server_list.append(existing)
             by_id[server_id] = existing
             added += 1
-            continue
-        if label and not str(existing.get("label") or "").strip():
+        if label and str(existing.get("label") or "").strip() != label:
             existing["label"] = label
             updated += 1
+        channel_stats = _merge_channels(existing, server.get("channels", []))
+        channels_discovered += channel_stats["discovered"]
+        channels_added += channel_stats["added"]
+        channels_updated += channel_stats["updated"]
+        next_server_list.append(existing)
 
-    next_payload = {**payload, "servers": server_list}
+    discovered_ids = {str(server["server_id"]) for server in discovered}
+    next_server_list.extend(
+        server
+        for server in server_list
+        if isinstance(server, dict) and str(server.get("server_id") or "") not in discovered_ids
+    )
+
+    next_payload = {**payload, "servers": next_server_list}
     _write_json(config.servers_file, next_payload)
     return {
         "ok": True,
         "discovered": len(discovered),
         "added": added,
         "updated": updated,
+        "channels_discovered": channels_discovered,
+        "channels_added": channels_added,
+        "channels_updated": channels_updated,
         "state": app_state(),
     }
 
 
-async def _discover_discord_servers(config: AppConfig) -> list[dict[str, str]]:
+def _merge_channels(server: dict, discovered_channels: list[dict]) -> dict[str, int]:
+    existing_channels = server.get("channels")
+    if not isinstance(existing_channels, list):
+        existing_channels = []
+
+    by_id: dict[str, dict] = {}
+    for item in existing_channels:
+        if isinstance(item, dict) and item.get("channel_id"):
+            by_id[str(item["channel_id"])] = item
+
+    updated = 0
+    added = 0
+    next_channels: list[dict] = []
+    for channel in discovered_channels:
+        channel_id = str(channel.get("channel_id") or "")
+        if not channel_id:
+            continue
+        existing = by_id.get(channel_id)
+        if existing is None:
+            existing = {
+                "channel_id": channel_id,
+                "label": str(channel.get("label") or ""),
+                "channel_type": str(channel.get("channel_type") or "text"),
+                "category": str(channel.get("category") or ""),
+                "scan_enabled": False,
+                "engage_enabled": False,
+                "auto_respond_enabled": False,
+            }
+            added += 1
+        else:
+            for key in ("label", "channel_type", "category"):
+                value = str(channel.get(key) or "")
+                if value and str(existing.get(key) or "") != value:
+                    existing[key] = value
+                    updated += 1
+        next_channels.append(existing)
+
+    discovered_ids = {str(channel.get("channel_id") or "") for channel in discovered_channels}
+    next_channels.extend(
+        channel
+        for channel in existing_channels
+        if (
+            isinstance(channel, dict)
+            and str(channel.get("channel_id") or "") not in discovered_ids
+            and str(channel.get("label") or "").strip()
+        )
+    )
+    server["channels"] = next_channels
+    return {"discovered": len(discovered_channels), "added": added, "updated": updated}
+
+
+async def _discover_discord_workspace(config: AppConfig) -> list[dict]:
     credentials = get_discord_credentials()
     async with DiscordWebSession(
         config.profile_dir,
@@ -323,6 +392,8 @@ async def _discover_discord_servers(config: AppConfig) -> list[dict[str, str]]:
         if not logged_in:
             raise RuntimeError("Discord is not signed in. Use Sign In first, then Sync Servers.")
         servers = await session.discover_servers()
+        for server in servers:
+            server["channels"] = await session.discover_channels(server["server_id"])
     if not servers:
         raise RuntimeError("No Discord servers were found in the signed-in browser profile.")
     return servers
