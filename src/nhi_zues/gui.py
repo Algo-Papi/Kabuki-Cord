@@ -1555,6 +1555,7 @@ def regenerate_approval(body: dict) -> None:
     operator_instruction = str(body.get("instruction") or "").strip()
     target_user_key = str(body.get("target_user_key") or "")
     current_draft = str(body.get("draft") or "").strip()
+    original_draft = str(body.get("original_draft") or "").strip()
     if not approval_id:
         raise RuntimeError("Missing approval id.")
     lock = _approval_regeneration_lock(approval_id)
@@ -1566,6 +1567,7 @@ def regenerate_approval(body: dict) -> None:
             operator_instruction=operator_instruction,
             target_user_key=target_user_key,
             current_draft=current_draft,
+            original_draft=original_draft,
         )
     finally:
         lock.release()
@@ -1602,6 +1604,7 @@ def _regenerate_approval_locked(
     operator_instruction: str,
     target_user_key: str,
     current_draft: str,
+    original_draft: str,
 ) -> None:
     config = load_config()
     queue = ApprovalQueue(config.state_dir / "approvals.json")
@@ -1614,14 +1617,16 @@ def _regenerate_approval_locked(
         for message in _memory_context(config.state_dir / "memory.json", item.channel_id)
         if message.message_id in source_ids
     ]
+    effective_target_user_key = target_user_key or _source_user_key(source_messages)
     decision = asyncio.run(
         _generate_manual_decision(
             config,
             server_id=item.server_id,
             channel_id=item.channel_id,
-            target_user_key=target_user_key,
+            target_user_key=effective_target_user_key,
             source_messages=source_messages,
             current_draft=current_draft or item.draft,
+            original_draft=original_draft or item.draft,
             operator_instruction=operator_instruction,
         )
     )
@@ -1635,7 +1640,7 @@ def _regenerate_approval_locked(
         channel_id=item.channel_id,
         summary=operator_instruction or decision.reason,
         draft=draft,
-        user_key=target_user_key,
+        user_key=effective_target_user_key,
     )
 
 
@@ -1860,12 +1865,18 @@ async def _generate_manual_decision(
     target_user_key: str,
     current_draft: str,
     operator_instruction: str,
+    original_draft: str = "",
     source_messages: list[MessageRecord] | None = None,
 ):
     memory = ConversationMemory(config.state_dir / "memory.json")
     memory.load()
     full_context = memory.context(channel_id, limit=120)
-    context = _manual_decision_context(full_context, source_messages or [])
+    effective_target_user_key = target_user_key or _source_user_key(source_messages or [])
+    context = _manual_decision_context(
+        full_context,
+        source_messages or [],
+        target_user_key=effective_target_user_key,
+    )
     user_memories = memory.user_context_for(context, limit=10)
     user_notes = UserInstructionStore(config.state_dir / "user_instructions.json").for_users(
         [user.user_key for user in user_memories],
@@ -1896,6 +1907,11 @@ async def _generate_manual_decision(
         writing_misspellings=config.writing_misspellings,
     )
     selected_text = _source_message_prompt(source_messages or [])
+    targeted_context = _regeneration_context_pack(
+        full_context,
+        target_user_key=effective_target_user_key,
+        source_messages=source_messages or [],
+    )
     prompt_instruction = operator_instruction
     if selected_text:
         prompt_instruction = (
@@ -1910,8 +1926,10 @@ async def _generate_manual_decision(
         user_memories=user_memories,
         user_instructions=user_notes,
         current_draft=current_draft,
+        original_draft=original_draft,
         operator_instruction=prompt_instruction,
-        target_user_key=target_user_key,
+        target_user_key=effective_target_user_key,
+        targeted_context=targeted_context,
     )
 
 
@@ -1919,6 +1937,7 @@ def _manual_decision_context(
     context: list[MessageRecord],
     source_messages: list[MessageRecord],
     *,
+    target_user_key: str = "",
     before: int = 14,
     after: int = 8,
     recent: int = 8,
@@ -1926,31 +1945,98 @@ def _manual_decision_context(
     if not context:
         return []
     source_ids = {message.message_id for message in source_messages}
+    target_messages = _last_messages_for_user(context, target_user_key, limit=5)
+    other_messages = _last_other_messages(context, target_user_key, limit=5)
     if not source_ids:
-        return context[-24:]
+        return _merge_context_messages([*context[-24:], *target_messages, *other_messages], context)[-36:]
     selected_indexes = [
         index for index, message in enumerate(context) if message.message_id in source_ids
     ]
     if not selected_indexes:
-        return context[-24:]
+        return _merge_context_messages([*context[-24:], *target_messages, *other_messages], context)[-36:]
     start = max(0, min(selected_indexes) - before)
     end = min(len(context), max(selected_indexes) + after + 1)
     selected_window = context[start:end]
     recent_window = context[-recent:]
-    by_id: dict[str, MessageRecord] = {}
-    for message in [*selected_window, *recent_window]:
-        by_id[message.message_id] = message
-    return list(by_id.values())[-32:]
+    return _merge_context_messages(
+        [*selected_window, *recent_window, *target_messages, *other_messages],
+        context,
+    )[-40:]
+
+
+def _source_user_key(source_messages: list[MessageRecord]) -> str:
+    if not source_messages:
+        return ""
+    return _message_record_user_key(source_messages[-1])
+
+
+def _last_messages_for_user(
+    context: list[MessageRecord],
+    target_user_key: str,
+    *,
+    limit: int,
+) -> list[MessageRecord]:
+    if not target_user_key:
+        return []
+    matches = [
+        message
+        for message in reversed(context)
+        if _message_record_user_key(message) == target_user_key and message.text.strip()
+    ]
+    return list(reversed(matches[:limit]))
+
+
+def _last_other_messages(
+    context: list[MessageRecord],
+    target_user_key: str,
+    *,
+    limit: int,
+) -> list[MessageRecord]:
+    matches = [
+        message
+        for message in reversed(context)
+        if (not target_user_key or _message_record_user_key(message) != target_user_key) and message.text.strip()
+    ]
+    return list(reversed(matches[:limit]))
+
+
+def _merge_context_messages(
+    messages: list[MessageRecord],
+    ordered_context: list[MessageRecord],
+) -> list[MessageRecord]:
+    wanted = {message.message_id: message for message in messages if message.message_id}
+    merged = [message for message in ordered_context if message.message_id in wanted]
+    seen = {message.message_id for message in merged}
+    merged.extend(message for message in messages if message.message_id not in seen)
+    return merged
 
 
 def _source_message_prompt(messages: list[MessageRecord]) -> str:
     lines = []
-    for message in messages[-4:]:
+    for message in messages[-5:]:
         text = message.text.strip()
         if len(text) > 600:
             text = text[:597].rstrip() + "..."
         lines.append(f"- {message.author}: {text}")
     return "\n".join(lines)
+
+
+def _regeneration_context_pack(
+    context: list[MessageRecord],
+    *,
+    target_user_key: str,
+    source_messages: list[MessageRecord],
+) -> str:
+    sections: list[str] = []
+    target_messages = _last_messages_for_user(context, target_user_key, limit=5)
+    other_messages = _last_other_messages(context, target_user_key, limit=5)
+    if target_messages:
+        sections.append("Last 5 messages from the target account:\n" + _source_message_prompt(target_messages))
+    if other_messages:
+        sections.append("5 most recent messages from other accounts:\n" + _source_message_prompt(other_messages))
+    if source_messages:
+        sections.append("Original selected/source messages:\n" + _source_message_prompt(source_messages))
+    return "\n\n".join(sections)
 
 
 async def _send_approval_message(

@@ -173,7 +173,9 @@ class ReplyPlanner:
         user_instructions: dict[str, list[UserInstruction]],
         current_draft: str,
         operator_instruction: str,
+        original_draft: str = "",
         target_user_key: str = "",
+        targeted_context: str = "",
     ) -> DraftDecision:
         if not self.enabled:
             return DraftDecision(True, "would regenerate; LLM disabled by NHI_ZUES_LLM_ENABLED")
@@ -203,11 +205,14 @@ class ReplyPlanner:
             f"Target user: {target}\n\n"
             f"Known user context:\n{user_memory}\n\n"
             f"Recent conversation:\n{transcript}\n\n"
-            f"Current draft:\n{current_draft or '(none)'}\n\n"
+            f"Original queued draft:\n{original_draft or '(none)'}\n\n"
+            f"Current editor draft:\n{current_draft or '(none)'}\n\n"
             f"Operator direction:\n{operator_instruction or 'Make a better natural response for the selected context.'}\n\n"
+            f"Targeted regeneration context:\n{targeted_context or '(none)'}\n\n"
             f"{voice_guard_prompt(avoid_question=avoid_question, recent_character_lines=recent_character_lines, response_move=response_move)}\n\n"
             "Generate one revised Discord reply for approval. Aim for 12-35 words and never exceed 45 words. Prefer one sentence. Two sentences only if the second adds a real detail. "
-            "Do not preserve the current draft's structure if it sounds synthetic."
+            "Use the original queued draft and current editor draft as reference material, especially when the operator says things like 'instead of that' or 'make that more specific.' "
+            "Keep any useful conversational hook from the earlier draft, but rewrite the parts the operator is correcting. Do not preserve the draft's structure if it sounds synthetic."
         )
         instructions = character.prompt_text()
         memory_prompt = character_memory.prompt_text()

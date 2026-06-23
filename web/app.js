@@ -453,6 +453,7 @@ function renderGrowth() {
 function renderSelectedUserDetails() {
   const user = (appState.memory.users || []).find((item) => item.user_key === selectedUserKey);
   const notes = (appState.user_instructions.items || []).filter((item) => item.user_key === selectedUserKey);
+  const activeNotes = notes.filter(userInstructionAppliesNow);
   $("selectedUserDetails").innerHTML = user
     ? `
       <div class="note-item">
@@ -460,8 +461,19 @@ function renderSelectedUserDetails() {
         ${escapeHtml(user.summary || "No long-form summary yet.")}<br />
         <span>Recent topics: ${escapeHtml((user.recent_topics || []).join(", ") || "none")}</span>
       </div>
+      <div class="note-item guidance-current">
+        <strong>Guidance active now</strong><br />
+        ${activeNotes.length
+          ? `${activeNotes.length} note${activeNotes.length === 1 ? "" : "s"} will apply when drafting or regenerating against this user in the selected server/channel.`
+          : "No saved note currently applies to the selected server/channel."}
+      </div>
       <div class="note-list compact-notes">
-        ${notes.map((item) => `<div class="note-item"><strong>${escapeHtml(scopeLabel(item))}</strong><br />${escapeHtml(item.note)}</div>`).join("") || `<div class="note-item">No behavior notes for this user yet.</div>`}
+        ${notes.map((item) => `
+          <div class="note-item ${userInstructionAppliesNow(item) ? "active-note" : ""}">
+            <strong>${escapeHtml(scopeLabel(item))}</strong><br />
+            ${escapeHtml(item.note)}
+          </div>
+        `).join("") || `<div class="note-item">No behavior notes for this user yet.</div>`}
       </div>
     `
     : `<div class="note-item">Select a user to add scoped behavior guidance.</div>`;
@@ -614,6 +626,7 @@ async function regenerateApproval(approvalId) {
   if (approvalRegenerationState[approvalId]?.state === "regenerating") return;
   const instruction = document.querySelector(`[data-approval-instruction="${cssEscape(approvalId)}"]`)?.value.trim() || "";
   const draft = approvalDraft(approvalId);
+  const queuedDraft = (appState.approvals || []).find((item) => item.approval_id === approvalId)?.draft || "";
   const opId = `regenerate:${approvalId}`;
   startOperation(opId, "Regenerating draft", "Waiting for OpenAI response", "api", "bi-stars");
   approvalRegenerationState[approvalId] = {
@@ -628,6 +641,7 @@ async function regenerateApproval(approvalId) {
       body: JSON.stringify({
         approval_id: approvalId,
         draft,
+        original_draft: queuedDraft,
         instruction,
         target_user_key: approvalTargets[approvalId]?.user_key || "",
       }),
@@ -1554,6 +1568,14 @@ function scopeLabel(item) {
   }
   if (item.server_id) return findServerLabel(item.server_id);
   return "All servers";
+}
+
+function userInstructionAppliesNow(item) {
+  const currentServer = server();
+  const currentChannel = channel();
+  if (item.server_id && item.server_id !== currentServer?.server_id) return false;
+  if (item.channel_id && item.channel_id !== currentChannel?.channel_id) return false;
+  return true;
 }
 
 function findServerLabel(serverId) {
