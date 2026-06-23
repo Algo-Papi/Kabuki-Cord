@@ -798,13 +798,21 @@ function renderObserved() {
   }
   $("observedConversation").innerHTML =
     (observed.poster_summaries || [])
-      .map((poster) => `
+      .map((poster) => {
+        const latestMessageId = poster.message_id || poster.latest_message_id || "";
+        return `
         <div class="observed-card">
           <div class="observed-copy">
             <strong>${escapeHtml(poster.display_name)}</strong>
             <span>${escapeHtml(poster.summary)}</span>
           </div>
           <div class="observed-actions">
+            <button
+              class="small-button observed-open-action"
+              data-open-observed-message="${escapeAttr(latestMessageId)}"
+              title="Open this user's most recent observed post in Discord."
+              ${latestMessageId ? "" : "disabled"}
+            ><i class="bi bi-box-arrow-up-right"></i> Open Latest Post</button>
             <button
               class="small-button"
               data-suggest-user="${escapeAttr(poster.user_key)}"
@@ -817,14 +825,37 @@ function renderObserved() {
             ><i class="bi bi-person-gear"></i> Guide User</button>
           </div>
         </div>
-      `)
+      `;
+      })
       .join("") || `<div class="note-item">No recent unique posters recorded.</div>`;
+  document.querySelectorAll("[data-open-observed-message]").forEach((button) => {
+    button.addEventListener("click", () => openObservedPosterMessage(button.dataset.openObservedMessage).catch((error) => toast(error.message)));
+  });
   document.querySelectorAll("[data-suggest-user]").forEach((button) => {
     button.addEventListener("click", () => createSuggestedApproval(button.dataset.suggestUser));
   });
   document.querySelectorAll("[data-guide-user]").forEach((button) => {
     button.addEventListener("click", () => openUserGuidance(button.dataset.guideUser));
   });
+}
+
+async function openObservedPosterMessage(messageId) {
+  const currentServer = server();
+  const currentChannel = channel();
+  if (!currentServer?.server_id || !currentChannel?.channel_id || !messageId) {
+    toast("No recent observed post target for this user yet");
+    return;
+  }
+  await api("/api/open-discord-channel", {
+    method: "POST",
+    body: JSON.stringify({
+      server_id: currentServer.server_id,
+      channel_id: currentChannel.channel_id,
+      message_id: messageId,
+    }),
+  });
+  await loadState();
+  toast("Opened latest observed post");
 }
 
 function renderHistory() {

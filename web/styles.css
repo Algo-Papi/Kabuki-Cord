@@ -35,6 +35,40 @@ body {
   letter-spacing: 0;
 }
 
+body::before,
+body::after {
+  content: "";
+  position: fixed;
+  pointer-events: none;
+}
+
+body::before {
+  z-index: 80;
+  left: 50%;
+  top: 50%;
+  width: 168px;
+  height: 168px;
+  border-radius: 36px;
+  background: url("/assets/app-icon-192.png") center / contain no-repeat;
+  transform: translate(-50%, -50%) scale(1.18);
+  filter:
+    drop-shadow(0 0 10px rgba(87, 222, 239, 0.18))
+    drop-shadow(0 24px 48px rgba(0, 0, 0, 0.52));
+  opacity: 0;
+  animation: kabuki-logo-flight 2.35s cubic-bezier(0.2, 0.8, 0.14, 1) 0.12s forwards;
+}
+
+body::after {
+  z-index: 79;
+  inset: 0;
+  background:
+    radial-gradient(circle at 50% 46%, rgba(93, 218, 236, 0.2), transparent 22%),
+    radial-gradient(circle at 50% 48%, rgba(217, 185, 91, 0.14), transparent 34%),
+    linear-gradient(90deg, rgba(74, 14, 20, 0.92), rgba(14, 17, 22, 0.96) 24%, rgba(9, 12, 16, 0.98) 50%, rgba(14, 17, 22, 0.96) 76%, rgba(74, 14, 20, 0.92));
+  opacity: 0;
+  animation: kabuki-curtain-reveal 2.5s ease-out forwards;
+}
+
 button,
 input,
 select,
@@ -52,6 +86,10 @@ button {
   height: 100vh;
   min-width: 1180px;
   overflow: hidden;
+  opacity: 0;
+  transform: scale(0.986);
+  filter: blur(7px);
+  animation: kabuki-app-materialize 950ms cubic-bezier(0.22, 0.9, 0.2, 1) 1.55s forwards;
   background:
     radial-gradient(circle at 60% -20%, rgba(149, 101, 255, 0.12), transparent 28%),
     linear-gradient(135deg, #11171d 0%, #10151a 58%, #0d1317 100%);
@@ -530,6 +568,7 @@ textarea:focus {
 
 .scanner-sprite {
   --scanner-sheet: url("/assets/scanner-kabuki-sheet.png");
+  --scanner-width: 1200px;
   display: block;
   width: 60px;
   height: 60px;
@@ -537,7 +576,7 @@ textarea:focus {
   background-image: var(--scanner-sheet);
   background-repeat: no-repeat;
   background-position: 0 0;
-  background-size: 960px 60px;
+  background-size: var(--scanner-width) 60px;
   filter: drop-shadow(0 2px 2px rgba(0, 0, 0, 0.44));
 }
 
@@ -613,7 +652,7 @@ textarea:focus {
 .operation-status.backfill .scanner-sprite,
 .operation-status.latest .scanner-sprite,
 .operation-status.refresh .scanner-sprite {
-  animation: scanner-dance 4.2s steps(16, end) infinite;
+  animation: scanner-dance 6.4s steps(20, end) infinite;
 }
 
 .operation-status.sync {
@@ -647,27 +686,27 @@ textarea:focus {
 }
 
 .operation-status.sync .scanner-sprite {
-  animation-duration: 4.8s;
+  animation-duration: 6.9s;
   filter: drop-shadow(0 0 7px rgba(89, 224, 239, 0.28)) drop-shadow(0 2px 2px rgba(0, 0, 0, 0.44));
 }
 
 .operation-status.repair .scanner-sprite {
-  animation-duration: 4.4s;
+  animation-duration: 6.4s;
   filter: drop-shadow(0 0 7px rgba(255, 181, 72, 0.26)) drop-shadow(0 2px 2px rgba(0, 0, 0, 0.44));
 }
 
 .operation-status.backfill .scanner-sprite {
-  animation-duration: 4.9s;
+  animation-duration: 7s;
   filter: drop-shadow(0 0 7px rgba(95, 166, 255, 0.26)) drop-shadow(0 2px 2px rgba(0, 0, 0, 0.44));
 }
 
 .operation-status.latest .scanner-sprite {
-  animation-duration: 4.6s;
+  animation-duration: 6.7s;
   filter: drop-shadow(0 0 7px rgba(255, 221, 100, 0.24)) drop-shadow(0 2px 2px rgba(0, 0, 0, 0.44));
 }
 
 .operation-status.refresh .scanner-sprite {
-  animation-duration: 4.5s;
+  animation-duration: 6.5s;
   filter: drop-shadow(0 0 7px rgba(167, 116, 255, 0.28)) drop-shadow(0 2px 2px rgba(0, 0, 0, 0.44));
 }
 
@@ -682,7 +721,7 @@ textarea:focus {
 }
 
 .operation-status.scanning .scanner-sprite {
-  animation: scanner-dance 5.8s steps(16, end) infinite;
+  animation: scanner-dance 8.4s steps(20, end) infinite;
   filter: drop-shadow(0 0 8px rgba(95, 201, 120, 0.32)) drop-shadow(0 2px 2px rgba(0, 0, 0, 0.44));
 }
 
@@ -697,7 +736,7 @@ textarea:focus {
 }
 
 .operation-status.done .scanner-sprite {
-  background-position: -900px 0;
+  background-position: -1140px 0;
   animation: none;
 }
 
@@ -722,6 +761,81 @@ textarea:focus {
   filter: grayscale(0.25) drop-shadow(0 2px 2px rgba(0, 0, 0, 0.44));
 }
 
+@keyframes kabuki-logo-flight {
+  0% {
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%) scale(1.18);
+    filter:
+      drop-shadow(0 0 0 rgba(87, 222, 239, 0))
+      drop-shadow(0 24px 48px rgba(0, 0, 0, 0.52));
+    opacity: 0;
+  }
+
+  12% {
+    opacity: 1;
+  }
+
+  38% {
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%) scale(1.28);
+    filter:
+      drop-shadow(0 0 22px rgba(87, 222, 239, 0.62))
+      drop-shadow(0 0 44px rgba(149, 101, 255, 0.32))
+      drop-shadow(0 26px 52px rgba(0, 0, 0, 0.54));
+    opacity: 1;
+  }
+
+  72% {
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%) scale(0.9);
+    opacity: 1;
+  }
+
+  100% {
+    left: 42px;
+    top: 38px;
+    transform: translate(-50%, -50%) scale(0.286);
+    filter:
+      drop-shadow(0 0 8px rgba(87, 222, 239, 0.12))
+      drop-shadow(0 10px 20px rgba(0, 0, 0, 0.34));
+    opacity: 0;
+  }
+}
+
+@keyframes kabuki-curtain-reveal {
+  0% {
+    opacity: 1;
+    clip-path: inset(0 0 0 0);
+  }
+
+  48% {
+    opacity: 1;
+    clip-path: inset(0 0 0 0);
+  }
+
+  100% {
+    opacity: 0;
+    clip-path: inset(0 50% 0 50%);
+  }
+}
+
+@keyframes kabuki-app-materialize {
+  0% {
+    opacity: 0;
+    transform: scale(0.986);
+    filter: blur(7px);
+  }
+
+  100% {
+    opacity: 1;
+    transform: scale(1);
+    filter: blur(0);
+  }
+}
+
 @keyframes status-spin {
   to {
     transform: rotate(360deg);
@@ -730,13 +844,28 @@ textarea:focus {
 
 @keyframes scanner-dance {
   to {
-    background-position: -960px 0;
+    background-position: -1200px 0;
   }
 }
 
 @keyframes scanner-alert {
   50% {
     transform: translateX(1px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body::before,
+  body::after {
+    animation: none;
+    opacity: 0;
+  }
+
+  .shell {
+    animation: none;
+    opacity: 1;
+    transform: none;
+    filter: none;
   }
 }
 
@@ -1233,6 +1362,10 @@ button:disabled {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
+}
+
+.observed-open-action {
+  grid-column: 1 / -1;
 }
 
 .observed-actions .small-button {

@@ -1219,6 +1219,7 @@ def observed_conversation_state(path: Path) -> dict:
                 {
                     "user_key": key,
                     "display_name": str(row.get("author") or "unknown"),
+                    "message_id": str(row.get("message_id") or ""),
                     "message_count": len(user_messages),
                     "summary": _summarize_messages(texts),
                     "recent_text": texts[-1] if texts else "",
