@@ -41,6 +41,28 @@ ABSTRACT_TELLS = (
     "interesting",
 )
 
+FORMULAIC_RECAP_OPENERS = (
+    "that part about",
+    "the part about",
+    "the thing about",
+    "what you said about",
+    "what you're saying",
+    "what you are saying",
+    "the way you framed",
+    "the way this is framed",
+    "i think the interesting part",
+    "the interesting part",
+    "this is where",
+)
+
+INTERPRETIVE_BRIDGES = (
+    "sounds like",
+    "seems like",
+    "feels like",
+    "reads like",
+    "comes off like",
+)
+
 
 DEFAULT_RESPONSE_MOVES = (
     "plain pushback: challenge one word or assumption directly, then stop. No question.",
@@ -84,6 +106,8 @@ def voice_guard_prompt(
         "- Do not start with a soft agreement unless the user's exact message needs it. Skip the throat clearing.",
         "- Prefer concrete nouns and details over abstract filler like consciousness, reality, energy, framing, or pattern unless the other person already used that frame.",
         "- Keep the reply uneven and local. A normal passing comment is better than a polished theory.",
+        "- Do not quote the user's line and interpret it back to them. Take a position or make a side comment.",
+        "- Avoid repeating sounds-like/feels-like/reads-like as the main structure. Pick a concrete verb.",
     ]
     if response_move:
         lines.append(f"- Required move for this draft: {response_move}")
@@ -129,12 +153,19 @@ def draft_quality_issues(text: str) -> list[str]:
         issues.append("too long; keep it under 45 words unless explicitly asked")
     if lowered.startswith(("ok ", "okay ", "yeah ", "yep ", "lol ", "lmao ", "i mean ")):
         issues.append("starts with stock filler")
+    if lowered.startswith(FORMULAIC_RECAP_OPENERS):
+        issues.append("opens with quote-and-interpret recap")
     stock_hits = [phrase for phrase in STOCK_PHRASES if phrase in lowered]
     if stock_hits:
         issues.append("uses stock phrase(s): " + ", ".join(stock_hits[:4]))
     abstract_hits = [term for term in ABSTRACT_TELLS if term in lowered]
     if len(abstract_hits) >= 2:
         issues.append("too abstract: " + ", ".join(abstract_hits[:4]))
+    bridge_hits = [phrase for phrase in INTERPRETIVE_BRIDGES if phrase in lowered]
+    if len(bridge_hits) >= 2:
+        issues.append("leans on repeated interpretive bridge(s): " + ", ".join(bridge_hits[:4]))
+    if _has_direct_quote_block(text):
+        issues.append("uses direct quotation; react without quoting the user")
     if lowered.count(" like ") > 1:
         issues.append("too many like-comparisons")
     if "?" in lowered and len(words) > 32:
@@ -201,3 +232,7 @@ def _soften_final_question(text: str) -> str:
     if question_start <= 0 or stripped[question_start] != "?":
         return stripped.rstrip("?") + "."
     return stripped.rstrip("?") + "."
+
+
+def _has_direct_quote_block(text: str) -> bool:
+    return bool(re.search(r"[\"“”][^\"“”]{12,}[\"“”]", text))

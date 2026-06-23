@@ -103,6 +103,7 @@ class ReplyPlanner:
             "\n".join(f"{message.author}: {message.text}" for message in context[-20:]),
             self.max_input_chars,
         )
+        newest_messages = _format_message_lines(new_messages[-5:])
         topic_summary = ", ".join(topic for topic, _ in topics.top_topics) or "none"
         user_memory = _format_user_memories(user_memories, user_instructions)
         seed = f"{channel_id}:{','.join(message.message_id for message in new_messages)}"
@@ -122,6 +123,8 @@ class ReplyPlanner:
             f"Tracked topics: {topic_summary}\n\n"
             f"Known user context:\n{user_memory}\n\n"
             f"Recent conversation:\n{transcript}\n\n"
+            f"Newest message(s) to react to:\n{newest_messages or '(none)'}\n\n"
+            f"{conversation_intelligence_prompt(mode=engagement_type)}\n\n"
             f"{voice_guard_prompt(avoid_question=avoid_question, recent_character_lines=recent_character_lines, response_move=response_move)}\n\n"
             "Draft one reply for approval. Aim for 12-35 words and never exceed 45 words. Prefer one sentence. Two sentences only if the second adds a real detail. "
             "No polished mini-essay, no recap, no default opener."
@@ -209,6 +212,7 @@ class ReplyPlanner:
             f"Current editor draft:\n{current_draft or '(none)'}\n\n"
             f"Operator direction:\n{operator_instruction or 'Make a better natural response for the selected context.'}\n\n"
             f"Targeted regeneration context:\n{targeted_context or '(none)'}\n\n"
+            f"{conversation_intelligence_prompt(mode='manual')}\n\n"
             f"{voice_guard_prompt(avoid_question=avoid_question, recent_character_lines=recent_character_lines, response_move=response_move)}\n\n"
             "Generate one revised Discord reply for approval. Aim for 12-35 words and never exceed 45 words. Prefer one sentence. Two sentences only if the second adds a real detail. "
             "Use the original queued draft and current editor draft as reference material, especially when the operator says things like 'instead of that' or 'make that more specific.' "
@@ -383,6 +387,38 @@ def _format_user_memories(
     return "\n".join(lines)
 
 
+def _format_message_lines(messages: list[MessageRecord], *, max_chars: int = 260) -> str:
+    lines: list[str] = []
+    for message in messages:
+        text = " ".join(str(message.text or "").split())
+        if not text:
+            continue
+        if len(text) > max_chars:
+            text = text[: max_chars - 3].rstrip() + "..."
+        lines.append(f"- {message.author}: {text}")
+    return "\n".join(lines)
+
+
+def conversation_intelligence_prompt(*, mode: str) -> str:
+    lines = [
+        "Conversation intelligence:",
+        "- Treat the transcript as context, not material to summarize.",
+        "- Pick one live point, tension, or implied claim and answer that. Do not respond to every sentence.",
+        "- Have an actual take: buy it, doubt it, split the difference, draw a line, or admit a rough bias.",
+        "- Do not quote the user and then interpret the quote. React as if you already heard it in the room.",
+        "- Prefer a specific opinion, correction, or side comment over a broad question.",
+        "- Let memory show through only as a small concrete detail. Do not announce continuity or tracking.",
+        "- Output only the final Discord reply.",
+    ]
+    if mode == "proactive":
+        lines.append("- If nobody addressed the character, use a light side comment instead of steering the whole room.")
+    elif mode == "direct":
+        lines.append("- If addressed directly, answer the person first before adding any tangent.")
+    elif mode == "manual":
+        lines.append("- Follow the operator direction, but do not preserve a synthetic structure from the earlier draft.")
+    return "\n".join(lines)
+
+
 def _target_user_line(target_user_key: str, user_memories: list[UserMemory]) -> str:
     if not target_user_key:
         return "none selected"
@@ -414,7 +450,7 @@ def _quality_retry_prompt(user_prompt: str, draft: str, issues: list[str]) -> st
         f"{draft}\n\n"
         f"Problems:\n{issue_lines}\n\n"
         "Rewrite from scratch. Make it sound like a normal quick Discord reply, not a polished response. "
-        "Use fewer words, fewer abstractions, no stock opener, and no more than one like-comparison."
+        "Use fewer words, fewer abstractions, no stock opener, no quote-and-interpret structure, and no more than one like-comparison."
     )
 
 
