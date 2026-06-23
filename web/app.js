@@ -1049,16 +1049,26 @@ async function syncDiscordServers() {
   startOperation(opId, "Syncing Discord", "Reading servers and channels", "sync", "bi-diagram-3");
   try {
     syncFormsToState();
+    const beforeIds = new Set(servers().map((item) => String(item.server_id || "")));
     await api("/api/servers", { method: "POST", body: JSON.stringify(appState.servers) });
     const result = await api("/api/discord-sync-servers", { method: "POST", body: JSON.stringify({}) });
     appState = result.state;
-    selectedServer = Math.min(selectedServer, servers().length - 1);
+    const addedIds = Array.isArray(result.added_server_ids)
+      ? result.added_server_ids.map((value) => String(value))
+      : servers().filter((item) => !beforeIds.has(String(item.server_id || ""))).map((item) => String(item.server_id || ""));
+    if (addedIds.length) {
+      const newServerIndex = servers().findIndex((item) => String(item.server_id || "") === addedIds[0]);
+      selectedServer = newServerIndex >= 0 ? newServerIndex : Math.min(selectedServer, servers().length - 1);
+    } else {
+      selectedServer = Math.min(selectedServer, servers().length - 1);
+    }
     if (selectedServer < 0) selectedServer = 0;
     selectedChannel = Math.min(selectedChannel, channels().length - 1);
     if (selectedChannel < 0) selectedChannel = 0;
     render();
-    finishOperation(opId, "Discord synced", "done", "bi-check-circle");
-    toast(`Synced ${result.discovered} servers and ${result.channels_discovered || 0} channels`);
+    finishOperation(opId, addedIds.length ? "New server added" : "Discord synced", "done", "bi-check-circle");
+    const addedText = addedIds.length ? `, added ${addedIds.length} new` : ", no new servers";
+    toast(`Synced ${result.discovered} servers${addedText}; ${result.channels_discovered || 0} channels checked`);
   } catch (error) {
     finishOperation(opId, "Sync failed", "failed", "bi-exclamation-triangle");
     throw error;
@@ -1586,6 +1596,7 @@ $("runtimeControl").addEventListener("click", () => toggleRuntime().catch((error
 $("saveAll").addEventListener("click", saveAll);
 $("saveServers").addEventListener("click", saveAll);
 $("syncDiscordServers").addEventListener("click", () => syncDiscordServers().catch((error) => toast(error.message)));
+$("syncDiscordRail").addEventListener("click", () => syncDiscordServers().catch((error) => toast(error.message)));
 $("saveDiscord").addEventListener("click", saveDiscordCredentials);
 $("launchDiscordLogin").addEventListener("click", launchDiscordLogin);
 $("openDiscordChannel").addEventListener("click", () => openDiscordChannel().catch((error) => toast(error.message)));

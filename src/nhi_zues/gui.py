@@ -804,6 +804,7 @@ def sync_discord_servers() -> dict:
             by_id[str(item["server_id"])] = item
 
     added = 0
+    added_server_ids: list[str] = []
     updated = 0
     channels_discovered = 0
     channels_added = 0
@@ -824,6 +825,7 @@ def sync_discord_servers() -> dict:
             server_list.append(existing)
             by_id[server_id] = existing
             added += 1
+            added_server_ids.append(server_id)
         if label and str(existing.get("label") or "").strip() != label:
             existing["label"] = label
             updated += 1
@@ -850,6 +852,7 @@ def sync_discord_servers() -> dict:
         "ok": True,
         "discovered": len(discovered),
         "added": added,
+        "added_server_ids": added_server_ids,
         "updated": updated,
         "channels_discovered": channels_discovered,
         "channels_added": channels_added,
