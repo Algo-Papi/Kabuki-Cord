@@ -20,7 +20,7 @@ let bootSoundPlayed = false;
 let kabukiAudioUnlocked = false;
 
 const runtimeModeClassNames = ["runtime-mode-dry", "runtime-mode-full-auto", "runtime-mode-semi-auto", "runtime-mode-live-fire"];
-const kabukiBootThemeSrc = "/assets/kabuki-launch-theme.wav";
+const kabukiBootThemeSrc = "/assets/kabuki-launch-theme.wav?v=2";
 const onboardingStorageKey = "kabukiCordOnboardingDismissed.v1";
 
 const $ = (id) => document.getElementById(id);
@@ -1174,23 +1174,23 @@ function renderObserved() {
               data-open-observed-message="${escapeAttr(latestMessageId)}"
               title="Open this user's most recent observed post in Discord."
               ${latestMessageId ? "" : "disabled"}
-            ><i class="bi bi-box-arrow-up-right"></i> Open Latest Post</button>
+            ><i class="bi bi-box-arrow-up-right"></i><span>Open Latest Post</span></button>
             <button
               class="small-button"
               data-reaction-message="${escapeAttr(latestMessageId)}"
               title="Suggest a light emoji reaction for this remembered post."
               ${latestMessageId ? "" : "disabled"}
-            ><i class="bi bi-emoji-smile"></i> React</button>
+            ><i class="bi bi-emoji-smile"></i><span>React</span></button>
             <button
               class="small-button"
               data-suggest-user="${escapeAttr(poster.user_key)}"
               title="Draft a suggested reply to this user's recent point."
-            ><i class="bi bi-chat-left-text"></i> Suggest Reply</button>
+            ><i class="bi bi-chat-left-text"></i><span>Suggest</span></button>
             <button
               class="small-button"
               data-guide-user="${escapeAttr(poster.user_key)}"
               title="Add per-user behavior guidance for future replies."
-            ><i class="bi bi-person-gear"></i> Guide User</button>
+            ><i class="bi bi-person-gear"></i><span>Guide</span></button>
           </div>
         </div>
       `;
