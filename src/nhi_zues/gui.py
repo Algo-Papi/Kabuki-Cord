@@ -555,7 +555,7 @@ def app_state() -> dict:
         "character_memory": character_memory_state(config.state_dir, config.character_card),
         "user_instructions": user_instruction_state(config.state_dir),
         "usage": usage_state(),
-        "approvals": [asdict(item) for item in ApprovalQueue(config.state_dir / "approvals.json").list()],
+        "approvals": approval_items_state(config),
         "recent_posters": recent_posters_state(config.state_dir / "memory.json"),
         "observed": observed_conversation_state(config.state_dir / "memory.json"),
         "history": conversation_history_state(
@@ -1354,6 +1354,68 @@ def character_memory_state(state_dir: Path, card_id: str) -> dict:
 def user_instruction_state(state_dir: Path) -> dict:
     path = state_dir / "user_instructions.json"
     return _read_json(path, default={"items": []})
+
+
+def approval_items_state(config: AppConfig) -> list[dict]:
+    queue = ApprovalQueue(config.state_dir / "approvals.json")
+    server_labels, channel_labels = _approval_config_indexes(config.servers_file)
+    memory_payload = _read_json(config.state_dir / "memory.json", default={"channels": {}})
+    channel_rows = {
+        str(channel_id): _sorted_message_rows(rows)
+        for channel_id, rows in memory_payload.get("channels", {}).items()
+    }
+    result: list[dict] = []
+    for item in queue.list():
+        payload = asdict(item)
+        channel_meta = channel_labels.get(item.channel_id, {})
+        source_ids = [str(value) for value in item.source_message_ids if str(value or "").strip()]
+        rows_by_id = {
+            str(row.get("message_id") or ""): row
+            for row in channel_rows.get(item.channel_id, [])
+            if str(row.get("message_id") or "")
+        }
+        source_messages = [
+            _message_preview(rows_by_id[source_id])
+            for source_id in source_ids
+            if source_id in rows_by_id
+        ]
+        payload.update(
+            {
+                "server_label": server_labels.get(item.server_id) or item.server_id,
+                "channel_label": channel_meta.get("label") or item.channel_id,
+                "channel_type": channel_meta.get("channel_type") or "text",
+                "channel_category": channel_meta.get("category") or "",
+                "source_messages": source_messages,
+                "source_missing_ids": [
+                    source_id for source_id in source_ids if source_id not in rows_by_id
+                ],
+            }
+        )
+        result.append(payload)
+    return result
+
+
+def _approval_config_indexes(servers_file: Path) -> tuple[dict[str, str], dict[str, dict]]:
+    payload = _read_json(servers_file, default={"servers": []})
+    server_labels: dict[str, str] = {}
+    channel_labels: dict[str, dict] = {}
+    for server in payload.get("servers", []):
+        server_id = str(server.get("server_id") or "").strip()
+        if not server_id:
+            continue
+        server_labels[server_id] = str(server.get("label") or server_id)
+        for channel in server.get("channels", []):
+            channel_id = str(channel.get("channel_id") or "").strip()
+            if not channel_id:
+                continue
+            channel_labels[channel_id] = {
+                "server_id": server_id,
+                "server_label": server_labels[server_id],
+                "label": str(channel.get("label") or channel_id),
+                "channel_type": str(channel.get("channel_type") or "text"),
+                "category": str(channel.get("category") or ""),
+            }
+    return server_labels, channel_labels
 
 
 def update_approval(body: dict) -> None:

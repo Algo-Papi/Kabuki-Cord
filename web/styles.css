@@ -1457,6 +1457,187 @@ textarea:disabled {
   padding: 10px 12px;
 }
 
+.approval-server-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border: 1px solid rgba(149, 101, 255, 0.18);
+  border-radius: 8px;
+  background: rgba(149, 101, 255, 0.035);
+  padding: 10px;
+}
+
+.approval-group-header,
+.approval-channel-header,
+.approval-item-top,
+.approval-source-title,
+.approval-source-message-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.approval-group-header {
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(149, 101, 255, 0.2);
+}
+
+.approval-group-header strong {
+  font-size: 13px;
+}
+
+.approval-group-header span,
+.approval-channel-header small {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.approval-channel-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.approval-channel-header {
+  color: #dce7ef;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 2px 2px 0;
+}
+
+.approval-meta {
+  min-width: 0;
+}
+
+.approval-meta span {
+  display: block;
+  margin-top: 2px;
+}
+
+.approval-type {
+  border: 1px solid rgba(126, 216, 255, 0.26);
+  border-radius: 999px;
+  background: rgba(126, 216, 255, 0.08);
+  color: #bdeaff;
+  flex: 0 0 auto;
+  font-size: 11px;
+  padding: 4px 8px;
+}
+
+.approval-reason,
+.approval-target-summary {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.025);
+  color: #c8d8e6;
+  font-size: 12px;
+  line-height: 1.45;
+  padding: 8px 10px;
+}
+
+.approval-reason i,
+.approval-target-summary i {
+  color: var(--cyan);
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.approval-target-summary {
+  border-color: rgba(126, 216, 255, 0.22);
+  background: rgba(126, 216, 255, 0.06);
+}
+
+.approval-target-summary strong {
+  display: inline;
+  font-size: inherit;
+}
+
+.approval-source {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-top: 10px;
+  border: 1px solid rgba(149, 101, 255, 0.18);
+  border-radius: 8px;
+  background: rgba(9, 14, 20, 0.55);
+  padding: 9px;
+}
+
+.approval-source-title span {
+  color: #e7eef8;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.approval-source-title small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.approval-source-message,
+.approval-source-empty,
+.approval-source-missing {
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.026);
+  padding: 8px;
+}
+
+.approval-source-message.target {
+  border-color: rgba(95, 201, 120, 0.38);
+  background: rgba(95, 201, 120, 0.07);
+}
+
+.approval-source-message-head strong {
+  display: inline;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.approval-source-message-head span {
+  color: var(--muted);
+  flex: 0 0 auto;
+  font-size: 11px;
+}
+
+.approval-source-message p {
+  margin: 6px 0 0;
+  color: #dce7ef;
+  font-size: 12px;
+  line-height: 1.42;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.approval-source-empty,
+.approval-source-missing {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.approval-source-missing {
+  border-color: rgba(217, 185, 91, 0.24);
+  background: rgba(217, 185, 91, 0.06);
+  color: #ead391;
+}
+
+.approval-field-label {
+  display: block;
+  margin-top: 12px;
+  color: #bfd0df;
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .user-item {
   cursor: pointer;
   display: grid;
@@ -1475,6 +1656,12 @@ textarea:disabled {
   font-size: 13px;
 }
 
+.approval-target-summary strong,
+.approval-source-message-head strong {
+  display: inline;
+  font-size: inherit;
+}
+
 .user-item img {
   width: 34px;
   height: 34px;
@@ -1487,6 +1674,28 @@ textarea:disabled {
 .note-item {
   color: var(--muted);
   font-size: 12px;
+}
+
+.approval-item .approval-type {
+  color: #bdeaff;
+  font-size: 11px;
+}
+
+.approval-item .approval-reason span,
+.approval-item .approval-target-summary span {
+  color: #c8d8e6;
+  font-size: 12px;
+}
+
+.approval-item .approval-source-title span {
+  color: #e7eef8;
+  font-size: 12px;
+}
+
+.approval-item .approval-source-message-head span,
+.approval-item .approval-source-title small {
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .approval-draft {

@@ -578,7 +578,7 @@ function renderUserGuidanceControls(user) {
     : "Select a remembered user first.";
 }
 
-function renderApprovals() {
+function renderApprovalsLegacy() {
   const approvals = appState.approvals || [];
   $("approvalList").innerHTML =
     approvals
@@ -632,6 +632,243 @@ function renderApprovals() {
   document.querySelectorAll("[data-poster-target]").forEach((button) => {
     button.addEventListener("click", () => selectApprovalTarget(button.dataset.approvalId, button.dataset.posterKey, button.dataset.posterPrefix));
   });
+}
+
+function renderApprovals() {
+  const groups = approvalServerGroups(appState.approvals || []);
+  $("approvalList").innerHTML =
+    groups
+      .map(renderApprovalServerGroup)
+      .join("") || `<div class="approval-item"><strong>No queued approvals</strong><span>Proactive drafts will appear here.</span></div>`;
+  document.querySelectorAll("[data-copy]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      await navigator.clipboard.writeText(approvalDraft(button.dataset.copy));
+      toast("Draft copied");
+    });
+  });
+  document.querySelectorAll("[data-approval-save]").forEach((button) => {
+    button.addEventListener("click", () => saveApproval(button.dataset.approvalSave));
+  });
+  document.querySelectorAll("[data-approval-discard]").forEach((button) => {
+    button.addEventListener("click", () => discardApproval(button.dataset.approvalDiscard));
+  });
+  document.querySelectorAll("[data-approval-regenerate]").forEach((button) => {
+    button.addEventListener("click", () => regenerateApproval(button.dataset.approvalRegenerate));
+  });
+  document.querySelectorAll("[data-approval-open]").forEach((button) => {
+    button.addEventListener("click", () => openApprovalConversation(button.dataset.approvalOpen).catch((error) => toast(error.message)));
+  });
+  document.querySelectorAll("[data-approval-send]").forEach((button) => {
+    button.addEventListener("click", () => sendApproval(button.dataset.approvalSend));
+  });
+  document.querySelectorAll("[data-poster-target]").forEach((button) => {
+    button.addEventListener("click", () => selectApprovalTarget(button.dataset.approvalId, button.dataset.posterKey, button.dataset.posterPrefix));
+  });
+}
+
+function approvalServerGroups(approvals) {
+  const sorted = approvals
+    .map((item, index) => ({ item, index }))
+    .sort((left, right) => approvalSortValue(left.item, right.item, left.index, right.index))
+    .map((entry) => entry.item);
+  const groups = [];
+  const byServer = new Map();
+  sorted.forEach((item) => {
+    const info = approvalChannelInfo(item);
+    const serverKey = `${info.serverLabel}::${info.serverId}`;
+    let serverGroup = byServer.get(serverKey);
+    if (!serverGroup) {
+      serverGroup = {
+        serverLabel: info.serverLabel,
+        serverId: info.serverId,
+        channels: [],
+        byChannel: new Map(),
+      };
+      byServer.set(serverKey, serverGroup);
+      groups.push(serverGroup);
+    }
+    const channelKey = `${info.channelLabel}::${info.channelId}`;
+    let channelGroup = serverGroup.byChannel.get(channelKey);
+    if (!channelGroup) {
+      channelGroup = {
+        channelLabel: info.channelLabel,
+        channelType: info.channelType,
+        channelId: info.channelId,
+        items: [],
+      };
+      serverGroup.byChannel.set(channelKey, channelGroup);
+      serverGroup.channels.push(channelGroup);
+    }
+    channelGroup.items.push(item);
+  });
+  return groups;
+}
+
+function approvalSortValue(left, right, leftIndex, rightIndex) {
+  const leftInfo = approvalChannelInfo(left);
+  const rightInfo = approvalChannelInfo(right);
+  return compareText(leftInfo.serverLabel, rightInfo.serverLabel)
+    || compareText(leftInfo.channelLabel, rightInfo.channelLabel)
+    || compareText(right.created_at, left.created_at)
+    || leftIndex - rightIndex;
+}
+
+function compareText(left, right) {
+  return String(left || "").localeCompare(String(right || ""), undefined, {
+    numeric: true,
+    sensitivity: "base",
+  });
+}
+
+function approvalChannelInfo(item) {
+  const fallback = findChannel(item.server_id, item.channel_id);
+  return {
+    serverId: item.server_id || "",
+    channelId: item.channel_id || "",
+    serverLabel: item.server_label || fallback.serverLabel || item.server_id || "Unknown server",
+    channelLabel: item.channel_label || fallback.channelLabel || item.channel_id || "unknown-channel",
+    channelType: item.channel_type || fallback.channelType || "text",
+  };
+}
+
+function renderApprovalServerGroup(group) {
+  const count = group.channels.reduce((total, channelGroup) => total + channelGroup.items.length, 0);
+  return `
+    <section class="approval-server-group" title="${escapeAttr(group.serverId)}">
+      <div class="approval-group-header">
+        <strong>${escapeHtml(group.serverLabel)}</strong>
+        <span>${count} queued</span>
+      </div>
+      ${group.channels.map(renderApprovalChannelGroup).join("")}
+    </section>
+  `;
+}
+
+function renderApprovalChannelGroup(group) {
+  return `
+    <section class="approval-channel-group" title="${escapeAttr(group.channelId)}">
+      <div class="approval-channel-header">
+        <span>${escapeHtml(formatChannelName(group.channelLabel, group.channelType))}</span>
+        <small>${group.items.length} approval${group.items.length === 1 ? "" : "s"}</small>
+      </div>
+      ${group.items.map(renderApprovalItem).join("")}
+    </section>
+  `;
+}
+
+function renderApprovalItem(item) {
+  const delivery = approvalDeliveryState[item.approval_id] || null;
+  const sending = delivery?.state === "sending";
+  const regenerating = approvalRegenerationState[item.approval_id]?.state === "regenerating";
+  const info = approvalChannelInfo(item);
+  return `
+    <div class="approval-item" data-approval-item="${escapeAttr(item.approval_id)}">
+      <div class="approval-item-top">
+        <div class="approval-meta">
+          <strong>${escapeHtml(item.character_name || "Character")}</strong>
+          <span>${escapeHtml(formatChannelName(info.channelLabel, info.channelType))} &middot; ${escapeHtml(formatTime(item.created_at) || "queued")}</span>
+        </div>
+        <span class="approval-type">${escapeHtml(item.engagement_type || "draft")}</span>
+      </div>
+      <div class="approval-reason">
+        <i class="bi bi-signpost-split"></i>
+        <span>${escapeHtml(item.reason || "No approval reason recorded.")}</span>
+      </div>
+      ${renderApprovalSource(item)}
+      <div class="approval-target-summary" data-approval-target-summary="${escapeAttr(item.approval_id)}">
+        ${approvalTargetSummaryMarkup(item.approval_id)}
+      </div>
+      <label class="approval-field-label">Draft to send</label>
+      <textarea class="approval-draft" data-approval-draft="${escapeAttr(item.approval_id)}" rows="5">${escapeHtml(item.draft)}</textarea>
+      ${recentPosterChips(item.channel_id, item.approval_id)}
+      <label class="approval-field-label">Regeneration note</label>
+      <textarea class="approval-instruction" data-approval-instruction="${escapeAttr(item.approval_id)}" rows="2" placeholder="Say it more like x, disagree with y, make it shorter..."></textarea>
+      ${approvalRegenerationStatus(item.approval_id)}
+      ${approvalDeliveryStatus(item.approval_id)}
+      <div class="approval-actions">
+        <button class="small-button" data-approval-save="${escapeAttr(item.approval_id)}"><i class="bi bi-save2"></i> Save</button>
+        <button class="small-button" data-approval-regenerate="${escapeAttr(item.approval_id)}" ${regenerating ? "disabled" : ""}><i class="bi ${regenerating ? "bi-hourglass-split" : "bi-stars"}"></i> ${regenerating ? "Regenerating" : "Regenerate"}</button>
+        <button class="small-button" data-approval-open="${escapeAttr(item.approval_id)}"><i class="bi bi-box-arrow-up-right"></i> Open Conversation</button>
+        <button class="small-button" data-copy="${escapeAttr(item.approval_id)}"><i class="bi bi-copy"></i> Copy</button>
+        <button class="small-button" data-approval-discard="${escapeAttr(item.approval_id)}"><i class="bi bi-trash3"></i> Discard</button>
+        <button class="primary-button approval-send" data-approval-send="${escapeAttr(item.approval_id)}" ${sending ? "disabled" : ""}><i class="bi ${sending ? "bi-hourglass-split" : "bi-send"}"></i> ${sending ? "Sending" : "Approve & Send"}</button>
+      </div>
+      ${currentRuntimeMode() === "dry" ? `<div class="approval-warning">Dry Mode is on. Approved messages will be blocked until Response Mode changes in API & Runtime.</div>` : ""}
+    </div>
+  `;
+}
+
+function renderApprovalSource(item) {
+  const messages = approvalSourceMessages(item);
+  const missingIds = item.source_missing_ids || [];
+  const sourceCountLabel = messages.length === 1 ? "1 message" : `${messages.length} messages`;
+  return `
+    <div class="approval-source">
+      <div class="approval-source-title">
+        <span>Source context</span>
+        <small>${messages.length ? sourceCountLabel : "no local message"}</small>
+      </div>
+      ${messages.map((message) => renderApprovalSourceMessage(item, message)).join("") || `
+        <div class="approval-source-empty">No source message text was captured locally. Open the conversation before sending.</div>
+      `}
+      ${missingIds.length ? `<div class="approval-source-missing">${missingIds.length} source id${missingIds.length === 1 ? "" : "s"} not found in stored memory.</div>` : ""}
+    </div>
+  `;
+}
+
+function renderApprovalSourceMessage(item, message) {
+  const targetId = approvalReplyMessageId(item.approval_id);
+  const isTarget = targetId && String(message.message_id || "") === String(targetId);
+  const text = truncateText(message.text || "(no readable text captured)", 360);
+  return `
+    <article class="approval-source-message ${isTarget ? "target" : ""}" title="${escapeAttr(message.message_id || "")}">
+      <div class="approval-source-message-head">
+        <strong>${escapeHtml(message.author || "unknown")}</strong>
+        <span>${escapeHtml(formatTime(message.observed_at) || "unknown time")}${isTarget ? " - reply target" : ""}</span>
+      </div>
+      <p>${escapeHtml(text)}</p>
+    </article>
+  `;
+}
+
+function approvalSourceMessages(item) {
+  const sourceMessages = Array.isArray(item.source_messages) ? item.source_messages : [];
+  if (sourceMessages.length) return sourceMessages;
+  const sourceIds = (item.source_message_ids || []).map((value) => String(value));
+  const historyMessages = appState.history?.[item.channel_id]?.messages || [];
+  return sourceIds
+    .map((sourceId) => historyMessages.find((message) => String(message.message_id || "") === sourceId))
+    .filter(Boolean);
+}
+
+function approvalMessageById(item, messageId) {
+  const targetId = String(messageId || "");
+  if (!targetId) return null;
+  return approvalSourceMessages(item).find((message) => String(message.message_id || "") === targetId)
+    || (appState.history?.[item.channel_id]?.messages || []).find((message) => String(message.message_id || "") === targetId)
+    || null;
+}
+
+function approvalTargetSummaryMarkup(approvalId) {
+  const item = (appState.approvals || []).find((approval) => approval.approval_id === approvalId);
+  if (!item) return `<i class="bi bi-reply"></i><span>Reply target is unavailable.</span>`;
+  const targetId = approvalReplyMessageId(approvalId);
+  const selectedTarget = approvalTargets[approvalId];
+  const targetMessage = approvalMessageById(item, targetId);
+  if (targetMessage) {
+    return `
+      <i class="bi bi-reply"></i>
+      <span>Replying to <strong>${escapeHtml(targetMessage.author || "unknown")}</strong>: ${escapeHtml(truncateText(targetMessage.text || "(no readable text captured)", 180))}</span>
+    `;
+  }
+  if (selectedTarget?.user_key) {
+    const poster = (appState.recent_posters?.[item.channel_id] || []).find((entry) => entry.user_key === selectedTarget.user_key);
+    return `
+      <i class="bi bi-reply"></i>
+      <span>Replying to <strong>${escapeHtml(poster?.display_name || selectedTarget.user_key)}</strong>. Latest captured message text is not available in local history.</span>
+    `;
+  }
+  return `<i class="bi bi-reply"></i><span>No source message text was found. Open the conversation before approving.</span>`;
 }
 
 function recentPosterChips(channelId, approvalId) {
@@ -701,6 +938,8 @@ function selectApprovalTarget(approvalId, userKey, prefix) {
   document.querySelectorAll(`[data-approval-id="${cssEscape(approvalId)}"][data-poster-target]`).forEach((button) => {
     button.classList.toggle("active", button.dataset.posterKey === userKey);
   });
+  const targetSummary = document.querySelector(`[data-approval-target-summary="${cssEscape(approvalId)}"]`);
+  if (targetSummary) targetSummary.innerHTML = approvalTargetSummaryMarkup(approvalId);
 }
 
 async function saveApproval(approvalId) {
