@@ -81,6 +81,7 @@ button {
 }
 
 .shell {
+  position: relative;
   display: grid;
   grid-template-columns: 84px 330px minmax(620px, 1fr) 380px;
   height: 100vh;
@@ -96,8 +97,26 @@ button {
   transition: box-shadow 220ms ease, background 220ms ease;
 }
 
+.shell::before {
+  content: "";
+  position: fixed;
+  z-index: 76;
+  inset: 0;
+  pointer-events: none;
+  border: 2px solid transparent;
+  box-shadow: none;
+  transition: border-color 180ms ease, box-shadow 180ms ease, background 180ms ease;
+}
+
 body.runtime-mode-dry .shell {
-  box-shadow: inset 0 0 0 1px rgba(233, 129, 52, 0.46), inset 0 0 34px rgba(233, 129, 52, 0.13);
+  box-shadow: inset 0 0 0 1px rgba(233, 129, 52, 0.72), inset 0 0 42px rgba(233, 129, 52, 0.16);
+}
+
+body.runtime-mode-dry .shell::before {
+  border-color: rgba(238, 132, 48, 0.82);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 195, 105, 0.26),
+    inset 0 0 34px rgba(233, 129, 52, 0.2);
 }
 
 body.runtime-mode-full-auto .shell {
@@ -109,7 +128,15 @@ body.runtime-mode-semi-auto .shell {
 }
 
 body.runtime-mode-live-fire .shell {
-  box-shadow: inset 0 0 0 1px rgba(255, 76, 48, 0.56), inset 0 0 42px rgba(255, 76, 48, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(255, 76, 48, 0.78), inset 0 0 52px rgba(255, 76, 48, 0.24);
+}
+
+body.runtime-mode-live-fire .shell::before {
+  border-color: rgba(255, 76, 48, 0.9);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 202, 126, 0.22),
+    inset 0 0 48px rgba(255, 76, 48, 0.3),
+    0 0 18px rgba(255, 76, 48, 0.3);
 }
 
 .server-rail,
@@ -589,6 +616,25 @@ textarea:focus {
   min-height: 34px;
   padding: 7px 10px;
   white-space: nowrap;
+}
+
+.sound-button {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  color: var(--muted);
+}
+
+.sound-button.audio-pending {
+  color: #f0dfa8;
+  border-color: rgba(217, 185, 91, 0.34);
+  background: rgba(217, 185, 91, 0.08);
+}
+
+.sound-button.audio-on {
+  color: #bff0cb;
+  border-color: rgba(95, 201, 120, 0.36);
+  background: rgba(95, 201, 120, 0.1);
 }
 
 .operation-status {

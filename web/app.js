@@ -16,6 +16,7 @@ let desktopBadgeActive = null;
 let kabukiAudioContext = null;
 let bootSoundQueued = false;
 let bootSoundPlayed = false;
+let kabukiAudioUnlocked = false;
 
 const runtimeModeClassNames = ["runtime-mode-dry", "runtime-mode-full-auto", "runtime-mode-semi-auto", "runtime-mode-live-fire"];
 
@@ -1640,11 +1641,29 @@ function queueBootSound() {
   if (bootSoundQueued || bootSoundPlayed) return;
   bootSoundQueued = true;
   playKabukiSound("boot");
+  renderAudioStatus();
 }
 
 function unlockKabukiAudio() {
   if (!bootSoundQueued || bootSoundPlayed) return;
   playKabukiSound("boot");
+}
+
+async function testKabukiAudio() {
+  bootSoundQueued = true;
+  const played = await playKabukiSound("boot");
+  toast(played ? "Kabuki launch sound played" : "Audio is still blocked. Click once in the app, then try sound again.");
+}
+
+function renderAudioStatus() {
+  const button = $("soundToggle");
+  if (!button) return;
+  button.classList.toggle("audio-on", kabukiAudioUnlocked);
+  button.classList.toggle("audio-pending", bootSoundQueued && !bootSoundPlayed);
+  button.title = kabukiAudioUnlocked
+    ? "Kabuki sound enabled. Click to replay launch sound."
+    : "Enable and test Kabuki launch sound";
+  button.innerHTML = `<i class="bi ${kabukiAudioUnlocked ? "bi-volume-up" : "bi-volume-mute"}"></i>`;
 }
 
 function getKabukiAudioContext() {
@@ -1656,26 +1675,39 @@ function getKabukiAudioContext() {
 
 function playKabukiSound(kind = "mode") {
   const context = getKabukiAudioContext();
-  if (!context) return;
+  if (!context) {
+    renderAudioStatus();
+    return Promise.resolve(false);
+  }
   const schedule = () => {
+    kabukiAudioUnlocked = context.state === "running";
+    if (!kabukiAudioUnlocked) {
+      renderAudioStatus();
+      return false;
+    }
     scheduleKabukiSound(context, kind);
     if (kind === "boot") bootSoundPlayed = true;
+    renderAudioStatus();
+    return true;
   };
   if (context.state === "suspended") {
-    context.resume().then(schedule).catch(() => {});
-    return;
+    return context.resume().then(schedule).catch(() => {
+      renderAudioStatus();
+      return false;
+    });
   }
-  schedule();
+  return Promise.resolve(schedule());
 }
 
 function scheduleKabukiSound(context, kind) {
   const now = context.currentTime + 0.018;
   if (kind === "boot") {
-    taikoHit(context, now, 86, 0.95);
-    clapHit(context, now + 0.18, 0.45);
-    taikoHit(context, now + 0.34, 72, 0.8);
-    shoutHit(context, now + 0.48, 0.32);
-    taikoHit(context, now + 0.72, 110, 0.58);
+    taikoHit(context, now, 82, 1.05);
+    clapHit(context, now + 0.16, 0.58);
+    taikoHit(context, now + 0.32, 66, 0.94);
+    shoutHit(context, now + 0.46, 0.42);
+    taikoHit(context, now + 0.72, 112, 0.7);
+    clapHit(context, now + 0.9, 0.38);
     return;
   }
   if (kind === "dry") {
@@ -1771,6 +1803,8 @@ document.querySelectorAll("[data-preview-tab]").forEach((tab) => {
 });
 
 $("refresh").addEventListener("click", () => refreshAppStateManual().catch((error) => toast(error.message)));
+$("soundToggle").addEventListener("pointerdown", (event) => event.stopPropagation());
+$("soundToggle").addEventListener("click", testKabukiAudio);
 $("runtimeControl").addEventListener("click", () => toggleRuntime().catch((error) => toast(error.message)));
 $("saveAll").addEventListener("click", saveAll);
 $("saveServers").addEventListener("click", saveAll);
@@ -1854,6 +1888,7 @@ $("addUserNote").addEventListener("click", async () => {
 window.addEventListener("pointerdown", unlockKabukiAudio, { once: true });
 window.addEventListener("keydown", unlockKabukiAudio, { once: true });
 
+renderAudioStatus();
 loadState().catch((error) => {
   console.error(error);
   toast("Failed to load Kabuki-Cord state");
