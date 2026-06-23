@@ -73,6 +73,47 @@ class DiscordWebSession:
             raise RuntimeError("Browser session is not started.")
         return self._page
 
+    async def is_logged_in(self) -> bool:
+        return await self._is_logged_in()
+
+    async def show_for_human(self) -> None:
+        await self._set_window_bounds(left=80, top=80, width=1440, height=1000)
+
+    async def hide_for_automation(self) -> None:
+        await self._set_window_bounds(left=-32000, top=-32000, width=1440, height=1000)
+
+    async def _set_window_bounds(self, *, left: int, top: int, width: int, height: int) -> None:
+        if self._context is None:
+            return
+        cdp = None
+        try:
+            cdp = await self._context.new_cdp_session(self.page)
+            info = await cdp.send("Browser.getWindowForTarget")
+            window_id = info.get("windowId")
+            if window_id is None:
+                return
+            await cdp.send(
+                "Browser.setWindowBounds",
+                {
+                    "windowId": window_id,
+                    "bounds": {
+                        "left": left,
+                        "top": top,
+                        "width": width,
+                        "height": height,
+                        "windowState": "normal",
+                    },
+                },
+            )
+        except Exception:
+            return
+        finally:
+            if cdp is not None:
+                try:
+                    await cdp.detach()
+                except Exception:
+                    pass
+
     async def open_home(self) -> None:
         await self.page.goto("https://discord.com/channels/@me", wait_until="domcontentloaded")
         await self.page.wait_for_timeout(1500)

@@ -202,6 +202,10 @@ class GuiHandler(BaseHTTPRequestHandler):
             RUNTIME.start()
             self._json({"ok": True, "state": app_state()})
             return
+        if parsed.path == "/api/runtime-start-signin":
+            RUNTIME.start_with_discord_handoff()
+            self._json({"ok": True, "state": app_state()})
+            return
         if parsed.path == "/api/runtime-pause":
             RUNTIME.pause()
             self._json({"ok": True, "state": app_state()})
@@ -391,6 +395,7 @@ class RuntimeController:
         self._last_started_at: float | None = None
         self._last_run_at: float | None = None
         self._last_error: str = ""
+        self._phase = "idle"
 
     def start(self) -> None:
         with self._lock:
@@ -401,15 +406,40 @@ class RuntimeController:
                 return
             self._running = True
             self._last_started_at = time.time()
+            self._last_error = ""
+            self._phase = "starting"
             self._thread = threading.Thread(target=self._loop, name="kabuki-runtime", daemon=True)
             self._thread.start()
         _record_runtime_event("runtime_started", "Scanner start requested.")
+
+    def start_with_discord_handoff(self) -> None:
+        with self._lock:
+            self._stop.clear()
+            if self._thread and self._thread.is_alive():
+                self._running = True
+                _record_runtime_event("runtime_signin_handoff_requested", "Scanner was already running.")
+                return
+            self._running = True
+            self._last_started_at = time.time()
+            self._last_error = ""
+            self._phase = "waiting_for_discord_login"
+            self._thread = threading.Thread(
+                target=self._login_handoff_loop,
+                name="kabuki-runtime-login-handoff",
+                daemon=True,
+            )
+            self._thread.start()
+        _record_runtime_event(
+            "runtime_signin_handoff_started",
+            "Visible Discord sign-in handoff started. Complete Discord login in that window.",
+        )
 
     def pause(self, *, wait: bool = False, timeout: float = 10.0) -> None:
         thread: threading.Thread | None = None
         with self._lock:
             self._running = False
             self._stop.set()
+            self._phase = "stopping"
             thread = self._thread
         _record_runtime_event("runtime_paused", "Scanner pause requested.")
         if wait and thread and thread.is_alive() and thread is not threading.current_thread():
@@ -423,7 +453,12 @@ class RuntimeController:
             "last_started_at": self._last_started_at,
             "last_run_at": self._last_run_at,
             "last_error": self._last_error,
+            "phase": self._phase if self._running and thread_alive else "idle",
         }
+
+    def _set_phase(self, phase: str) -> None:
+        with self._lock:
+            self._phase = phase
 
     def _loop(self) -> None:
         acquired = False
@@ -438,6 +473,7 @@ class RuntimeController:
                 self._last_error = "Discord browser profile is busy."
                 _record_runtime_event("runtime_error", self._last_error)
                 return
+            self._set_phase("running")
             try:
                 asyncio.run(
                     NhiZuesRunner(config).run_until_stopped(
@@ -457,10 +493,72 @@ class RuntimeController:
         finally:
             with self._lock:
                 self._running = False
+                self._phase = "idle"
+
+    def _login_handoff_loop(self) -> None:
+        acquired = False
+        try:
+            config = load_config()
+            if not config.channels:
+                self._last_error = "No channels are enabled for Observe."
+                _record_runtime_event("runtime_error", self._last_error)
+                return
+            acquired = DISCORD_SESSION_LOCK.acquire(blocking=False)
+            if not acquired:
+                self._last_error = "Discord browser profile is busy."
+                _record_runtime_event("runtime_error", self._last_error)
+                return
+            asyncio.run(self._run_login_handoff(config))
+            if self._stop.is_set():
+                self._last_error = ""
+                _record_runtime_event("runtime_stopped", "Scanner stopped cleanly.")
+        except Exception as exc:
+            self._last_error = _redact_secret_text(str(exc))
+            _record_runtime_event("runtime_error", self._last_error)
+        finally:
+            if acquired:
+                DISCORD_SESSION_LOCK.release()
+            with self._lock:
+                self._running = False
+                self._phase = "idle"
+
+    async def _run_login_handoff(self, config: AppConfig) -> None:
+        async with DiscordWebSession(
+            config.profile_dir,
+            browser_channel=config.browser_channel,
+            headless=False,
+        ) as session:
+            self._set_phase("waiting_for_discord_login")
+            await session.show_for_human()
+            await session.open_home()
+            _record_runtime_event(
+                "runtime_waiting_for_discord_login",
+                "Waiting for manual Discord sign-in in the visible browser window.",
+            )
+            while not self._stop.is_set():
+                if await session.is_logged_in():
+                    break
+                await asyncio.sleep(1.0)
+            if self._stop.is_set():
+                return
+            self._last_error = ""
+            self._set_phase("running")
+            _record_runtime_event(
+                "runtime_discord_login_ready",
+                "Discord sign-in completed; scanner is continuing in the same browser session.",
+            )
+            if config.headless:
+                await session.hide_for_automation()
+            await NhiZuesRunner(config).run_until_stopped_in_session(
+                session,
+                self._stop,
+                on_cycle=self._mark_cycle_complete,
+            )
 
     def _mark_cycle_complete(self) -> None:
         self._last_run_at = time.time()
         self._last_error = ""
+        self._set_phase("running")
 
 
 RUNTIME = RuntimeController()

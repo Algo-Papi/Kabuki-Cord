@@ -87,7 +87,9 @@ The desktop control panel is the preferred entrypoint:
 
 The app starts a local backend and opens its own window. Use **API & Runtime -> Discord Session** to save Discord credentials locally or open the Discord sign-in window. Future runs reuse the persistent browser profile.
 
-Enable **Silent automation** in **API & Runtime -> Discord Session** to run scanner, sync, and approved delivery in an off-screen Playwright browser. Manual **Sign In** and **Open** channel actions still launch visible Discord windows because those flows require direct operator interaction. If Discord logs the persistent profile out, complete **Sign In** once and routine automation can return to off-screen mode.
+Use **Sign In & Run** when Discord forces a password reset, human check, 2FA, or similar account flow before the profile can be reused. Kabuki-Cord opens the same persistent automation profile visibly, waits while you complete Discord's flow manually, then continues the scanner in that same live browser session. This avoids the fragile close-and-reopen cycle that can lose the freshly authenticated state.
+
+Enable **Silent automation** in **API & Runtime -> Discord Session** to run scanner, sync, and approved delivery in an off-screen Playwright browser. Manual **Sign In** and **Open** channel actions still launch visible Discord windows because those flows require direct operator interaction. **Sign In & Run** starts visible for manual authentication and moves that same session off-screen after login if Silent automation is enabled. If Discord logs the persistent profile out, complete **Sign In & Run** once and routine automation can return to off-screen mode.
 
 Use **Account safety pacing** in **API & Runtime -> Discord Session** to reduce browser churn. The conservative defaults check one due channel per scanner cycle, rest between cycles, and only add between-channel waits if you explicitly allow multiple channels per cycle. If Discord asks for a password reset, human verification, 2FA, phone/email verification, or another account security action, Kabuki-Cord stops the operation and records an event instead of repeatedly retrying.
 

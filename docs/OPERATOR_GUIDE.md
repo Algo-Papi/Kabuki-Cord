@@ -234,8 +234,9 @@ Important constraints:
 - The app pauses scanning before sync/open/send operations and waits for the profile lock.
 - If a separate Kabuki-opened Discord window is still holding the profile, close that window and retry.
 - If Discord asks for a password reset, human verification, 2FA, phone/email verification, or another account security action, stop the scanner and complete the visible Discord flow yourself. Kabuki-Cord records this as a `discord_account_challenge` event and does not keep retrying.
+- Use **Sign In & Run** for reset/checkpoint situations where the scanner must continue immediately after you finish Discord's visible login flow. It opens the persistent automation profile visibly, waits for you to finish authentication manually, then runs the scanner in that same browser session without closing and reopening the profile.
 - **Open** and **Open Conversation** launch the Discord URL in your normal browser instead of the hidden automation profile. This keeps manual review windows separate from background automation.
-- Password reset links and new passwords must be handled manually. After a reset, update the saved Discord credentials in **API & Runtime** before using Sign In again.
+- Password reset links and new passwords must be handled manually. After a reset, update the saved Discord credentials in **API & Runtime** before using **Sign In** or **Sign In & Run** again.
 
 ### Account Safety Pacing
 

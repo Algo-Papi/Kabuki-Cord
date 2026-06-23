@@ -400,8 +400,8 @@ function renderOnboardingSteps() {
       title: "3. Sign into Discord",
       ready: discordReady,
       body: discordReady
-        ? "Discord credentials are present. Sign In opens the persistent browser profile when verification is needed."
-        : "Save Discord credentials or click Sign In and complete any human verification in the visible browser window.",
+        ? "Discord credentials are present. Use Sign In & Run when Discord forces a reset or verification before scanning."
+        : "Save Discord credentials or use Sign In & Run, then complete any Discord reset or verification in the visible browser window.",
     },
     {
       title: "4. Sync servers and channels",
@@ -437,13 +437,16 @@ function renderOnboardingSteps() {
 function renderRuntime() {
   const runtime = appState.runtime || {};
   const running = Boolean(runtime.running);
+  const phase = runtime.phase || "idle";
   const browserMode = appState.app.headless ? "hidden browser" : "visible browser";
   $("runtimeControl").innerHTML = running
     ? `<i class="bi bi-pause-fill"></i> Pause`
     : `<i class="bi bi-play-fill"></i> Start`;
   $("runtimeControl").className = running ? "secondary-button active-runtime" : "secondary-button";
   const mode = runtimeModeLabel(currentRuntimeMode());
-  if (running) {
+  if (running && phase === "waiting_for_discord_login") {
+    $("runtimeStatus").textContent = `waiting for Discord sign-in - ${mode}`;
+  } else if (running) {
     $("runtimeStatus").textContent = `scanner running - ${mode} - ${browserMode}`;
   } else {
     $("runtimeStatus").textContent = `paused - ${mode} - ${browserMode}`;
@@ -464,6 +467,15 @@ function renderOperationStatus() {
     return;
   }
   const runtime = appState?.runtime || {};
+  if (runtime.running && runtime.phase === "waiting_for_discord_login") {
+    el.className = "operation-status discord-blocked";
+    el.innerHTML = `
+      ${scannerSprite("discord-blocked")}
+      <span>Complete Discord sign-in</span>
+      <small>Visible browser handoff is waiting</small>
+    `;
+    return;
+  }
   if (runtime.running) {
     el.className = "operation-status scanning";
     el.innerHTML = `
@@ -1710,6 +1722,37 @@ async function launchDiscordLogin() {
   toast("Discord sign-in window launched");
 }
 
+async function launchDiscordHandoff() {
+  const opId = "discord-signin-handoff";
+  startOperation(
+    opId,
+    "Starting Discord sign-in handoff",
+    "Complete login in the visible browser window",
+    "discord-blocked",
+    "bi-box-arrow-in-right",
+  );
+  const email = $("discordEmail").value.trim();
+  const password = $("discordPassword").value;
+  if (email || password) {
+    await api("/api/discord-credentials", {
+      method: "POST",
+      body: JSON.stringify({ email, password }),
+    });
+    $("discordEmail").value = "";
+    $("discordPassword").value = "";
+  }
+  try {
+    const result = await api("/api/runtime-start-signin", { method: "POST", body: JSON.stringify({}) });
+    appState = result.state;
+    render();
+    finishOperation(opId, "Discord handoff started", "done", "bi-check-circle");
+    toast("Complete Discord sign-in in the visible browser. Scanner will continue in that same session.");
+  } catch (error) {
+    finishFailedOperation(opId, "Discord handoff failed", error);
+    throw error;
+  }
+}
+
 async function openDiscordChannel() {
   const currentServer = server();
   const currentChannel = channel();
@@ -2418,6 +2461,7 @@ $("syncDiscordServers").addEventListener("click", () => syncDiscordServers().cat
 $("syncDiscordRail").addEventListener("click", () => syncDiscordServers().catch((error) => toast(error.message)));
 $("saveDiscord").addEventListener("click", saveDiscordCredentials);
 $("launchDiscordLogin").addEventListener("click", launchDiscordLogin);
+$("launchDiscordHandoff").addEventListener("click", () => launchDiscordHandoff().catch((error) => toast(error.message)));
 $("openDiscordChannel").addEventListener("click", () => openDiscordChannel().catch((error) => toast(error.message)));
 $("repairDiscordServer").addEventListener("click", () => repairDiscordServer().catch((error) => toast(error.message)));
 $("refreshChannelLatest").addEventListener("click", () => refreshChannelLatest().catch((error) => toast(error.message)));

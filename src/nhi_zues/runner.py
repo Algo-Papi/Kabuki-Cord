@@ -68,18 +68,51 @@ class NhiZuesRunner:
     async def run_until_stopped(self, stop_event, *, on_cycle=None) -> None:
         await self._run(loop=True, stop_event=stop_event, on_cycle=on_cycle)
 
+    async def run_until_stopped_in_session(
+        self,
+        session: DiscordWebSession,
+        stop_event,
+        *,
+        on_cycle=None,
+    ) -> None:
+        await self._run_in_session(
+            session,
+            loop=True,
+            stop_event=stop_event,
+            on_cycle=on_cycle,
+            verify_login=False,
+        )
+
     async def _run(self, *, loop: bool, stop_event=None, on_cycle=None) -> None:
+        async with DiscordWebSession(
+            self.config.profile_dir,
+            browser_channel=self.config.browser_channel,
+            headless=self.config.headless,
+        ) as session:
+            await self._run_in_session(
+                session,
+                loop=loop,
+                stop_event=stop_event,
+                on_cycle=on_cycle,
+                verify_login=True,
+            )
+
+    async def _run_in_session(
+        self,
+        session: DiscordWebSession,
+        *,
+        loop: bool,
+        stop_event=None,
+        on_cycle=None,
+        verify_login: bool,
+    ) -> None:
         if not self.config.channels:
             raise ValueError("Configure at least one channel in NHI_ZUES_CHANNELS.")
 
         self.config.state_dir.mkdir(parents=True, exist_ok=True)
         self.memory.load()
 
-        async with DiscordWebSession(
-            self.config.profile_dir,
-            browser_channel=self.config.browser_channel,
-            headless=self.config.headless,
-        ) as session:
+        if verify_login:
             credentials = get_discord_credentials()
             logged_in = await session.login_if_needed(
                 email=credentials.email,
@@ -87,27 +120,31 @@ class NhiZuesRunner:
                 timeout_seconds=45,
                 allow_human_challenge=False,
             )
-            if not logged_in:
-                raise RuntimeError(discord_login_blocker_message(await session.account_blocker_state()))
-            last_checked: dict[tuple[str, str], float] = {}
-            while not _stop_requested(stop_event):
-                targets = self._due_targets(last_checked) if loop else list(self.config.channels)
-                if targets:
-                    await self._process_channels(session, targets)
-                    now = time.monotonic()
-                    for target in targets:
-                        last_checked[(target.server_id, target.channel_id)] = now
-                    if on_cycle:
-                        on_cycle()
-                if not loop:
-                    return
+        else:
+            await session.open_home()
+            logged_in = await session.is_logged_in()
+        if not logged_in:
+            raise RuntimeError(discord_login_blocker_message(await session.account_blocker_state()))
 
-                sleep_seconds = self.config.scanner_cycle_sleep_seconds if targets else min(
-                    self.config.poll_seconds,
-                    self.config.scanner_cycle_sleep_seconds,
-                )
-                if await _sleep_interruptible(stop_event, sleep_seconds):
-                    return
+        last_checked: dict[tuple[str, str], float] = {}
+        while not _stop_requested(stop_event):
+            targets = self._due_targets(last_checked) if loop else list(self.config.channels)
+            if targets:
+                await self._process_channels(session, targets)
+                now = time.monotonic()
+                for target in targets:
+                    last_checked[(target.server_id, target.channel_id)] = now
+                if on_cycle:
+                    on_cycle()
+            if not loop:
+                return
+
+            sleep_seconds = self.config.scanner_cycle_sleep_seconds if targets else min(
+                self.config.poll_seconds,
+                self.config.scanner_cycle_sleep_seconds,
+            )
+            if await _sleep_interruptible(stop_event, sleep_seconds):
+                return
 
     def _due_targets(self, last_checked: dict[tuple[str, str], float]):
         now = time.monotonic()
