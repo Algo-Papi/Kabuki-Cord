@@ -424,6 +424,19 @@
     </div>
 
     <div id="toast" class="toast"></div>
+    <div id="approvalReviewOverlay" class="approval-review-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="approvalReviewTitle">
+      <div class="approval-review-dialog">
+        <div class="approval-review-header">
+          <div>
+            <div class="eyebrow">Approval Review</div>
+            <h2 id="approvalReviewTitle">Draft approval</h2>
+            <span id="approvalReviewSubtitle"></span>
+          </div>
+          <button id="closeApprovalReview" class="icon-button" type="button" title="Close approval review"><i class="bi bi-x-lg"></i></button>
+        </div>
+        <div id="approvalReviewBody" class="approval-review-body"></div>
+      </div>
+    </div>
     <div id="onboardingOverlay" class="onboarding-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="onboardingTitle">
       <div class="onboarding-card">
         <div class="onboarding-header">

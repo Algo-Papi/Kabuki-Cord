@@ -16,7 +16,11 @@ The first version is intentionally conservative:
 
 Generic fictional sample data is shown here; real server names, channels, users, approvals, and icons stay in ignored local state.
 
+Dashboard view with fictional server, channel, character, and observed-conversation data:
+
 ![Kabuki-Cord dashboard](docs/screenshots/kabuki-cord-dashboard.png)
+
+Approval queue and focused review window with fictional context and draft text:
 
 ![Kabuki-Cord approvals](docs/screenshots/kabuki-cord-approvals.png)
 
@@ -166,7 +170,7 @@ The GUI includes an update check under **API & Runtime**. It only updates from t
 
 ## Approvals
 
-Approval cards can be edited before sending. Use **Save** to persist draft edits, **Reply to** chips to target a recent poster and prefix their display name, **Regenerate** to rewrite the draft using your mini prompt, **Discard** to remove an unwanted draft, and **Approve & Send** to send only when dry-run is off.
+Approval cards can be edited before sending. Source context is collapsed by default so the queue stays readable. Use **Review** to open the focused review window with the full source context, target message, recent-poster chips, draft editor, regeneration note, and send controls. Use **Save** to persist draft edits, **Reply to** chips to target a recent poster and prefix their display name, **Regenerate** to rewrite the draft using your mini prompt, **Discard** to remove an unwanted draft, and **Approve & Send** to send only when dry-run is off.
 
 If Discord shows a human verification, 2FA, or login checkpoint, Kabuki-Cord keeps the approval queued and reports the blocker. Use **Sign In** to complete the visible Discord check, then retry the approval.
 

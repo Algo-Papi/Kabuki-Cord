@@ -11,6 +11,7 @@ const approvalTargets = {};
 const approvalDeliveryState = {};
 const approvalRegenerationState = {};
 const activeOperations = new Map();
+let activeApprovalReviewId = null;
 let knownEventKeys = new Set();
 let desktopBadgeActive = null;
 let kabukiAudioContext = null;
@@ -20,7 +21,7 @@ let bootSoundPlayed = false;
 let kabukiAudioUnlocked = false;
 
 const runtimeModeClassNames = ["runtime-mode-dry", "runtime-mode-full-auto", "runtime-mode-semi-auto", "runtime-mode-live-fire"];
-const kabukiBootThemeSrc = "/assets/kabuki-launch-theme.wav?v=2";
+const kabukiBootThemeSrc = "/assets/kabuki-launch-theme.wav?v=3";
 const onboardingStorageKey = "kabukiCordOnboardingDismissed.v1";
 
 const $ = (id) => document.getElementById(id);
@@ -119,6 +120,7 @@ function render() {
   renderRuntime();
   renderGrowth();
   renderApprovals();
+  renderApprovalReview();
   renderObserved();
   renderHistory();
   renderMetrics();
@@ -626,6 +628,9 @@ function renderApprovalsLegacy() {
   document.querySelectorAll("[data-approval-open]").forEach((button) => {
     button.addEventListener("click", () => openApprovalConversation(button.dataset.approvalOpen).catch((error) => toast(error.message)));
   });
+  document.querySelectorAll("[data-approval-review]").forEach((button) => {
+    button.addEventListener("click", () => openApprovalReview(button.dataset.approvalReview));
+  });
   document.querySelectorAll("[data-approval-send]").forEach((button) => {
     button.addEventListener("click", () => sendApproval(button.dataset.approvalSend));
   });
@@ -657,6 +662,9 @@ function renderApprovals() {
   });
   document.querySelectorAll("[data-approval-open]").forEach((button) => {
     button.addEventListener("click", () => openApprovalConversation(button.dataset.approvalOpen).catch((error) => toast(error.message)));
+  });
+  document.querySelectorAll("[data-approval-review]").forEach((button) => {
+    button.addEventListener("click", () => openApprovalReview(button.dataset.approvalReview));
   });
   document.querySelectorAll("[data-approval-send]").forEach((button) => {
     button.addEventListener("click", () => sendApproval(button.dataset.approvalSend));
@@ -774,7 +782,7 @@ function renderApprovalItem(item) {
         <i class="bi bi-signpost-split"></i>
         <span>${escapeHtml(item.reason || "No approval reason recorded.")}</span>
       </div>
-      ${renderApprovalSource(item)}
+      ${renderApprovalSource(item, { collapsible: true })}
       <div class="approval-target-summary" data-approval-target-summary="${escapeAttr(item.approval_id)}">
         ${approvalTargetSummaryMarkup(item.approval_id)}
       </div>
@@ -786,6 +794,7 @@ function renderApprovalItem(item) {
       ${approvalRegenerationStatus(item.approval_id)}
       ${approvalDeliveryStatus(item.approval_id)}
       <div class="approval-actions">
+        <button class="small-button" data-approval-review="${escapeAttr(item.approval_id)}"><i class="bi bi-window-sidebar"></i> Review</button>
         <button class="small-button" data-approval-save="${escapeAttr(item.approval_id)}"><i class="bi bi-save2"></i> Save</button>
         <button class="small-button" data-approval-regenerate="${escapeAttr(item.approval_id)}" ${regenerating ? "disabled" : ""}><i class="bi ${regenerating ? "bi-hourglass-split" : "bi-stars"}"></i> ${regenerating ? "Regenerating" : "Regenerate"}</button>
         <button class="small-button" data-approval-open="${escapeAttr(item.approval_id)}"><i class="bi bi-box-arrow-up-right"></i> Open Conversation</button>
@@ -798,20 +807,36 @@ function renderApprovalItem(item) {
   `;
 }
 
-function renderApprovalSource(item) {
+function renderApprovalSource(item, options = {}) {
   const messages = approvalSourceMessages(item);
   const missingIds = item.source_missing_ids || [];
   const sourceCountLabel = messages.length === 1 ? "1 message" : `${messages.length} messages`;
+  const body = `
+      <div class="approval-source-body">
+        ${messages.map((message) => renderApprovalSourceMessage(item, message)).join("") || `
+          <div class="approval-source-empty">No source message text was captured locally. Open the conversation before sending.</div>
+        `}
+        ${missingIds.length ? `<div class="approval-source-missing">${missingIds.length} source id${missingIds.length === 1 ? "" : "s"} not found in stored memory.</div>` : ""}
+      </div>
+  `;
+  if (options.collapsible) {
+    return `
+      <details class="approval-source approval-source-collapsible">
+        <summary class="approval-source-title">
+          <span><i class="bi bi-chevron-right"></i> Context collapsed</span>
+          <small>${messages.length ? sourceCountLabel : "no local message"}</small>
+        </summary>
+        ${body}
+      </details>
+    `;
+  }
   return `
-    <div class="approval-source">
+    <div class="approval-source approval-source-expanded">
       <div class="approval-source-title">
         <span>Source context</span>
         <small>${messages.length ? sourceCountLabel : "no local message"}</small>
       </div>
-      ${messages.map((message) => renderApprovalSourceMessage(item, message)).join("") || `
-        <div class="approval-source-empty">No source message text was captured locally. Open the conversation before sending.</div>
-      `}
-      ${missingIds.length ? `<div class="approval-source-missing">${missingIds.length} source id${missingIds.length === 1 ? "" : "s"} not found in stored memory.</div>` : ""}
+      ${body}
     </div>
   `;
 }
@@ -871,6 +896,99 @@ function approvalTargetSummaryMarkup(approvalId) {
   return `<i class="bi bi-reply"></i><span>No source message text was found. Open the conversation before approving.</span>`;
 }
 
+function openApprovalReview(approvalId) {
+  activeApprovalReviewId = approvalId;
+  renderApprovalReview();
+  $("approvalReviewOverlay")?.classList.remove("hidden");
+}
+
+function closeApprovalReview() {
+  activeApprovalReviewId = null;
+  $("approvalReviewOverlay")?.classList.add("hidden");
+}
+
+function renderApprovalReview() {
+  const overlay = $("approvalReviewOverlay");
+  if (!overlay) return;
+  if (!activeApprovalReviewId) {
+    overlay.classList.add("hidden");
+    return;
+  }
+  const item = (appState.approvals || []).find((approval) => approval.approval_id === activeApprovalReviewId);
+  if (!item) {
+    closeApprovalReview();
+    return;
+  }
+  const info = approvalChannelInfo(item);
+  const delivery = approvalDeliveryState[item.approval_id] || null;
+  const sending = delivery?.state === "sending";
+  const regenerating = approvalRegenerationState[item.approval_id]?.state === "regenerating";
+  $("approvalReviewTitle").textContent = `${item.character_name || "Character"} approval`;
+  $("approvalReviewSubtitle").textContent = `${info.serverLabel} / ${formatChannelName(info.channelLabel, info.channelType)} / ${formatTime(item.created_at) || "queued"}`;
+  $("approvalReviewBody").innerHTML = `
+    <div class="approval-review-layout">
+      <section class="approval-review-context">
+        <div class="approval-reason">
+          <i class="bi bi-signpost-split"></i>
+          <span>${escapeHtml(item.reason || "No approval reason recorded.")}</span>
+        </div>
+        ${renderApprovalSource(item, { collapsible: false })}
+        <div class="approval-target-summary" data-approval-target-summary="${escapeAttr(item.approval_id)}">
+          ${approvalTargetSummaryMarkup(item.approval_id)}
+        </div>
+        ${recentPosterChips(item.channel_id, item.approval_id)}
+      </section>
+      <section class="approval-review-editor">
+        <label class="approval-field-label">Draft to send</label>
+        <textarea class="approval-draft approval-review-draft" data-approval-review-draft="${escapeAttr(item.approval_id)}" rows="9">${escapeHtml(approvalDraft(item.approval_id) || item.draft)}</textarea>
+        <label class="approval-field-label">Regeneration note</label>
+        <textarea class="approval-instruction" data-approval-review-instruction="${escapeAttr(item.approval_id)}" rows="4" placeholder="Say it more directly, disagree with the second sentence, make it less polished...">${escapeHtml(approvalInstruction(item.approval_id))}</textarea>
+        ${approvalRegenerationStatus(item.approval_id)}
+        ${approvalDeliveryStatus(item.approval_id)}
+        ${currentRuntimeMode() === "dry" ? `<div class="approval-warning">Dry Mode is on. Approved messages will be blocked until Response Mode changes in API & Runtime.</div>` : ""}
+        <div class="approval-review-actions">
+          <button class="small-button" data-review-save="${escapeAttr(item.approval_id)}"><i class="bi bi-save2"></i> Save</button>
+          <button class="small-button" data-review-regenerate="${escapeAttr(item.approval_id)}" ${regenerating ? "disabled" : ""}><i class="bi ${regenerating ? "bi-hourglass-split" : "bi-stars"}"></i> ${regenerating ? "Regenerating" : "Regenerate"}</button>
+          <button class="small-button" data-review-open="${escapeAttr(item.approval_id)}"><i class="bi bi-box-arrow-up-right"></i> Open Conversation</button>
+          <button class="small-button" data-review-copy="${escapeAttr(item.approval_id)}"><i class="bi bi-copy"></i> Copy</button>
+          <button class="small-button" data-review-discard="${escapeAttr(item.approval_id)}"><i class="bi bi-trash3"></i> Discard</button>
+          <button class="primary-button approval-send" data-review-send="${escapeAttr(item.approval_id)}" ${sending ? "disabled" : ""}><i class="bi ${sending ? "bi-hourglass-split" : "bi-send"}"></i> ${sending ? "Sending" : "Approve & Send"}</button>
+        </div>
+      </section>
+    </div>
+  `;
+  bindApprovalReviewEvents();
+}
+
+function bindApprovalReviewEvents() {
+  const body = $("approvalReviewBody");
+  if (!body) return;
+  body.querySelectorAll("[data-review-copy]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      await navigator.clipboard.writeText(approvalDraft(button.dataset.reviewCopy));
+      toast("Draft copied");
+    });
+  });
+  body.querySelectorAll("[data-review-save]").forEach((button) => {
+    button.addEventListener("click", () => saveApproval(button.dataset.reviewSave));
+  });
+  body.querySelectorAll("[data-review-discard]").forEach((button) => {
+    button.addEventListener("click", () => discardApproval(button.dataset.reviewDiscard));
+  });
+  body.querySelectorAll("[data-review-regenerate]").forEach((button) => {
+    button.addEventListener("click", () => regenerateApproval(button.dataset.reviewRegenerate));
+  });
+  body.querySelectorAll("[data-review-open]").forEach((button) => {
+    button.addEventListener("click", () => openApprovalConversation(button.dataset.reviewOpen).catch((error) => toast(error.message)));
+  });
+  body.querySelectorAll("[data-review-send]").forEach((button) => {
+    button.addEventListener("click", () => sendApproval(button.dataset.reviewSend));
+  });
+  body.querySelectorAll("[data-poster-target]").forEach((button) => {
+    button.addEventListener("click", () => selectApprovalTarget(button.dataset.approvalId, button.dataset.posterKey, button.dataset.posterPrefix));
+  });
+}
+
 function recentPosterChips(channelId, approvalId) {
   const posters = appState.recent_posters?.[channelId] || [];
   if (!posters.length) return `<div class="poster-chips muted">No recent posters recorded for this channel yet.</div>`;
@@ -889,7 +1007,19 @@ function recentPosterChips(channelId, approvalId) {
 }
 
 function approvalDraft(approvalId) {
+  const reviewDraft = document.querySelector(`[data-approval-review-draft="${cssEscape(approvalId)}"]`);
+  if (reviewDraft && !$("approvalReviewOverlay")?.classList.contains("hidden")) {
+    return reviewDraft.value.trim();
+  }
   return document.querySelector(`[data-approval-draft="${cssEscape(approvalId)}"]`)?.value.trim() || "";
+}
+
+function approvalInstruction(approvalId) {
+  const reviewInstruction = document.querySelector(`[data-approval-review-instruction="${cssEscape(approvalId)}"]`);
+  if (reviewInstruction && !$("approvalReviewOverlay")?.classList.contains("hidden")) {
+    return reviewInstruction.value.trim();
+  }
+  return document.querySelector(`[data-approval-instruction="${cssEscape(approvalId)}"]`)?.value.trim() || "";
 }
 
 function approvalDeliveryStatus(approvalId) {
@@ -938,8 +1068,9 @@ function selectApprovalTarget(approvalId, userKey, prefix) {
   document.querySelectorAll(`[data-approval-id="${cssEscape(approvalId)}"][data-poster-target]`).forEach((button) => {
     button.classList.toggle("active", button.dataset.posterKey === userKey);
   });
-  const targetSummary = document.querySelector(`[data-approval-target-summary="${cssEscape(approvalId)}"]`);
-  if (targetSummary) targetSummary.innerHTML = approvalTargetSummaryMarkup(approvalId);
+  document.querySelectorAll(`[data-approval-target-summary="${cssEscape(approvalId)}"]`).forEach((targetSummary) => {
+    targetSummary.innerHTML = approvalTargetSummaryMarkup(approvalId);
+  });
 }
 
 async function saveApproval(approvalId) {
@@ -962,7 +1093,7 @@ async function discardApproval(approvalId) {
 
 async function regenerateApproval(approvalId) {
   if (approvalRegenerationState[approvalId]?.state === "regenerating") return;
-  const instruction = document.querySelector(`[data-approval-instruction="${cssEscape(approvalId)}"]`)?.value.trim() || "";
+  const instruction = approvalInstruction(approvalId);
   const draft = approvalDraft(approvalId);
   const queuedDraft = (appState.approvals || []).find((item) => item.approval_id === approvalId)?.draft || "";
   const opId = `regenerate:${approvalId}`;
@@ -2286,6 +2417,10 @@ $("onboardingSync").addEventListener("click", () => {
   closeOnboarding();
   syncDiscordServers().catch((error) => toast(error.message));
 });
+$("closeApprovalReview").addEventListener("click", closeApprovalReview);
+$("approvalReviewOverlay").addEventListener("click", (event) => {
+  if (event.target === $("approvalReviewOverlay")) closeApprovalReview();
+});
 $("clearApprovals").addEventListener("click", () => clearApprovals().catch((error) => toast(error.message)));
 $("checkUpdates").addEventListener("click", checkUpdates);
 $("applyUpdate").addEventListener("click", applyUpdate);
@@ -2299,6 +2434,7 @@ $("runtimeMode").addEventListener("change", () => {
   $("approvalRequired").checked = currentRuntimeMode() !== "full_auto";
   renderServerPanel();
   renderApprovals();
+  renderApprovalReview();
   renderRuntime();
 });
 
@@ -2357,6 +2493,11 @@ $("addUserNote").addEventListener("click", async () => {
 
 window.addEventListener("pointerdown", unlockKabukiAudio, { once: true });
 window.addEventListener("keydown", unlockKabukiAudio, { once: true });
+window.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !$("approvalReviewOverlay").classList.contains("hidden")) {
+    closeApprovalReview();
+  }
+});
 
 renderAudioStatus();
 loadState().catch((error) => {

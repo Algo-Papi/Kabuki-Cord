@@ -10,83 +10,72 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "web" / "assets" / "kabuki-launch-theme.wav"
 SAMPLE_RATE = 44_100
-DURATION = 6.25
+BPM = 150
+BEAT = 60 / BPM
+DURATION = 7.2
 TAU = math.tau
 
 
 def main() -> None:
-    random.seed(92817)
+    random.seed(43019)
     length = int(SAMPLE_RATE * DURATION)
     left = [0.0] * length
     right = [0.0] * length
 
-    # Taiko entrance pattern.
-    for t, freq, amp in [
-        (0.08, 64, 1.05),
-        (0.42, 52, 0.72),
-        (0.76, 84, 0.92),
-        (1.36, 58, 1.0),
-        (1.68, 104, 0.62),
-        (2.18, 49, 1.08),
-        (2.48, 72, 0.7),
-        (3.16, 45, 1.15),
-        (3.42, 92, 0.78),
-        (4.05, 56, 1.0),
-        (4.48, 78, 0.76),
-        (5.18, 42, 1.2),
-    ]:
-        add_stereo(left, right, t, taiko(freq, 0.72, amp), pan=0.0)
-
-    # Fast roll into the final logo snap.
-    for index in range(12):
-        t = 4.62 + index * 0.052
-        add_stereo(left, right, t, taiko(110 + index * 2.5, 0.22, 0.28 + index * 0.018), pan=(-1) ** index * 0.18)
-
-    # Hand-clap / hyoshigi-style accents.
-    for t, pan, amp in [
-        (0.30, -0.15, 0.46),
-        (0.60, 0.18, 0.38),
-        (1.18, 0.1, 0.42),
-        (1.94, -0.2, 0.34),
-        (2.78, 0.2, 0.42),
-        (3.82, -0.12, 0.48),
-        (5.02, 0.0, 0.55),
-    ]:
-        add_stereo(left, right, t, clap(amp), pan=pan)
-
-    # Shamisen/koto-like pluck figure.
-    notes = [
-        (0.20, 293.66, -0.45, 0.24),
-        (0.52, 349.23, 0.38, 0.2),
-        (0.84, 440.00, -0.3, 0.22),
-        (1.12, 523.25, 0.32, 0.18),
-        (1.52, 440.00, -0.36, 0.2),
-        (1.84, 392.00, 0.26, 0.18),
-        (2.26, 329.63, -0.42, 0.22),
-        (2.58, 493.88, 0.38, 0.18),
-        (3.08, 587.33, -0.28, 0.19),
-        (3.54, 440.00, 0.35, 0.18),
-        (4.10, 523.25, -0.34, 0.2),
-        (4.38, 659.25, 0.38, 0.18),
-        (5.34, 293.66, -0.2, 0.26),
+    # A measured action-anime style entrance: steady low drum, readable string
+    # hook, restrained taiko accents, and one theatrical final shout.
+    motif = [
+        (0.00, 293.66),
+        (0.50, 349.23),
+        (1.00, 392.00),
+        (1.50, 440.00),
+        (2.00, 392.00),
+        (2.50, 349.23),
+        (3.00, 293.66),
+        (3.50, 261.63),
     ]
-    for t, freq, pan, amp in notes:
-        add_stereo(left, right, t, pluck(freq, 1.05, amp), pan=pan)
+    for bar in range(3):
+        start = 0.28 + bar * 8 * BEAT
+        for step, freq in motif:
+            t = start + step * BEAT
+            pan = -0.28 if int(step * 2) % 2 == 0 else 0.26
+            add_stereo(left, right, t, plucked_string(freq, 0.62, 0.23 + bar * 0.025), pan=pan)
+            if bar >= 1 and step in (1.0, 2.0, 3.0):
+                add_stereo(left, right, t + 0.02, bowed_string(freq * 2.0, 0.46, 0.06), pan=-pan)
 
-    # Shakuhachi-ish breathy glides.
-    add_stereo(left, right, 0.95, flute_glide(392.0, 523.25, 1.5, 0.2), pan=-0.18)
-    add_stereo(left, right, 2.62, flute_glide(329.63, 587.33, 1.65, 0.24), pan=0.2)
-    add_stereo(left, right, 4.28, flute_glide(440.0, 659.25, 1.45, 0.22), pan=0.0)
+    # Pulse stays locked to the grid; no frantic fills.
+    for beat in range(17):
+        t = 0.08 + beat * BEAT
+        if beat % 4 == 0:
+            add_stereo(left, right, t, taiko(58, 0.42, 0.92), pan=0.0)
+        elif beat % 4 == 2:
+            add_stereo(left, right, t, taiko(74, 0.34, 0.54), pan=0.0)
+        else:
+            add_stereo(left, right, t, rim_click(0.15), pan=-0.1 if beat % 2 else 0.1)
 
-    # Layered theatrical chorus shouts.
-    for t, amp in [(0.72, 0.34), (1.38, 0.42), (2.20, 0.48), (3.18, 0.54), (5.18, 0.7)]:
-        add_stereo(left, right, t, chorus_ha(0.72, amp), pan=0.0)
+    # A simple low string bed gives shape without noise.
+    for t, freq in [(0.0, 146.83), (1.6, 174.61), (3.2, 196.00), (4.8, 174.61)]:
+        add_stereo(left, right, t, low_string(freq, 1.8, 0.12), pan=0.0)
 
-    apply_echo(left, right, delay=0.145, gain=0.18)
-    apply_echo(left, right, delay=0.315, gain=0.1)
+    # Short breathy flute answers, kept behind the hook.
+    add_stereo(left, right, 1.62, flute_line(440.0, 523.25, 0.92, 0.11), pan=0.18)
+    add_stereo(left, right, 3.22, flute_line(392.0, 587.33, 0.98, 0.12), pan=-0.18)
+    add_stereo(left, right, 5.22, flute_line(349.23, 659.25, 0.78, 0.13), pan=0.0)
+
+    # Final theatrical entrance hit.
+    add_stereo(left, right, 5.72, taiko(48, 0.76, 1.05), pan=0.0)
+    add_stereo(left, right, 5.78, chorus_ha(0.84, 0.34), pan=0.0)
+    add_stereo(left, right, 5.94, cymbal_swell(0.62, 0.12), pan=0.0)
+    add_stereo(left, right, 6.16, plucked_string(293.66, 0.82, 0.22), pan=-0.18)
+    add_stereo(left, right, 6.28, bowed_string(587.33, 0.72, 0.08), pan=0.2)
+
+    apply_room(left, right, delay=0.19, gain=0.12)
+    apply_room(left, right, delay=0.37, gain=0.06)
+    fade(left, fade_in=0.03, fade_out=0.55)
+    fade(right, fade_in=0.03, fade_out=0.55)
     soft_limit(left)
     soft_limit(right)
-    normalize(left, right, peak=0.94)
+    normalize(left, right, peak=0.9)
     write_wav(OUTPUT, left, right)
     print(f"wrote {OUTPUT}")
 
@@ -104,105 +93,139 @@ def add_stereo(left: list[float], right: list[float], start: float, samples: lis
 
 def taiko(freq: float, duration: float, amp: float) -> list[float]:
     count = int(SAMPLE_RATE * duration)
-    out = [0.0] * count
+    out: list[float] = []
     phase = 0.0
     for i in range(count):
         t = i / SAMPLE_RATE
-        pitch = freq * (1.0 + 1.25 * math.exp(-t * 18.0))
+        pitch = freq * (1.0 + 0.42 * math.exp(-t * 15.0))
         phase += TAU * pitch / SAMPLE_RATE
-        body = math.sin(phase) + 0.38 * math.sin(phase * 2.02)
-        skin = (random.random() * 2.0 - 1.0) * math.exp(-t * 42.0)
-        env = math.exp(-t * 5.6)
-        out[i] = math.tanh((body * env + skin * 0.32) * amp * 1.6) * 0.72
+        env = math.exp(-t * 7.2)
+        body = math.sin(phase) + 0.24 * math.sin(phase * 2.01)
+        tap = math.sin(TAU * 610 * t) * math.exp(-t * 42.0) * 0.12
+        out.append(math.tanh((body * env + tap) * amp * 1.25) * 0.72)
     return out
 
 
-def clap(amp: float) -> list[float]:
-    duration = 0.18
+def rim_click(amp: float) -> list[float]:
+    duration = 0.09
     count = int(SAMPLE_RATE * duration)
-    out = [0.0] * count
+    out: list[float] = []
     for i in range(count):
         t = i / SAMPLE_RATE
-        burst = sum(
-            max(0.0, 1.0 - abs(t - center) / 0.018)
-            for center in (0.008, 0.028, 0.052)
-        )
-        wood = math.sin(TAU * 1550 * t) * math.exp(-t * 30)
-        noise = (random.random() * 2.0 - 1.0) * burst * math.exp(-t * 10)
-        out[i] = (noise * 0.74 + wood * 0.26) * amp
+        env = math.exp(-t * 38.0)
+        tone = math.sin(TAU * 980 * t) + 0.35 * math.sin(TAU * 1460 * t)
+        out.append(tone * env * amp)
     return out
 
 
-def pluck(freq: float, duration: float, amp: float) -> list[float]:
+def plucked_string(freq: float, duration: float, amp: float) -> list[float]:
     count = int(SAMPLE_RATE * duration)
     delay = max(2, int(SAMPLE_RATE / freq))
-    line = [random.random() * 2.0 - 1.0 for _ in range(delay)]
-    out = []
-    pick = 0
+    line = [random.uniform(-1.0, 1.0) for _ in range(delay)]
+    out: list[float] = []
+    index = 0
     for i in range(count):
-        current = line[pick]
-        nxt = line[(pick + 1) % delay]
-        line[pick] = 0.495 * (current + nxt)
-        pick = (pick + 1) % delay
         t = i / SAMPLE_RATE
-        buzz = math.sin(TAU * freq * 2.01 * t) * math.exp(-t * 12.0) * 0.18
-        out.append((current + buzz) * amp * math.exp(-t * 0.8))
+        current = line[index]
+        line[index] = 0.496 * (line[index] + line[(index + 1) % delay])
+        index = (index + 1) % delay
+        pick = math.sin(TAU * freq * 2.0 * t) * math.exp(-t * 18.0) * 0.08
+        out.append((current * 0.9 + pick) * math.exp(-t * 1.55) * amp)
     return out
 
 
-def flute_glide(start_freq: float, end_freq: float, duration: float, amp: float) -> list[float]:
+def bowed_string(freq: float, duration: float, amp: float) -> list[float]:
     count = int(SAMPLE_RATE * duration)
-    out = [0.0] * count
+    out: list[float] = []
     phase = 0.0
     for i in range(count):
         x = i / max(1, count - 1)
         t = i / SAMPLE_RATE
-        env = min(1.0, x / 0.16) * min(1.0, (1.0 - x) / 0.18)
-        freq = start_freq + (end_freq - start_freq) * (0.5 - 0.5 * math.cos(math.pi * x))
-        freq += math.sin(TAU * 5.2 * t) * 4.5
+        env = min(1.0, x / 0.16) * min(1.0, (1.0 - x) / 0.2)
+        vibrato = math.sin(TAU * 5.8 * t) * 2.3
+        phase += TAU * (freq + vibrato) / SAMPLE_RATE
+        sawish = math.sin(phase) + 0.32 * math.sin(2 * phase) + 0.16 * math.sin(3 * phase)
+        out.append(sawish * env * amp)
+    return out
+
+
+def low_string(freq: float, duration: float, amp: float) -> list[float]:
+    count = int(SAMPLE_RATE * duration)
+    out: list[float] = []
+    phase = 0.0
+    for i in range(count):
+        x = i / max(1, count - 1)
+        env = min(1.0, x / 0.3) * min(1.0, (1.0 - x) / 0.36)
         phase += TAU * freq / SAMPLE_RATE
-        breath = (random.random() * 2.0 - 1.0) * 0.045
-        tone = math.sin(phase) + 0.22 * math.sin(phase * 2.0) + 0.08 * math.sin(phase * 3.01)
-        out[i] = (tone * 0.78 + breath) * env * amp
+        out.append((math.sin(phase) + 0.22 * math.sin(2 * phase)) * env * amp)
+    return out
+
+
+def flute_line(start_freq: float, end_freq: float, duration: float, amp: float) -> list[float]:
+    count = int(SAMPLE_RATE * duration)
+    out: list[float] = []
+    phase = 0.0
+    for i in range(count):
+        x = i / max(1, count - 1)
+        env = min(1.0, x / 0.18) * min(1.0, (1.0 - x) / 0.2)
+        freq = start_freq + (end_freq - start_freq) * (0.5 - 0.5 * math.cos(math.pi * x))
+        phase += TAU * freq / SAMPLE_RATE
+        breath = random.uniform(-1.0, 1.0) * 0.012
+        out.append((math.sin(phase) + 0.15 * math.sin(2 * phase) + breath) * env * amp)
     return out
 
 
 def chorus_ha(duration: float, amp: float) -> list[float]:
     count = int(SAMPLE_RATE * duration)
-    out = [0.0] * count
-    bases = [128.0, 151.0, 186.0, 224.0, 256.0]
-    detunes = [-0.018, -0.007, 0.004, 0.012, 0.021]
-    phases = [random.random() * TAU for _ in bases]
+    out: list[float] = []
+    phases = [0.0, 0.8, 1.7]
+    freqs = [138.0, 174.0, 220.0]
     for i in range(count):
         t = i / SAMPLE_RATE
         x = i / max(1, count - 1)
-        env = min(1.0, x / 0.07) * math.exp(-t * 3.7)
+        env = min(1.0, x / 0.06) * math.exp(-t * 3.2)
         voice = 0.0
-        for idx, base in enumerate(bases):
-            freq = base * (1.0 + detunes[idx]) + math.sin(TAU * 4.1 * t + idx) * 1.6
-            phases[idx] += TAU * freq / SAMPLE_RATE
-            p = phases[idx]
-            voice += (
-                math.sin(p) * 0.56
-                + math.sin(p * 2.0) * 0.22
-                + math.sin(p * 3.0) * 0.12
-                + math.sin(p * 5.0) * 0.05
-            )
-        noise = (random.random() * 2.0 - 1.0) * math.exp(-t * 18.0) * 0.32
-        out[i] = math.tanh((voice / len(bases) + noise) * 2.0) * env * amp
+        for idx, freq in enumerate(freqs):
+            phases[idx] += TAU * (freq + math.sin(TAU * 4.0 * t + idx) * 1.2) / SAMPLE_RATE
+            voice += math.sin(phases[idx]) + 0.22 * math.sin(2 * phases[idx])
+        out.append(math.tanh(voice / len(freqs) * 1.3) * env * amp)
     return out
 
 
-def apply_echo(left: list[float], right: list[float], delay: float, gain: float) -> None:
+def cymbal_swell(duration: float, amp: float) -> list[float]:
+    count = int(SAMPLE_RATE * duration)
+    out: list[float] = []
+    last = 0.0
+    for i in range(count):
+        x = i / max(1, count - 1)
+        noise = random.uniform(-1.0, 1.0)
+        high = noise - last * 0.55
+        last = noise
+        env = min(1.0, x / 0.24) * min(1.0, (1.0 - x) / 0.18)
+        out.append(high * env * amp)
+    return out
+
+
+def apply_room(left: list[float], right: list[float], delay: float, gain: float) -> None:
     offset = int(delay * SAMPLE_RATE)
     for i in range(offset, len(left)):
         left[i] += left[i - offset] * gain
         right[i] += right[i - offset] * gain
 
 
+def fade(samples: list[float], *, fade_in: float, fade_out: float) -> None:
+    fade_in_count = int(fade_in * SAMPLE_RATE)
+    fade_out_count = int(fade_out * SAMPLE_RATE)
+    for i in range(min(fade_in_count, len(samples))):
+        samples[i] *= i / max(1, fade_in_count)
+    for i in range(min(fade_out_count, len(samples))):
+        pos = len(samples) - 1 - i
+        samples[pos] *= i / max(1, fade_out_count)
+
+
 def soft_limit(samples: list[float]) -> None:
     for i, sample in enumerate(samples):
-        samples[i] = math.tanh(sample * 1.35) / math.tanh(1.35)
+        samples[i] = math.tanh(sample * 1.18) / math.tanh(1.18)
 
 
 def normalize(left: list[float], right: list[float], peak: float) -> None:
