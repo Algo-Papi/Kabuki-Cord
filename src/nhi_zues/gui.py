@@ -28,6 +28,7 @@ from .budget import BudgetManager
 from .character import CharacterCardStore
 from .character_memory import CharacterMemoryStore
 from .config import AppConfig, load_config
+from .discord_text import clean_discord_display_name, sanitize_outgoing_draft
 from .events import EventLog
 from .llm import ReplyPlanner
 from .memory import ConversationMemory
@@ -1010,8 +1011,9 @@ def suggest_reaction(body: dict) -> dict:
     server_id = str(body.get("server_id") or "").strip()
     channel_id = str(body.get("channel_id") or "").strip()
     message_id = str(body.get("message_id") or "").strip()
-    author = str(body.get("author") or "").strip()
-    text = str(body.get("text") or "").strip()
+    raw_author = str(body.get("author") or "").strip()
+    author = clean_discord_display_name(raw_author) if raw_author else ""
+    text = sanitize_outgoing_draft(str(body.get("text") or "").strip())
     if not server_id or not channel_id or not message_id:
         raise RuntimeError("Select a remembered message before asking for a reaction suggestion.")
 
@@ -1021,8 +1023,8 @@ def suggest_reaction(body: dict) -> dict:
         memory.load()
         for message in memory.context(channel_id, limit=500):
             if message.message_id == message_id:
-                author = author or message.author
-                text = message.text
+                author = author or clean_discord_display_name(message.author)
+                text = sanitize_outgoing_draft(message.text)
                 break
     if not text:
         raise RuntimeError("Kabuki could not find the selected message text in local memory.")
@@ -1272,11 +1274,11 @@ def observed_conversation_state(path: Path) -> dict:
             poster_summaries.append(
                 {
                     "user_key": key,
-                    "display_name": str(row.get("author") or "unknown"),
+                    "display_name": clean_discord_display_name(str(row.get("author") or "unknown")),
                     "message_id": str(row.get("message_id") or ""),
                     "message_count": len(user_messages),
-                    "summary": _summarize_messages(texts),
-                    "recent_text": texts[-1] if texts else "",
+                    "summary": _summarize_messages([sanitize_outgoing_draft(text) for text in texts]),
+                    "recent_text": sanitize_outgoing_draft(texts[-1]) if texts else "",
                 }
             )
             if len(poster_summaries) >= 6:
@@ -1323,9 +1325,10 @@ def recent_posters_state(path: Path) -> dict:
         posters: list[dict] = []
         seen: set[str] = set()
         for row in reversed(rows):
-            author = str(row.get("author") or "").strip()
-            if not author:
+            raw_author = str(row.get("author") or "").strip()
+            if not raw_author:
                 continue
+            author = clean_discord_display_name(raw_author)
             author_id = row.get("author_id")
             key = _message_user_key(row)
             if key in seen:
@@ -1498,6 +1501,9 @@ def _send_approval_locked(*, approval_id: str, draft: str, reply_to_message_id: 
     config = load_config()
     if config.runtime_mode == "dry":
         raise RuntimeError("Dry Mode is enabled. Switch response mode before sending approved replies.")
+    draft = sanitize_outgoing_draft(draft)
+    if not draft:
+        raise RuntimeError("Draft became empty after removing unsafe Discord metadata.")
     queue = ApprovalQueue(config.state_dir / "approvals.json")
     try:
         item = queue.update_draft(approval_id, draft)
@@ -1839,10 +1845,10 @@ def _message_preview(row: dict) -> dict:
         "server_id": str(row.get("server_id") or ""),
         "channel_id": str(row.get("channel_id") or ""),
         "message_id": str(row.get("message_id") or ""),
-        "author": str(row.get("author") or "unknown"),
+        "author": clean_discord_display_name(str(row.get("author") or "unknown")),
         "author_id": row.get("author_id"),
         "user_key": _message_user_key(row),
-        "text": str(row.get("text") or ""),
+        "text": sanitize_outgoing_draft(str(row.get("text") or "")),
         "observed_at": str(row.get("observed_at") or ""),
     }
 
@@ -1851,12 +1857,11 @@ def _reply_mention_prefix(author: str, author_id) -> str:
     clean_id = str(author_id or "").strip()
     if clean_id:
         return f"<@{clean_id}>"
-    clean_author = str(author or "").strip()
-    return f"@{clean_author}" if clean_author else ""
+    return ""
 
 
 def _draft_with_reply_mention(draft: str, source_messages: list[MessageRecord]) -> str:
-    draft = str(draft or "").strip()
+    draft = sanitize_outgoing_draft(str(draft or "").strip())
     if not draft or not source_messages:
         return draft
     source = source_messages[-1]
@@ -1866,7 +1871,7 @@ def _draft_with_reply_mention(draft: str, source_messages: list[MessageRecord]) 
     if draft.startswith(prefix) or re.match(r"^<@!?\d+>\s+", draft):
         return draft
     if source.author:
-        plain_prefix = f"@{source.author}"
+        plain_prefix = f"@{clean_discord_display_name(source.author)}"
         if draft.startswith(plain_prefix):
             return f"{prefix}{draft[len(plain_prefix):]}"
     return f"{prefix} {draft}"
@@ -1888,7 +1893,7 @@ def _message_user_key(row: dict) -> str:
     author_id = row.get("author_id")
     if author_id:
         return f"discord:{author_id}"
-    author = " ".join(str(row.get("author") or "unknown").lower().strip().split())
+    author = " ".join(clean_discord_display_name(str(row.get("author") or "unknown")).lower().strip().split())
     return f"name:{author or 'unknown'}"
 
 
@@ -1915,7 +1920,7 @@ def _manual_source_messages(
 def _message_record_user_key(message: MessageRecord) -> str:
     if message.author_id:
         return f"discord:{message.author_id}"
-    author = " ".join(str(message.author or "unknown").lower().strip().split())
+    author = " ".join(clean_discord_display_name(str(message.author or "unknown")).lower().strip().split())
     return f"name:{author or 'unknown'}"
 
 
@@ -2127,10 +2132,10 @@ def _merge_context_messages(
 def _source_message_prompt(messages: list[MessageRecord]) -> str:
     lines = []
     for message in messages[-5:]:
-        text = message.text.strip()
+        text = sanitize_outgoing_draft(message.text).strip()
         if len(text) > 600:
             text = text[:597].rstrip() + "..."
-        lines.append(f"- {message.author}: {text}")
+        lines.append(f"- {clean_discord_display_name(message.author)}: {text}")
     return "\n".join(lines)
 
 

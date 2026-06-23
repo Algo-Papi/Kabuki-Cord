@@ -6,6 +6,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .discord_text import clean_discord_display_name
 from .models import MessageRecord, UserMemory
 from .state_io import try_write_json_file
 
@@ -34,7 +35,7 @@ class ConversationMemory:
                         server_id=row.get("server_id", ""),
                         channel_id=row["channel_id"],
                         message_id=row["message_id"],
-                        author=row["author"],
+                        author=clean_discord_display_name(row["author"]),
                         author_id=row.get("author_id"),
                         text=row["text"],
                         observed_at=datetime.fromisoformat(row["observed_at"]),
@@ -44,7 +45,7 @@ class ConversationMemory:
         for user_key, row in payload.get("users", {}).items():
             self._users[user_key] = UserMemory(
                 user_key=user_key,
-                display_name=row["display_name"],
+                display_name=clean_discord_display_name(row["display_name"]),
                 stable_user_id=row.get("stable_user_id"),
                 message_count=int(row.get("message_count", 0)),
                 recent_topics=tuple(row.get("recent_topics", [])),
@@ -216,7 +217,7 @@ class ConversationMemory:
 def _user_key(author: str, author_id: str | None = None) -> str:
     if author_id:
         return f"discord:{author_id}"
-    normalized = _normalize_name(author)
+    normalized = _normalize_name(clean_discord_display_name(author))
     return f"name:{normalized or 'unknown'}"
 
 
@@ -226,12 +227,14 @@ def _normalize_name(author: str) -> str:
 
 def _best_message_record(existing: MessageRecord, incoming: MessageRecord) -> MessageRecord:
     server_id = incoming.server_id or existing.server_id
-    author = existing.author
+    author = clean_discord_display_name(existing.author)
     author_id = existing.author_id
     text = incoming.text or existing.text
 
     incoming_author = str(incoming.author or "").strip()
     existing_author = str(existing.author or "").strip()
+    incoming_author = clean_discord_display_name(incoming_author)
+    existing_author = clean_discord_display_name(existing_author)
     incoming_author_known = bool(incoming_author) and incoming_author.lower() != "unknown"
     existing_author_known = bool(existing_author) and existing_author.lower() != "unknown"
 

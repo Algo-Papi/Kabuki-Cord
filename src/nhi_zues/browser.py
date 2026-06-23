@@ -7,6 +7,7 @@ from pathlib import Path
 
 from playwright.async_api import BrowserContext, Page, async_playwright
 
+from .discord_text import clean_discord_display_name
 from .models import MessageRecord
 from .selectors import TEXTBOX
 
@@ -881,7 +882,7 @@ class DiscordWebSession:
                 server_id=server_id,
                 channel_id=channel_id,
                 message_id=row["id"],
-                author=row.get("author") or "unknown",
+                author=clean_discord_display_name(row.get("author") or "unknown"),
                 author_id=row.get("authorId"),
                 text=row["text"],
             )

@@ -5,6 +5,7 @@ from openai import AsyncOpenAI
 from .budget import BudgetManager
 from .character import CharacterCard
 from .character_memory import CharacterMemory
+from .discord_text import clean_discord_display_name, sanitize_outgoing_draft
 from .models import DraftDecision, MessageRecord, UserMemory
 from .topics import TopicSnapshot
 from .user_instructions import UserInstruction
@@ -99,10 +100,7 @@ class ReplyPlanner:
                 requires_approval=requires_approval,
             )
 
-        transcript = _fit_text(
-            "\n".join(f"{message.author}: {message.text}" for message in context[-20:]),
-            self.max_input_chars,
-        )
+        transcript = _fit_text(_format_message_lines(context[-20:], max_chars=360), self.max_input_chars)
         newest_messages = _format_message_lines(new_messages[-5:])
         topic_summary = ", ".join(topic for topic, _ in topics.top_topics) or "none"
         user_memory = _format_user_memories(user_memories, user_instructions)
@@ -185,10 +183,7 @@ class ReplyPlanner:
         if self.client is None:
             return DraftDecision(True, "would regenerate; no OPENAI_API_KEY configured")
 
-        transcript = _fit_text(
-            "\n".join(f"{message.author}: {message.text}" for message in context[-24:]),
-            self.max_input_chars,
-        )
+        transcript = _fit_text(_format_message_lines(context[-24:], max_chars=360), self.max_input_chars)
         target = _target_user_line(target_user_key, user_memories)
         user_memory = _format_user_memories(user_memories, user_instructions)
         seed = f"{channel_id}:{target_user_key}:{operator_instruction}"
@@ -208,8 +203,8 @@ class ReplyPlanner:
             f"Target user: {target}\n\n"
             f"Known user context:\n{user_memory}\n\n"
             f"Recent conversation:\n{transcript}\n\n"
-            f"Original queued draft:\n{original_draft or '(none)'}\n\n"
-            f"Current editor draft:\n{current_draft or '(none)'}\n\n"
+            f"Original queued draft:\n{sanitize_outgoing_draft(original_draft) or '(none)'}\n\n"
+            f"Current editor draft:\n{sanitize_outgoing_draft(current_draft) or '(none)'}\n\n"
             f"Operator direction:\n{operator_instruction or 'Make a better natural response for the selected context.'}\n\n"
             f"Targeted regeneration context:\n{targeted_context or '(none)'}\n\n"
             f"{conversation_intelligence_prompt(mode='manual')}\n\n"
@@ -382,7 +377,7 @@ def _format_user_memories(
             notes = "; ".join(item.note for item in instructions[-5:])
             instruction_text = f" User-specific guidance: {notes}."
         lines.append(
-            f"- {user.display_name}: {user.message_count} observed messages; recent topics: {topics}.{summary}{instruction_text}"
+            f"- {clean_discord_display_name(user.display_name)}: {user.message_count} observed messages; recent topics: {topics}.{summary}{instruction_text}"
         )
     return "\n".join(lines)
 
@@ -390,12 +385,12 @@ def _format_user_memories(
 def _format_message_lines(messages: list[MessageRecord], *, max_chars: int = 260) -> str:
     lines: list[str] = []
     for message in messages:
-        text = " ".join(str(message.text or "").split())
+        text = " ".join(sanitize_outgoing_draft(str(message.text or "")).split())
         if not text:
             continue
         if len(text) > max_chars:
             text = text[: max_chars - 3].rstrip() + "..."
-        lines.append(f"- {message.author}: {text}")
+        lines.append(f"- {clean_discord_display_name(message.author)}: {text}")
     return "\n".join(lines)
 
 
@@ -424,7 +419,7 @@ def _target_user_line(target_user_key: str, user_memories: list[UserMemory]) -> 
         return "none selected"
     for user in user_memories:
         if user.user_key == target_user_key:
-            return f"{user.display_name} ({user.user_key})"
+            return f"{clean_discord_display_name(user.display_name)} ({user.user_key})"
     return target_user_key
 
 
@@ -432,14 +427,14 @@ def _recent_character_lines(context: list[MessageRecord], character: CharacterCa
     names = {_normalize_author(character.name)}
     names.update(_normalize_author(alias) for alias in character.aliases)
     return [
-        message.text
+        sanitize_outgoing_draft(message.text)
         for message in context
-        if _normalize_author(message.author) in names and message.text
+        if _normalize_author(clean_discord_display_name(message.author)) in names and message.text
     ][-8:]
 
 
 def _normalize_author(value: str) -> str:
-    return " ".join(str(value or "").lower().split())
+    return " ".join(clean_discord_display_name(str(value or "")).lower().split())
 
 
 def _quality_retry_prompt(user_prompt: str, draft: str, issues: list[str]) -> str:

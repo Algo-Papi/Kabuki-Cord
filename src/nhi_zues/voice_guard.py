@@ -4,6 +4,8 @@ import hashlib
 import random
 import re
 
+from .discord_text import contains_discord_metadata, sanitize_outgoing_draft
+
 
 STOCK_PHRASES = (
     "vibe",
@@ -134,7 +136,7 @@ def should_avoid_question(*, recent_character_lines: list[str], seed: str) -> bo
 
 
 def apply_voice_guard(text: str, *, avoid_question: bool, seed: str) -> str:
-    cleaned = " ".join(text.strip().split())
+    cleaned = " ".join(sanitize_outgoing_draft(text).split())
     if not cleaned:
         return cleaned
     cleaned = _trim_stock_openers(cleaned)
@@ -146,11 +148,14 @@ def apply_voice_guard(text: str, *, avoid_question: bool, seed: str) -> str:
 
 
 def draft_quality_issues(text: str) -> list[str]:
-    lowered = text.lower().strip()
+    raw_text = str(text or "")
+    lowered = raw_text.lower().strip()
     words = re.findall(r"\b[\w']+\b", lowered)
     issues: list[str] = []
     if len(words) > 45:
         issues.append("too long; keep it under 45 words unless explicitly asked")
+    if contains_discord_metadata(raw_text):
+        issues.append("contains scraped Discord role/server metadata")
     if lowered.startswith(("ok ", "okay ", "yeah ", "yep ", "lol ", "lmao ", "i mean ")):
         issues.append("starts with stock filler")
     if lowered.startswith(FORMULAIC_RECAP_OPENERS):
