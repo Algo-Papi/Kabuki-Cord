@@ -63,13 +63,14 @@ class ReplyPlanner:
             conversation_reply_enabled=self.conversation_reply_enabled,
         )
         if engagement_type == "none":
-            return DraftDecision(False, "no tracked topic or direct name cue")
-        requires_approval = engagement_type in {"proactive", "conversation"} and self.proactive_approval_required
+            return DraftDecision(False, "no conversation, tracked topic, or direct name cue")
+        requires_approval = engagement_type == "proactive" and self.proactive_approval_required
+        reason = _engagement_reason(engagement_type)
 
         if not self.enabled:
             return DraftDecision(
                 True,
-                "would reply; LLM disabled by NHI_ZUES_LLM_ENABLED",
+                f"would reply; {reason}; LLM disabled by NHI_ZUES_LLM_ENABLED",
                 draft=None,
                 engagement_type=engagement_type,
                 requires_approval=requires_approval,
@@ -77,7 +78,7 @@ class ReplyPlanner:
         if not self.generate_drafts:
             return DraftDecision(
                 True,
-                "would reply; draft generation disabled for this run",
+                f"would reply; {reason}; draft generation disabled for this run",
                 draft=None,
                 engagement_type=engagement_type,
                 requires_approval=requires_approval,
@@ -85,7 +86,7 @@ class ReplyPlanner:
         if self.client is None:
             return DraftDecision(
                 True,
-                "would reply; no OPENAI_API_KEY configured",
+                f"would reply; {reason}; no OPENAI_API_KEY configured",
                 draft=None,
                 engagement_type=engagement_type,
                 requires_approval=requires_approval,
@@ -118,7 +119,7 @@ class ReplyPlanner:
         if not budget_check.allowed:
             return DraftDecision(
                 True,
-                f"would reply; {budget_check.reason} (${budget_check.estimated_cost_usd:.6f} est.)",
+                f"would reply; {reason}; {budget_check.reason} (${budget_check.estimated_cost_usd:.6f} est.)",
                 draft=None,
                 engagement_type=engagement_type,
                 requires_approval=requires_approval,
@@ -136,7 +137,7 @@ class ReplyPlanner:
         draft = self._finalize_draft(draft, seed=f"{channel_id}:{','.join(message.message_id for message in new_messages)}")
         return DraftDecision(
             True,
-            f"tracked topic or direct name cue; api_cost=${record.cost_usd:.6f}",
+            f"{reason}; api_cost=${record.cost_usd:.6f}",
             draft=draft.strip(),
             engagement_type=engagement_type,
             requires_approval=requires_approval,
@@ -234,13 +235,23 @@ def _engagement_type(
     text = "\n".join(message.text.lower() for message in messages)
     if any(alias in text for alias in character.aliases):
         return "direct"
+    if conversation_reply_enabled:
+        return "conversation"
     if any(keyword in text for keyword in character.trigger_keywords):
         return "proactive"
     if topics.top_topics:
         return "proactive"
-    if conversation_reply_enabled:
-        return "conversation"
     return "none"
+
+
+def _engagement_reason(engagement_type: str) -> str:
+    if engagement_type == "direct":
+        return "direct name cue"
+    if engagement_type == "conversation":
+        return "conversation reply opportunity"
+    if engagement_type == "proactive":
+        return "tracked topic cue"
+    return "reply opportunity"
 
 
 def _format_user_memories(

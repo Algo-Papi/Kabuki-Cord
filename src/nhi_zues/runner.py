@@ -227,7 +227,11 @@ class NhiZuesRunner:
                         summary=decision.reason,
                         draft=decision.draft,
                     )
-                elif _requires_approval(self.config.runtime_mode, decision.engagement_type):
+                elif _requires_approval(
+                    self.config.runtime_mode,
+                    decision.engagement_type,
+                    auto_respond_enabled=target.auto_respond_enabled,
+                ):
                     existing = self.approvals.find_source_overlap(
                         channel_id=target.channel_id,
                         source_message_ids=source_ids,
@@ -299,10 +303,17 @@ def _normalize_author(value: str) -> str:
     return " ".join(str(value or "").lower().split())
 
 
-def _requires_approval(runtime_mode: str, engagement_type: str) -> bool:
+def _requires_approval(
+    runtime_mode: str,
+    engagement_type: str,
+    *,
+    auto_respond_enabled: bool,
+) -> bool:
     mode = str(runtime_mode or "dry").lower()
     kind = str(engagement_type or "").lower()
     if mode == "live_fire":
+        return True
+    if not auto_respond_enabled:
         return True
     if mode == "semi_auto":
         return kind in {"proactive", "manual"}

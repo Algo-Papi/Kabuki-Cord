@@ -18,7 +18,7 @@ class EventItem:
 
 
 class EventLog:
-    def __init__(self, event_file: Path, *, limit: int = 500) -> None:
+    def __init__(self, event_file: Path, *, limit: int = 5000) -> None:
         self.event_file = event_file
         self.limit = limit
         self._items = self._load()
