@@ -651,7 +651,7 @@ async function sendApproval(approvalId) {
   if (approvalDeliveryState[approvalId]?.state === "sending") return;
   const draft = approvalDraft(approvalId);
   const opId = `send:${approvalId}`;
-  startOperation(opId, "Posting approved reply", "Opening Discord and waiting for delivery", "discord", "bi-send");
+  startOperation(opId, "Posting approved reply", "Opening Discord and waiting for delivery", "posting", "bi-send");
   approvalDeliveryState[approvalId] = {
     state: "sending",
     message: "Processing approved message. Waiting for Discord delivery...",

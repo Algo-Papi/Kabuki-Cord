@@ -651,6 +651,10 @@ textarea:focus {
   --scanner-sheet: url("/assets/scanner-kabuki-refresh-sheet.png");
 }
 
+.scanner-sprite-posting {
+  --scanner-sheet: url("/assets/scanner-kabuki-posting-sheet.png");
+}
+
 .operation-status span,
 .operation-status small {
   overflow: hidden;
@@ -675,7 +679,8 @@ textarea:focus {
 .operation-status.repair,
 .operation-status.backfill,
 .operation-status.latest,
-.operation-status.refresh {
+.operation-status.refresh,
+.operation-status.posting {
   border-color: rgba(217, 185, 91, 0.35);
   background: rgba(217, 185, 91, 0.09);
   color: #f0dfa8;
@@ -689,7 +694,8 @@ textarea:focus {
 .operation-status.repair i,
 .operation-status.backfill i,
 .operation-status.latest i,
-.operation-status.refresh i {
+.operation-status.refresh i,
+.operation-status.posting i {
   color: var(--yellow);
   animation: status-spin 1.2s linear infinite;
 }
@@ -702,7 +708,8 @@ textarea:focus {
 .operation-status.repair .scanner-sprite,
 .operation-status.backfill .scanner-sprite,
 .operation-status.latest .scanner-sprite,
-.operation-status.refresh .scanner-sprite {
+.operation-status.refresh .scanner-sprite,
+.operation-status.posting .scanner-sprite {
   animation: scanner-dance 6.4s steps(20, end) infinite;
 }
 
@@ -736,6 +743,12 @@ textarea:focus {
   color: #dfd2ff;
 }
 
+.operation-status.posting {
+  border-color: rgba(98, 218, 130, 0.38);
+  background: rgba(98, 218, 130, 0.1);
+  color: #d7ffdf;
+}
+
 .operation-status.sync .scanner-sprite {
   animation-duration: 6.9s;
   filter: drop-shadow(0 0 7px rgba(89, 224, 239, 0.28)) drop-shadow(0 2px 2px rgba(0, 0, 0, 0.44));
@@ -759,6 +772,11 @@ textarea:focus {
 .operation-status.refresh .scanner-sprite {
   animation-duration: 6.5s;
   filter: drop-shadow(0 0 7px rgba(167, 116, 255, 0.28)) drop-shadow(0 2px 2px rgba(0, 0, 0, 0.44));
+}
+
+.operation-status.posting .scanner-sprite {
+  animation-duration: 5.8s;
+  filter: drop-shadow(0 0 7px rgba(98, 218, 130, 0.3)) drop-shadow(0 2px 2px rgba(0, 0, 0, 0.44));
 }
 
 .operation-status.scanning {
