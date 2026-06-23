@@ -247,6 +247,21 @@
                 <button id="addUserNote" class="secondary-button"><i class="bi bi-person-plus"></i> Add User Note</button>
               </div>
               <div class="section-title user-directory-title">Remembered Users</div>
+              <div class="user-directory-controls">
+                <label class="field compact-field">
+                  <span>Search Users</span>
+                  <input id="userSearch" type="search" autocomplete="off" placeholder="Name, user id, topic, or note" />
+                </label>
+                <label class="field compact-field">
+                  <span>Sort</span>
+                  <select id="userSort">
+                    <option value="recent">Recently seen</option>
+                    <option value="messages">Most messages</option>
+                    <option value="name">Name A-Z</option>
+                  </select>
+                </label>
+              </div>
+              <div id="userListMeta" class="user-list-meta"></div>
               <div id="userList" class="user-list"></div>
             </div>
           </div>

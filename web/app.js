@@ -2,6 +2,8 @@ let appState = null;
 let selectedServer = 0;
 let selectedChannel = 0;
 let selectedUserKey = null;
+let userSearchQuery = "";
+let userSortMode = "recent";
 let apiToken = null;
 let previewPanelMode = "preview";
 let unreadEventCount = 0;
@@ -195,7 +197,7 @@ function renderServerPanel() {
           <div class="channel-actions">
             <button class="icon-mini pin ${chan.pinned ? "on" : ""}" data-pin-channel="${index}" title="${chan.pinned ? "Unpin channel" : "Pin channel to top"}"><i class="bi bi-pin-angle${chan.pinned ? "-fill" : ""}"></i></button>
             <button class="pill-toggle observe ${chan.scan_enabled ? "on" : ""}" data-toggle="scan" data-channel="${index}">Observe</button>
-            <button class="pill-toggle react ${chan.react_enabled ? "on" : ""}" data-toggle="react" data-channel="${index}" title="Auto-add a laugh reaction to obvious jokes when not in Dry Mode">React</button>
+            <button class="pill-toggle react ${chan.react_enabled ? "on" : ""}" data-toggle="react" data-channel="${index}" title="Auto-add a laugh reaction to obvious jokes when not in Dry Mode. Works with Engage off as long as Observe is on.">React</button>
             <button class="pill-toggle engage ${chan.engage_enabled ? "on" : ""}" data-toggle="engage" data-channel="${index}">Engage</button>
           </div>
         </div>
@@ -542,12 +544,19 @@ function renderGrowth() {
   const memory = appState.character_memory || {};
   const claims = memory.story_claims || [];
   const behavior = memory.behavior_notes || [];
+  if ($("userSearch").value !== userSearchQuery) $("userSearch").value = userSearchQuery;
+  if ($("userSort").value !== userSortMode) $("userSort").value = userSortMode;
   $("growthNotes").innerHTML =
     [...claims.map((note) => ["Story", note]), ...behavior.map((note) => ["Behavior", note])]
       .map(([type, note]) => `<div class="note-item"><strong>${type}</strong><br />${escapeHtml(note)}</div>`)
       .join("") || `<div class="note-item">No runtime growth notes yet.</div>`;
 
-  const users = appState.memory.users || [];
+  const users = sortedRememberedUsers(filteredRememberedUsers(appState.memory.users || []));
+  const totalUsers = (appState.memory.users || []).length;
+  const query = userSearchQuery.trim();
+  $("userListMeta").textContent = query
+    ? `${users.length} of ${totalUsers} remembered user${totalUsers === 1 ? "" : "s"} shown`
+    : `${totalUsers} remembered user${totalUsers === 1 ? "" : "s"} - sorted by ${userSortLabel(userSortMode)}`;
   $("userList").innerHTML =
     users
       .map((user) => `
@@ -555,11 +564,11 @@ function renderGrowth() {
           <img src="/assets/placeholders/user.svg" alt="" />
           <div>
             <strong>${escapeHtml(user.display_name || user.user_key)}</strong>
-            <span>${escapeHtml(user.user_key)} · ${user.message_count || 0} messages</span>
+            <span>${escapeHtml(user.user_key)} &middot; ${user.message_count || 0} messages &middot; ${escapeHtml(formatUserLastSeen(user.last_seen_at))}</span>
           </div>
         </div>
       `)
-      .join("") || `<div class="note-item">No users observed yet.</div>`;
+      .join("") || `<div class="note-item">${query ? "No remembered users match that search." : "No users observed yet."}</div>`;
   document.querySelectorAll("[data-user]").forEach((row) => {
     row.addEventListener("click", () => {
       if (selectedUserKey !== row.dataset.user) $("newUserNote").value = "";
@@ -568,6 +577,81 @@ function renderGrowth() {
     });
   });
   renderSelectedUserDetails();
+}
+
+function filteredRememberedUsers(users) {
+  const query = userSearchQuery.trim().toLowerCase();
+  if (!query) return users;
+  const noteTextByUser = userNotesByUserText();
+  return users.filter((user) => {
+    const haystack = [
+      user.user_key,
+      user.display_name,
+      user.stable_user_id,
+      user.summary,
+      ...(user.recent_topics || []),
+      noteTextByUser.get(user.user_key) || "",
+    ]
+      .join(" ")
+      .toLowerCase();
+    return haystack.includes(query);
+  });
+}
+
+function sortedRememberedUsers(users) {
+  const rows = [...users];
+  if (userSortMode === "name") {
+    return rows.sort((left, right) => userDisplayName(left).localeCompare(userDisplayName(right)));
+  }
+  if (userSortMode === "messages") {
+    return rows.sort((left, right) =>
+      Number(right.message_count || 0) - Number(left.message_count || 0)
+      || userDisplayName(left).localeCompare(userDisplayName(right))
+    );
+  }
+  return rows.sort((left, right) =>
+    userSeenMillis(right.last_seen_at) - userSeenMillis(left.last_seen_at)
+    || Number(right.message_count || 0) - Number(left.message_count || 0)
+    || userDisplayName(left).localeCompare(userDisplayName(right))
+  );
+}
+
+function userNotesByUserText() {
+  const grouped = new Map();
+  (appState.user_instructions?.items || []).forEach((item) => {
+    const key = item.user_key || "";
+    if (!key) return;
+    grouped.set(key, `${grouped.get(key) || ""} ${item.note || ""}`);
+  });
+  return grouped;
+}
+
+function userDisplayName(user) {
+  return String(user.display_name || user.user_key || "").toLowerCase();
+}
+
+function userSeenMillis(value) {
+  const parsed = Date.parse(value || "");
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function userSortLabel(mode) {
+  return {
+    recent: "recently seen",
+    messages: "most messages",
+    name: "name",
+  }[mode] || "recently seen";
+}
+
+function formatUserLastSeen(value) {
+  const parsed = Date.parse(value || "");
+  if (!Number.isFinite(parsed)) return "never seen";
+  return new Date(parsed).toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
 function renderSelectedUserDetails() {
@@ -2463,6 +2547,14 @@ $("saveDiscord").addEventListener("click", saveDiscordCredentials);
 $("launchDiscordLogin").addEventListener("click", launchDiscordLogin);
 $("launchDiscordHandoff").addEventListener("click", () => launchDiscordHandoff().catch((error) => toast(error.message)));
 $("openDiscordChannel").addEventListener("click", () => openDiscordChannel().catch((error) => toast(error.message)));
+$("userSearch").addEventListener("input", () => {
+  userSearchQuery = $("userSearch").value;
+  renderGrowth();
+});
+$("userSort").addEventListener("change", () => {
+  userSortMode = $("userSort").value;
+  renderGrowth();
+});
 $("repairDiscordServer").addEventListener("click", () => repairDiscordServer().catch((error) => toast(error.message)));
 $("refreshChannelLatest").addEventListener("click", () => refreshChannelLatest().catch((error) => toast(error.message)));
 $("backfillChannel").addEventListener("click", () => backfillChannelHistory().catch((error) => toast(error.message)));

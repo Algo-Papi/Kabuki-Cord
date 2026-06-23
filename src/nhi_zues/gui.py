@@ -1341,14 +1341,20 @@ def read_character(card_dir: Path, card_path: str) -> dict:
 def memory_state(path: Path) -> dict:
     payload = _read_json(path, default={"channels": {}, "users": {}})
     users = payload.get("users", {})
+    user_rows = [{"user_key": key, **value} for key, value in users.items()]
+    user_rows.sort(
+        key=lambda item: (
+            str(item.get("last_seen_at") or ""),
+            int(item.get("message_count") or 0),
+            str(item.get("display_name") or "").lower(),
+        ),
+        reverse=True,
+    )
     return {
         "channel_count": len(payload.get("channels", {})),
         "seen_ids": len(payload.get("seen_ids", [])),
         "user_count": len(users),
-        "users": [
-            {"user_key": key, **value}
-            for key, value in sorted(users.items(), key=lambda item: item[1].get("display_name", ""))
-        ][:80],
+        "users": user_rows,
     }
 
 

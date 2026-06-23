@@ -1483,6 +1483,24 @@ textarea:disabled {
   margin-top: 18px;
 }
 
+.user-directory-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 150px;
+  gap: 10px;
+  align-items: end;
+  margin: 10px 0 8px;
+}
+
+.compact-field {
+  margin-bottom: 0;
+}
+
+.user-list-meta {
+  color: var(--muted);
+  font-size: 11px;
+  margin: 0 0 8px;
+}
+
 .note-item,
 .user-item,
 .approval-item {
