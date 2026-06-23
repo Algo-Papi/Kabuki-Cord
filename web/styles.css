@@ -639,13 +639,13 @@ textarea:focus {
 
 .operation-status {
   display: grid;
-  grid-template-columns: 56px minmax(112px, auto);
+  grid-template-columns: 66px minmax(112px, auto);
   grid-template-rows: auto auto;
   align-items: center;
   column-gap: 9px;
   min-width: 218px;
-  max-width: 280px;
-  min-height: 62px;
+  max-width: 292px;
+  min-height: 72px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: rgba(16, 22, 28, 0.78);
@@ -665,15 +665,15 @@ textarea:focus {
 
 .scanner-sprite {
   --scanner-sheet: url("/assets/scanner-kabuki-sheet.png");
-  --scanner-width: 1200px;
+  --scanner-width: 1360px;
   display: block;
-  width: 60px;
-  height: 60px;
+  width: 68px;
+  height: 68px;
   image-rendering: pixelated;
   background-image: var(--scanner-sheet);
   background-repeat: no-repeat;
   background-position: 0 0;
-  background-size: var(--scanner-width) 60px;
+  background-size: var(--scanner-width) 68px;
   filter: drop-shadow(0 2px 2px rgba(0, 0, 0, 0.44));
 }
 
@@ -851,7 +851,7 @@ textarea:focus {
 }
 
 .operation-status.done .scanner-sprite {
-  background-position: -1140px 0;
+  background-position: -1292px 0;
   animation: none;
 }
 
@@ -924,13 +924,13 @@ textarea:focus {
 }
 
 .mode-transition-sprite {
-  width: 192px;
-  height: 192px;
+  width: 208px;
+  height: 208px;
   image-rendering: pixelated;
   background-image: var(--mode-sheet);
   background-repeat: no-repeat;
   background-position: 0 0;
-  background-size: 3840px 192px;
+  background-size: 4160px 208px;
   animation: mode-sprite-run 2s steps(20, end) forwards;
   filter: drop-shadow(0 16px 16px rgba(0, 0, 0, 0.42));
 }
@@ -1071,7 +1071,7 @@ textarea:focus {
 
 @keyframes scanner-dance {
   to {
-    background-position: -1200px 0;
+    background-position: -1360px 0;
   }
 }
 
@@ -1083,7 +1083,7 @@ textarea:focus {
 
 @keyframes mode-sprite-run {
   to {
-    background-position: -3840px 0;
+    background-position: -4160px 0;
   }
 }
 
