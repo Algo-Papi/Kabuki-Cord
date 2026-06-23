@@ -63,7 +63,7 @@
         </section>
 
         <footer class="account-footer">
-          <div class="avatar-dot runtime-avatar"><img src="/assets/scanner-kabuki-cutout.png" alt="" /></div>
+          <div class="avatar-dot runtime-avatar"><img src="/assets/runtime-mask-pixel.png" alt="" /></div>
           <div>
             <strong>Kabuki runtime</strong>
             <span id="runtimeStatus">local session</span>
@@ -73,9 +73,9 @@
 
       <main class="workspace">
         <header class="topbar">
-          <div>
+          <div class="topbar-title">
             <div class="eyebrow">Server Studio</div>
-            <h2>Character and automation control</h2>
+            <h2>Character & automation</h2>
           </div>
           <div class="topbar-actions">
             <div id="operationStatus" class="operation-status idle">
@@ -83,10 +83,12 @@
               <span>Idle</span>
             </div>
             <span id="apiStatus" class="status-pill"></span>
-            <button id="runtimeControl" class="secondary-button" type="button"><i class="bi bi-play-fill"></i> Start</button>
-            <button id="syncDiscordServers" class="secondary-button"><i class="bi bi-diagram-3"></i> Sync Discord</button>
-            <button id="refresh" class="secondary-button"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
-            <button id="saveAll" class="primary-button"><i class="bi bi-check2"></i> Save Changes</button>
+            <div class="topbar-button-group">
+              <button id="runtimeControl" class="secondary-button" type="button"><i class="bi bi-play-fill"></i> Start</button>
+              <button id="syncDiscordServers" class="secondary-button"><i class="bi bi-diagram-3"></i> Sync Discord</button>
+              <button id="refresh" class="secondary-button"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+              <button id="saveAll" class="primary-button"><i class="bi bi-check2"></i> Save Changes</button>
+            </div>
           </div>
         </header>
 

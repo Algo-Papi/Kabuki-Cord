@@ -12,6 +12,12 @@ const approvalDeliveryState = {};
 const approvalRegenerationState = {};
 const activeOperations = new Map();
 let knownEventKeys = new Set();
+let desktopBadgeActive = null;
+let kabukiAudioContext = null;
+let bootSoundQueued = false;
+let bootSoundPlayed = false;
+
+const runtimeModeClassNames = ["runtime-mode-dry", "runtime-mode-full-auto", "runtime-mode-semi-auto", "runtime-mode-live-fire"];
 
 const $ = (id) => document.getElementById(id);
 
@@ -67,6 +73,7 @@ async function loadState(options = {}) {
       previousEventKeys,
       notify: Boolean(options.notify && hadState),
     });
+    if (!hadState) queueBootSound();
     startAutoRefresh();
   } finally {
     refreshInFlight = false;
@@ -266,7 +273,8 @@ function renderCharacterEditor() {
 }
 
 function renderSettings() {
-  $("apiStatus").textContent = appState.app.api_key_set ? "API key set" : "API key missing";
+  $("apiStatus").textContent = appState.app.api_key_set ? "API set" : "No API key";
+  $("apiStatus").title = appState.app.api_key_set ? "OpenAI API key is configured" : "OpenAI API key is missing";
   $("apiStatus").className = `status-pill ${appState.app.api_key_set ? "ok" : ""}`;
   const discord = appState.discord || {};
   $("discordStatus").textContent = discord.complete
@@ -283,6 +291,7 @@ function renderSettings() {
   $("openaiModel").value = appState.env.OPENAI_MODEL || appState.app.openai_model || "";
   renderModelOptions();
   $("runtimeMode").value = currentRuntimeMode();
+  syncRuntimeModeChrome(currentRuntimeMode());
   $("llmEnabled").checked = strBool(appState.env.NHI_ZUES_LLM_ENABLED, false);
   $("draftDryRun").checked = strBool(appState.env.NHI_ZUES_DRAFT_IN_DRY_RUN, false);
   $("conversationReply").checked = strBool(appState.env.NHI_ZUES_CONVERSATION_REPLY_ENABLED, false);
@@ -1331,6 +1340,43 @@ function runtimeModeLabel(mode) {
   }[mode] || "dry mode";
 }
 
+function runtimeModeCssClass(mode) {
+  return `runtime-mode-${String(mode || "dry").replaceAll("_", "-")}`;
+}
+
+function transitionModeCssClass(mode) {
+  return `mode-${String(mode || "dry").replaceAll("_", "-")}`;
+}
+
+function syncRuntimeModeChrome(mode) {
+  document.body.classList.remove(...runtimeModeClassNames);
+  document.body.classList.add(runtimeModeCssClass(mode));
+}
+
+function showRuntimeModeTransition(mode) {
+  if (window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches) return;
+  document.querySelectorAll(".mode-transition").forEach((item) => item.remove());
+  const labels = {
+    dry: ["Dry Mode", "Scanning only. Sends are blocked."],
+    full_auto: ["Full Auto", "Eligible replies can send automatically."],
+    semi_auto: ["Semi Auto", "Regular replies can send; new starts need review."],
+    live_fire: ["Live Fire", "Every reply stays approval-gated."],
+  };
+  const [title, detail] = labels[mode] || labels.dry;
+  const overlay = document.createElement("div");
+  overlay.className = `mode-transition ${transitionModeCssClass(mode)}`;
+  overlay.innerHTML = `
+    <div class="mode-transition-card">
+      <span class="mode-transition-sprite" aria-hidden="true"></span>
+      <strong>${escapeHtml(title)}</strong>
+      <small>${escapeHtml(detail)}</small>
+    </div>
+  `;
+  document.body.append(overlay);
+  playKabukiSound(mode === "dry" ? "dry" : mode === "live_fire" ? "fire" : "mode");
+  setTimeout(() => overlay.remove(), 2300);
+}
+
 function historyCount(channelId) {
   return appState.history?.[channelId]?.messages?.length || 0;
 }
@@ -1442,6 +1488,7 @@ function syncEventNotifications({ previousEventKeys, notify }) {
     const important = newEvents.filter(isNotifiableEvent);
     if (important.length) {
       unreadEventCount += important.length;
+      setDesktopActivityBadge(true);
       const latest = important[0];
       const detail = latest.summary || latest.draft || "";
       toast(`${eventTypeLabel(latest)}: ${truncateText(detail, 96)}`);
@@ -1456,6 +1503,25 @@ function renderEventBadge() {
   if (!badge) return;
   badge.textContent = unreadEventCount > 99 ? "99+" : String(unreadEventCount);
   badge.classList.toggle("visible", unreadEventCount > 0);
+  setDesktopActivityBadge(unreadEventCount > 0);
+}
+
+function setDesktopActivityBadge(active) {
+  const enabled = Boolean(active);
+  if (desktopBadgeActive === enabled) return;
+  desktopBadgeActive = enabled;
+  document.title = enabled ? "● Kabuki-Cord" : "Kabuki-Cord";
+  updateFaviconBadge(enabled);
+  const apiBridge = window.pywebview?.api;
+  if (apiBridge?.set_badge) {
+    Promise.resolve(apiBridge.set_badge(enabled)).catch(() => {});
+  }
+}
+
+function updateFaviconBadge(active) {
+  const icon = document.querySelector('link[rel="icon"]');
+  if (!icon) return;
+  icon.href = active ? "/assets/app-icon-badge-32.png" : "/assets/app-icon-32.png";
 }
 
 function startAutoRefresh() {
@@ -1570,6 +1636,116 @@ function toast(message) {
   setTimeout(() => $("toast").classList.remove("show"), 2400);
 }
 
+function queueBootSound() {
+  if (bootSoundQueued || bootSoundPlayed) return;
+  bootSoundQueued = true;
+  playKabukiSound("boot");
+}
+
+function unlockKabukiAudio() {
+  if (!bootSoundQueued || bootSoundPlayed) return;
+  playKabukiSound("boot");
+}
+
+function getKabukiAudioContext() {
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) return null;
+  kabukiAudioContext ||= new AudioContextClass();
+  return kabukiAudioContext;
+}
+
+function playKabukiSound(kind = "mode") {
+  const context = getKabukiAudioContext();
+  if (!context) return;
+  const schedule = () => {
+    scheduleKabukiSound(context, kind);
+    if (kind === "boot") bootSoundPlayed = true;
+  };
+  if (context.state === "suspended") {
+    context.resume().then(schedule).catch(() => {});
+    return;
+  }
+  schedule();
+}
+
+function scheduleKabukiSound(context, kind) {
+  const now = context.currentTime + 0.018;
+  if (kind === "boot") {
+    taikoHit(context, now, 86, 0.95);
+    clapHit(context, now + 0.18, 0.45);
+    taikoHit(context, now + 0.34, 72, 0.8);
+    shoutHit(context, now + 0.48, 0.32);
+    taikoHit(context, now + 0.72, 110, 0.58);
+    return;
+  }
+  if (kind === "dry") {
+    noiseHit(context, now, 0.35, 0.18, 850);
+    taikoHit(context, now + 0.22, 62, 0.28);
+    return;
+  }
+  if (kind === "fire") {
+    taikoHit(context, now, 74, 0.72);
+    taikoHit(context, now + 0.16, 108, 0.56);
+    noiseHit(context, now + 0.08, 0.32, 0.22, 1600);
+    return;
+  }
+  taikoHit(context, now, 96, 0.48);
+  clapHit(context, now + 0.14, 0.28);
+}
+
+function taikoHit(context, when, frequency, gainValue) {
+  const oscillator = context.createOscillator();
+  const gain = context.createGain();
+  oscillator.type = "sine";
+  oscillator.frequency.setValueAtTime(frequency, when);
+  oscillator.frequency.exponentialRampToValueAtTime(Math.max(32, frequency * 0.52), when + 0.28);
+  gain.gain.setValueAtTime(gainValue, when);
+  gain.gain.exponentialRampToValueAtTime(0.001, when + 0.42);
+  oscillator.connect(gain).connect(context.destination);
+  oscillator.start(when);
+  oscillator.stop(when + 0.44);
+}
+
+function clapHit(context, when, gainValue) {
+  noiseHit(context, when, 0.05, gainValue, 2300);
+  noiseHit(context, when + 0.022, 0.045, gainValue * 0.65, 2800);
+}
+
+function shoutHit(context, when, gainValue) {
+  [132, 164, 196].forEach((frequency, index) => {
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    oscillator.type = "sawtooth";
+    oscillator.frequency.setValueAtTime(frequency, when);
+    gain.gain.setValueAtTime(gainValue / (index + 2), when);
+    gain.gain.exponentialRampToValueAtTime(0.001, when + 0.34);
+    oscillator.connect(gain).connect(context.destination);
+    oscillator.start(when);
+    oscillator.stop(when + 0.36);
+  });
+}
+
+function noiseHit(context, when, duration, gainValue, filterFrequency) {
+  const sampleCount = Math.max(1, Math.floor(context.sampleRate * duration));
+  const buffer = context.createBuffer(1, sampleCount, context.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < sampleCount; i += 1) {
+    data[i] = (Math.random() * 2 - 1) * (1 - i / sampleCount);
+  }
+  const source = context.createBufferSource();
+  const filter = context.createBiquadFilter();
+  const gain = context.createGain();
+  filter.type = "bandpass";
+  filter.frequency.setValueAtTime(filterFrequency, when);
+  filter.Q.setValueAtTime(0.8, when);
+  gain.gain.setValueAtTime(gainValue, when);
+  gain.gain.exponentialRampToValueAtTime(0.001, when + duration);
+  source.buffer = buffer;
+  source.connect(filter).connect(gain).connect(context.destination);
+  source.start(when);
+  source.stop(when + duration);
+}
+
 function activateTab(tabId) {
   document.querySelectorAll(".tab").forEach((item) => {
     item.classList.toggle("active", item.dataset.tab === tabId);
@@ -1586,7 +1762,10 @@ document.querySelectorAll(".tab").forEach((tab) => {
 document.querySelectorAll("[data-preview-tab]").forEach((tab) => {
   tab.addEventListener("click", () => {
     previewPanelMode = tab.dataset.previewTab;
-    if (previewPanelMode === "events") unreadEventCount = 0;
+    if (previewPanelMode === "events") {
+      unreadEventCount = 0;
+      setDesktopActivityBadge(false);
+    }
     renderPreviewTabs();
   });
 });
@@ -1608,8 +1787,11 @@ $("clearApprovals").addEventListener("click", () => clearApprovals().catch((erro
 $("checkUpdates").addEventListener("click", checkUpdates);
 $("applyUpdate").addEventListener("click", applyUpdate);
 $("runtimeMode").addEventListener("change", () => {
-  appState.env.NHI_ZUES_RUNTIME_MODE = $("runtimeMode").value;
-  appState.app.runtime_mode = $("runtimeMode").value;
+  const nextMode = $("runtimeMode").value;
+  appState.env.NHI_ZUES_RUNTIME_MODE = nextMode;
+  appState.app.runtime_mode = nextMode;
+  syncRuntimeModeChrome(nextMode);
+  showRuntimeModeTransition(nextMode);
   $("dryRun").checked = currentRuntimeMode() === "dry";
   $("approvalRequired").checked = currentRuntimeMode() !== "full_auto";
   renderServerPanel();
@@ -1668,6 +1850,9 @@ $("addUserNote").addEventListener("click", async () => {
   await loadState();
   toast("User note added");
 });
+
+window.addEventListener("pointerdown", unlockKabukiAudio, { once: true });
+window.addEventListener("keydown", unlockKabukiAudio, { once: true });
 
 loadState().catch((error) => {
   console.error(error);

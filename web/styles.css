@@ -93,6 +93,23 @@ button {
   background:
     radial-gradient(circle at 60% -20%, rgba(149, 101, 255, 0.12), transparent 28%),
     linear-gradient(135deg, #11171d 0%, #10151a 58%, #0d1317 100%);
+  transition: box-shadow 220ms ease, background 220ms ease;
+}
+
+body.runtime-mode-dry .shell {
+  box-shadow: inset 0 0 0 1px rgba(233, 129, 52, 0.46), inset 0 0 34px rgba(233, 129, 52, 0.13);
+}
+
+body.runtime-mode-full-auto .shell {
+  box-shadow: inset 0 0 0 1px rgba(239, 107, 120, 0.32), inset 0 0 30px rgba(239, 107, 120, 0.1);
+}
+
+body.runtime-mode-semi-auto .shell {
+  box-shadow: inset 0 0 0 1px rgba(217, 185, 91, 0.34), inset 0 0 26px rgba(217, 185, 91, 0.09);
+}
+
+body.runtime-mode-live-fire .shell {
+  box-shadow: inset 0 0 0 1px rgba(255, 76, 48, 0.56), inset 0 0 42px rgba(255, 76, 48, 0.18);
 }
 
 .server-rail,
@@ -510,7 +527,7 @@ textarea:focus {
 
 .runtime-avatar img {
   object-fit: contain;
-  padding: 3px;
+  padding: 4px;
   image-rendering: pixelated;
 }
 
@@ -530,30 +547,64 @@ textarea:focus {
   position: sticky;
   top: 0;
   z-index: 3;
+  display: grid;
+  grid-template-columns: minmax(180px, 0.58fr) minmax(0, 1.42fr);
+  gap: 18px;
+  justify-content: stretch;
+  align-items: center;
   background: rgba(16, 22, 28, 0.92);
   backdrop-filter: blur(14px);
+  padding: 16px 24px;
+}
+
+.topbar-title {
+  min-width: 0;
+}
+
+.topbar-title h2 {
+  max-width: 280px;
+  font-size: 20px;
+  line-height: 1.14;
 }
 
 .topbar-actions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 10px;
+  min-width: 0;
+}
+
+.topbar-button-group {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.topbar-button-group .secondary-button,
+.topbar-button-group .primary-button {
+  min-height: 34px;
+  padding: 7px 10px;
+  white-space: nowrap;
 }
 
 .operation-status {
   display: grid;
-  grid-template-columns: 60px minmax(106px, auto);
+  grid-template-columns: 56px minmax(112px, auto);
   grid-template-rows: auto auto;
   align-items: center;
-  column-gap: 10px;
-  min-width: 244px;
-  max-width: 320px;
-  min-height: 70px;
+  column-gap: 9px;
+  min-width: 218px;
+  max-width: 280px;
+  min-height: 62px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: rgba(16, 22, 28, 0.78);
   color: #cfd8e2;
-  padding: 5px 12px 5px 6px;
+  padding: 5px 10px 5px 5px;
   font-size: 12px;
 }
 
@@ -761,6 +812,118 @@ textarea:focus {
   filter: grayscale(0.25) drop-shadow(0 2px 2px rgba(0, 0, 0, 0.44));
 }
 
+.mode-transition {
+  --mode-sheet: url("/assets/mode-kabuki-dry-sheet.png");
+  position: fixed;
+  z-index: 86;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 50% 48%, rgba(255, 255, 255, 0.08), transparent 18%),
+    rgba(7, 10, 14, 0.38);
+  animation: mode-transition-fade 2.2s ease forwards;
+}
+
+.mode-transition::before,
+.mode-transition::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.mode-transition::before {
+  opacity: 0.84;
+  animation: mode-curtain-sweep 2.05s ease-out forwards;
+}
+
+.mode-transition::after {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 0 48px rgba(255, 255, 255, 0.08);
+}
+
+.mode-transition-card {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  gap: 8px;
+  min-width: 260px;
+  padding: 16px 22px 18px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  background: rgba(12, 16, 21, 0.72);
+  box-shadow: 0 28px 70px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(10px);
+}
+
+.mode-transition-sprite {
+  width: 192px;
+  height: 192px;
+  image-rendering: pixelated;
+  background-image: var(--mode-sheet);
+  background-repeat: no-repeat;
+  background-position: 0 0;
+  background-size: 3840px 192px;
+  animation: mode-sprite-run 2s steps(20, end) forwards;
+  filter: drop-shadow(0 16px 16px rgba(0, 0, 0, 0.42));
+}
+
+.mode-transition strong {
+  color: #fff;
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.mode-transition small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.mode-transition.mode-dry {
+  --mode-sheet: url("/assets/mode-kabuki-dry-sheet.png");
+}
+
+.mode-transition.mode-dry::before {
+  background:
+    radial-gradient(circle at 52% 54%, rgba(233, 129, 52, 0.2), transparent 24%),
+    linear-gradient(90deg, rgba(88, 47, 22, 0.55), transparent 50%, rgba(88, 47, 22, 0.55));
+}
+
+.mode-transition.mode-full-auto {
+  --mode-sheet: url("/assets/mode-kabuki-full-auto-sheet.png");
+}
+
+.mode-transition.mode-full-auto::before {
+  background:
+    radial-gradient(circle at 50% 50%, rgba(239, 107, 120, 0.2), transparent 24%),
+    linear-gradient(90deg, rgba(82, 15, 24, 0.52), transparent 50%, rgba(82, 15, 24, 0.52));
+}
+
+.mode-transition.mode-semi-auto {
+  --mode-sheet: url("/assets/mode-kabuki-semi-auto-sheet.png");
+}
+
+.mode-transition.mode-semi-auto::before {
+  background:
+    radial-gradient(circle at 50% 50%, rgba(217, 185, 91, 0.19), transparent 24%),
+    linear-gradient(90deg, rgba(73, 54, 18, 0.5), transparent 50%, rgba(73, 54, 18, 0.5));
+}
+
+.mode-transition.mode-live-fire {
+  --mode-sheet: url("/assets/mode-kabuki-live-fire-sheet.png");
+}
+
+.mode-transition.mode-live-fire::before {
+  background:
+    radial-gradient(circle at 50% 60%, rgba(255, 76, 48, 0.3), transparent 22%),
+    linear-gradient(0deg, rgba(255, 78, 34, 0.25), transparent 45%),
+    linear-gradient(90deg, rgba(84, 15, 14, 0.58), transparent 50%, rgba(84, 15, 14, 0.58));
+}
+
 @keyframes kabuki-logo-flight {
   0% {
     left: 50%;
@@ -854,9 +1017,48 @@ textarea:focus {
   }
 }
 
+@keyframes mode-sprite-run {
+  to {
+    background-position: -3840px 0;
+  }
+}
+
+@keyframes mode-transition-fade {
+  0% {
+    opacity: 0;
+  }
+
+  10%,
+  82% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes mode-curtain-sweep {
+  0% {
+    clip-path: inset(0 50% 0 50%);
+    opacity: 0;
+  }
+
+  18% {
+    clip-path: inset(0 0 0 0);
+    opacity: 1;
+  }
+
+  100% {
+    clip-path: inset(0 0 0 0);
+    opacity: 0.28;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   body::before,
-  body::after {
+  body::after,
+  .mode-transition {
     animation: none;
     opacity: 0;
   }
@@ -873,8 +1075,12 @@ textarea:focus {
   border: 1px solid var(--line);
   border-radius: 999px;
   color: var(--muted);
-  padding: 7px 10px;
+  min-width: 82px;
+  padding: 7px 11px;
   font-size: 12px;
+  line-height: 1;
+  text-align: center;
+  white-space: nowrap;
 }
 
 .status-pill.ok {
