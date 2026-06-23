@@ -101,13 +101,17 @@ h1 {
   width: 100%;
   aspect-ratio: 4 / 3;
   min-height: 300px;
-  image-rendering: pixelated;
-  background-image: url("/assets/scanner-kabuki-spy-story-sheet.png");
-  background-repeat: no-repeat;
-  background-position: 0 0;
-  background-size: 3600% 100%;
-  animation: spy-story 11.5s steps(36, end) infinite;
+  background: #090e16;
   border-bottom: 1px solid var(--line);
+  overflow: hidden;
+}
+
+.spy-scene img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  image-rendering: pixelated;
+  object-fit: cover;
 }
 
 .scan-board {
@@ -179,16 +183,6 @@ h1 {
   border-radius: 8px;
   padding: 14px;
   text-align: center;
-}
-
-@keyframes spy-story {
-  from {
-    background-position: 0 0;
-  }
-
-  to {
-    background-position: 100% 0;
-  }
 }
 
 @media (max-width: 680px) {

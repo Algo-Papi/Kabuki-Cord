@@ -1,5 +1,9 @@
 let apiToken = null;
 let refreshTimer = null;
+let spyFrameTimer = null;
+let spyFrameIndex = 0;
+let spyFrames = ["/assets/monitor_spy_frames/frame_000.png"];
+let spyFrameMs = 180;
 
 const $ = (id) => document.getElementById(id);
 
@@ -32,6 +36,35 @@ async function refresh() {
     $("currentTarget").textContent = "Kabuki-Cord unavailable";
     $("currentDetail").textContent = error.message || "Restart the app and reopen this monitor.";
   }
+}
+
+async function loadSpyAnimation() {
+  try {
+    const response = await fetch("/assets/monitor_spy_frames/manifest.json");
+    if (response.ok) {
+      const manifest = await response.json();
+      const count = Number(manifest.frame_count || 1);
+      spyFrameMs = Number(manifest.frame_ms || 180);
+      spyFrames = Array.from({ length: count }, (_, index) =>
+        `/assets/monitor_spy_frames/frame_${String(index).padStart(3, "0")}.png`
+      );
+    }
+  } catch {
+    spyFrames = ["/assets/monitor_spy_frames/frame_000.png"];
+  }
+  spyFrames.forEach((src) => {
+    const image = new Image();
+    image.src = src;
+  });
+  if (spyFrameTimer) clearInterval(spyFrameTimer);
+  spyFrameTimer = setInterval(advanceSpyFrame, spyFrameMs);
+}
+
+function advanceSpyFrame() {
+  const image = $("spySceneFrame");
+  if (!image || !spyFrames.length) return;
+  spyFrameIndex = (spyFrameIndex + 1) % spyFrames.length;
+  image.src = spyFrames[spyFrameIndex];
 }
 
 function render(state) {
@@ -124,8 +157,10 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+loadSpyAnimation();
 refresh();
 refreshTimer = setInterval(refresh, 1800);
 window.addEventListener("beforeunload", () => {
   if (refreshTimer) clearInterval(refreshTimer);
+  if (spyFrameTimer) clearInterval(spyFrameTimer);
 });
