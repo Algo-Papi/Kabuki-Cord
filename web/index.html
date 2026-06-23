@@ -53,9 +53,9 @@
             <span>Channels</span>
             <div class="button-row">
               <button id="openDiscordChannel" class="small-button"><i class="bi bi-box-arrow-up-right"></i> Open</button>
-              <button id="repairDiscordServer" class="small-button"><i class="bi bi-wrench-adjustable"></i> Repair</button>
-              <button id="refreshChannelLatest" class="small-button"><i class="bi bi-arrow-clockwise"></i> Latest</button>
-              <button id="backfillChannel" class="small-button"><i class="bi bi-clock-history"></i> Backfill</button>
+              <button id="repairDiscordServer" class="small-button" title="Repair reloads this server's channel/thread list from Discord."><i class="bi bi-wrench-adjustable"></i> Repair</button>
+              <button id="refreshChannelLatest" class="small-button" title="Latest rereads the newest visible messages in the selected channel."><i class="bi bi-arrow-clockwise"></i> Latest</button>
+              <button id="backfillChannel" class="small-button" title="Backfill scrolls older messages in the selected channel into local memory."><i class="bi bi-clock-history"></i> Backfill</button>
               <button id="addChannel" class="small-button"><i class="bi bi-plus"></i> Add</button>
             </div>
           </div>
@@ -344,6 +344,11 @@
         <div class="preview-tabs">
           <button class="preview-tab active" data-preview-tab="preview">Preview</button>
           <button class="preview-tab" data-preview-tab="events">Events <span id="eventBadge" class="event-badge"></span></button>
+          <div class="api-spend-pill" title="OpenAI API spend today">
+            <i class="bi bi-cash-coin"></i>
+            <span id="topDailySpend">$0.000000</span>
+            <small id="topUsageCalls">0 calls</small>
+          </div>
         </div>
 
         <div id="previewMode" class="preview-mode active">

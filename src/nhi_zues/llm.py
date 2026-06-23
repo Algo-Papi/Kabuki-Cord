@@ -8,6 +8,7 @@ from .character_memory import CharacterMemory
 from .models import DraftDecision, MessageRecord, UserMemory
 from .topics import TopicSnapshot
 from .user_instructions import UserInstruction
+from .voice_guard import apply_voice_guard, should_avoid_question, voice_guard_prompt
 from .writing_style import apply_human_writing_noise, writing_style_prompt
 
 
@@ -98,12 +99,19 @@ class ReplyPlanner:
         )
         topic_summary = ", ".join(topic for topic, _ in topics.top_topics) or "none"
         user_memory = _format_user_memories(user_memories, user_instructions)
+        seed = f"{channel_id}:{','.join(message.message_id for message in new_messages)}"
+        recent_character_lines = _recent_character_lines(context, character)
+        avoid_question = should_avoid_question(
+            recent_character_lines=recent_character_lines,
+            seed=seed,
+        )
         user_prompt = (
             f"Channel: {channel_id}\n"
             f"Character: {character.name}\n"
             f"Tracked topics: {topic_summary}\n\n"
             f"Known user context:\n{user_memory}\n\n"
             f"Recent conversation:\n{transcript}\n\n"
+            f"{voice_guard_prompt(avoid_question=avoid_question, recent_character_lines=recent_character_lines)}\n\n"
             "Draft one reply, 1-2 sentences max."
         )
         instructions = character.prompt_text()
@@ -134,7 +142,7 @@ class ReplyPlanner:
         input_tokens, output_tokens = _usage_tokens(response, estimated_input_tokens)
         record = self.budget.record(input_tokens=input_tokens, output_tokens=output_tokens)
         draft = getattr(response, "output_text", "") or ""
-        draft = self._finalize_draft(draft, seed=f"{channel_id}:{','.join(message.message_id for message in new_messages)}")
+        draft = self._finalize_draft(draft, seed=seed, avoid_question=avoid_question)
         return DraftDecision(
             True,
             f"{reason}; api_cost=${record.cost_usd:.6f}",
@@ -167,6 +175,12 @@ class ReplyPlanner:
         )
         target = _target_user_line(target_user_key, user_memories)
         user_memory = _format_user_memories(user_memories, user_instructions)
+        seed = f"{channel_id}:{target_user_key}:{operator_instruction}"
+        recent_character_lines = _recent_character_lines(context, character)
+        avoid_question = should_avoid_question(
+            recent_character_lines=recent_character_lines,
+            seed=seed,
+        )
         user_prompt = (
             f"Channel: {channel_id}\n"
             f"Character: {character.name}\n"
@@ -175,6 +189,7 @@ class ReplyPlanner:
             f"Recent conversation:\n{transcript}\n\n"
             f"Current draft:\n{current_draft or '(none)'}\n\n"
             f"Operator direction:\n{operator_instruction or 'Make a better natural response for the selected context.'}\n\n"
+            f"{voice_guard_prompt(avoid_question=avoid_question, recent_character_lines=recent_character_lines)}\n\n"
             "Generate one revised Discord reply for approval, 1-2 sentences max."
         )
         instructions = character.prompt_text()
@@ -206,7 +221,7 @@ class ReplyPlanner:
         input_tokens, output_tokens = _usage_tokens(response, estimated_input_tokens)
         record = self.budget.record(input_tokens=input_tokens, output_tokens=output_tokens)
         draft = getattr(response, "output_text", "") or ""
-        draft = self._finalize_draft(draft, seed=f"{channel_id}:{target_user_key}:{operator_instruction}")
+        draft = self._finalize_draft(draft, seed=seed, avoid_question=avoid_question)
         return DraftDecision(
             True,
             f"manual approval draft generated; api_cost=${record.cost_usd:.6f}",
@@ -215,7 +230,8 @@ class ReplyPlanner:
             requires_approval=True,
         )
 
-    def _finalize_draft(self, draft: str, *, seed: str) -> str:
+    def _finalize_draft(self, draft: str, *, seed: str, avoid_question: bool = False) -> str:
+        draft = apply_voice_guard(draft, avoid_question=avoid_question, seed=seed)
         return apply_human_writing_noise(
             draft,
             mistake_rate=self.writing_mistake_rate,
@@ -282,6 +298,20 @@ def _target_user_line(target_user_key: str, user_memories: list[UserMemory]) -> 
         if user.user_key == target_user_key:
             return f"{user.display_name} ({user.user_key})"
     return target_user_key
+
+
+def _recent_character_lines(context: list[MessageRecord], character: CharacterCard) -> list[str]:
+    names = {_normalize_author(character.name)}
+    names.update(_normalize_author(alias) for alias in character.aliases)
+    return [
+        message.text
+        for message in context
+        if _normalize_author(message.author) in names and message.text
+    ][-8:]
+
+
+def _normalize_author(value: str) -> str:
+    return " ".join(str(value or "").lower().split())
 
 
 def _fit_text(text: str, max_chars: int) -> str:

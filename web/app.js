@@ -89,6 +89,15 @@ function channel() {
   return channels()[selectedChannel] || null;
 }
 
+function visibleChannels() {
+  return channels()
+    .map((chan, index) => ({ ...chan, __index: index }))
+    .sort((left, right) => {
+      if (Boolean(left.pinned) !== Boolean(right.pinned)) return left.pinned ? -1 : 1;
+      return left.__index - right.__index;
+    });
+}
+
 function render() {
   renderRail();
   renderServerPanel();
@@ -147,13 +156,17 @@ function renderServerPanel() {
       .join("");
   $("serverCharacter").value = srv.character_card || "";
 
-  $("channelList").innerHTML = channels()
-    .map((chan, index) => {
+  $("channelList").innerHTML = visibleChannels()
+    .map((chan) => {
+      const index = chan.__index;
       const name = chan.label || chan.channel_id;
       const type = channelTypeLabel(chan.channel_type);
       const remembered = historyCount(chan.channel_id);
       const metaBase = [type, chan.category].filter(Boolean).join(" - ") || `ID ${chan.channel_id || ""}`;
-      const meta = remembered ? `${metaBase} - ${remembered} remembered` : metaBase;
+      const metaParts = [metaBase];
+      if (chan.pinned) metaParts.push("pinned");
+      if (remembered) metaParts.push(`${remembered} remembered`);
+      const meta = metaParts.filter(Boolean).join(" - ");
       return `
         <div class="channel-row ${index === selectedChannel ? "active" : ""}">
           <div class="channel-name" data-channel="${index}" title="Channel ID: ${escapeAttr(chan.channel_id || "")}">
@@ -164,6 +177,7 @@ function renderServerPanel() {
             </div>
           </div>
           <div class="channel-actions">
+            <button class="icon-mini pin ${chan.pinned ? "on" : ""}" data-pin-channel="${index}" title="${chan.pinned ? "Unpin channel" : "Pin channel to top"}"><i class="bi bi-pin-angle${chan.pinned ? "-fill" : ""}"></i></button>
             <button class="pill-toggle observe ${chan.scan_enabled ? "on" : ""}" data-toggle="scan" data-channel="${index}">Observe</button>
             <button class="pill-toggle engage ${chan.engage_enabled ? "on" : ""}" data-toggle="engage" data-channel="${index}">Engage</button>
           </div>
@@ -185,6 +199,15 @@ function renderServerPanel() {
       if (button.dataset.toggle === "scan") chan.scan_enabled = !chan.scan_enabled;
       if (button.dataset.toggle === "engage") chan.engage_enabled = !chan.engage_enabled;
       render();
+    });
+  });
+  document.querySelectorAll("[data-pin-channel]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const chan = channels()[Number(button.dataset.pinChannel)];
+      if (!chan) return;
+      chan.pinned = !chan.pinned;
+      renderServerPanel();
     });
   });
 
@@ -681,8 +704,12 @@ async function clearApprovals() {
 }
 
 function renderMetrics() {
-  $("dailySpend").textContent = `$${Number(appState.usage.daily_spend_usd || 0).toFixed(6)}`;
-  $("usageCalls").textContent = appState.usage.records || 0;
+  const daily = `$${Number(appState.usage.daily_spend_usd || 0).toFixed(6)}`;
+  const calls = Number(appState.usage.records || 0);
+  $("dailySpend").textContent = daily;
+  $("usageCalls").textContent = calls;
+  $("topDailySpend").textContent = daily;
+  $("topUsageCalls").textContent = `${calls} call${calls === 1 ? "" : "s"}`;
   $("memoryUsers").textContent = appState.memory.user_count || 0;
   $("seenMessages").textContent = appState.memory.seen_ids || 0;
   $("triggerState").textContent = channel()?.engage_enabled ? "eligible" : "disabled";
@@ -771,11 +798,15 @@ function renderObserved() {
             <span>${escapeHtml(poster.summary)}</span>
           </div>
           <button class="small-button" data-suggest-user="${escapeAttr(poster.user_key)}"><i class="bi bi-chat-left-text"></i> Suggest</button>
+          <button class="small-button" data-guide-user="${escapeAttr(poster.user_key)}"><i class="bi bi-person-gear"></i> Guide</button>
         </div>
       `)
       .join("") || `<div class="note-item">No recent unique posters recorded.</div>`;
   document.querySelectorAll("[data-suggest-user]").forEach((button) => {
     button.addEventListener("click", () => createSuggestedApproval(button.dataset.suggestUser));
+  });
+  document.querySelectorAll("[data-guide-user]").forEach((button) => {
+    button.addEventListener("click", () => openUserGuidance(button.dataset.guideUser));
   });
 }
 
@@ -803,6 +834,10 @@ function renderHistory() {
               data-respond-message="${escapeAttr(message.message_id || "")}"
               data-respond-user="${escapeAttr(message.user_key || "")}"
             ><i class="bi bi-reply"></i> Respond</button>
+            <button
+              class="small-button"
+              data-history-guide-user="${escapeAttr(message.user_key || "")}"
+            ><i class="bi bi-person-gear"></i> Guide</button>
           </div>
           <p>${escapeHtml(message.text)}</p>
         </div>
@@ -813,6 +848,9 @@ function renderHistory() {
       button.dataset.respondMessage,
       button.dataset.respondUser,
     ));
+  });
+  document.querySelectorAll("[data-history-guide-user]").forEach((button) => {
+    button.addEventListener("click", () => openUserGuidance(button.dataset.historyGuideUser));
   });
   $("historyEvents").innerHTML =
     events
@@ -1249,6 +1287,22 @@ function configuredChannels() {
   );
 }
 
+function openUserGuidance(userKey) {
+  if (!userKey) {
+    toast("No stable user ID recorded for that message yet");
+    return;
+  }
+  selectedUserKey = userKey;
+  activateTab("growth");
+  renderGrowth();
+  const user = (appState.memory.users || []).find((item) => item.user_key === userKey);
+  if (channel()) $("userNoteScope").value = "channel";
+  $("newUserNote").placeholder = user?.display_name
+    ? `Example: With ${user.display_name}, keep pushing on semantics without making it personal.`
+    : "Example: Keep pushing this user on semantics without making it personal.";
+  $("newUserNote").focus();
+}
+
 function allEvents() {
   return Array.isArray(appState.events?.items) ? appState.events.items : [];
 }
@@ -1458,13 +1512,17 @@ function toast(message) {
   setTimeout(() => $("toast").classList.remove("show"), 2400);
 }
 
-document.querySelectorAll(".tab").forEach((tab) => {
-  tab.addEventListener("click", () => {
-    document.querySelectorAll(".tab").forEach((item) => item.classList.remove("active"));
-    document.querySelectorAll(".tab-pane").forEach((item) => item.classList.remove("active"));
-    tab.classList.add("active");
-    $(tab.dataset.tab).classList.add("active");
+function activateTab(tabId) {
+  document.querySelectorAll(".tab").forEach((item) => {
+    item.classList.toggle("active", item.dataset.tab === tabId);
   });
+  document.querySelectorAll(".tab-pane").forEach((item) => {
+    item.classList.toggle("active", item.id === tabId);
+  });
+}
+
+document.querySelectorAll(".tab").forEach((tab) => {
+  tab.addEventListener("click", () => activateTab(tab.dataset.tab));
 });
 
 document.querySelectorAll("[data-preview-tab]").forEach((tab) => {

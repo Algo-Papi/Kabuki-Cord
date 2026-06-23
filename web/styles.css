@@ -337,9 +337,27 @@ textarea:focus {
 
 .channel-actions {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: 32px repeat(2, minmax(0, 1fr));
   gap: 6px;
   width: 100%;
+}
+
+.icon-mini {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  min-height: 30px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #202832;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.icon-mini.on {
+  border-color: rgba(217, 185, 91, 0.45);
+  background: rgba(217, 185, 91, 0.12);
+  color: #ead391;
 }
 
 .pill-toggle {
@@ -552,6 +570,37 @@ textarea:focus {
   color: #bff0cb;
   border-color: rgba(95, 201, 120, 0.3);
   background: rgba(95, 201, 120, 0.1);
+}
+
+.api-spend-pill {
+  display: grid;
+  grid-template-columns: 16px auto;
+  grid-template-rows: auto auto;
+  align-items: center;
+  column-gap: 7px;
+  margin-left: auto;
+  min-height: 34px;
+  border: 1px solid rgba(95, 201, 120, 0.28);
+  border-radius: 8px;
+  background: rgba(95, 201, 120, 0.08);
+  color: #bff0cb;
+  padding: 5px 9px;
+  font-size: 12px;
+}
+
+.api-spend-pill i {
+  grid-row: 1 / span 2;
+}
+
+.api-spend-pill span {
+  font-weight: 750;
+  line-height: 1.1;
+}
+
+.api-spend-pill small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.1;
 }
 
 .character-strip {
@@ -971,7 +1020,7 @@ button:disabled {
 
 .observed-card {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 10px;
   align-items: start;
 }
@@ -1146,6 +1195,7 @@ button:disabled {
   transform: translateY(0);
 }
 .history-item-header {
+  grid-column: span 2;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
