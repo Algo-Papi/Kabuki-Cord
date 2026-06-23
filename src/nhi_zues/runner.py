@@ -179,8 +179,6 @@ class NhiZuesRunner:
                 now = time.monotonic()
                 for target in targets:
                     last_checked[(target.server_id, target.channel_id)] = now
-                if on_cycle:
-                    on_cycle()
             if not loop:
                 return
 
@@ -188,6 +186,8 @@ class NhiZuesRunner:
                 self.config.poll_seconds,
                 self.config.scanner_cycle_sleep_seconds,
             )
+            if on_cycle:
+                on_cycle(sleep_seconds)
             if await _sleep_interruptible(stop_event, sleep_seconds):
                 return
 

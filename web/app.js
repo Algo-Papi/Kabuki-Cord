@@ -1416,6 +1416,9 @@ function renderUnrespondedReplies() {
             <span>${escapeHtml(item.server_label || item.server_id || "Unknown server")}</span>
           </div>
           <time>${escapeHtml(formatTime(item.observed_at))}</time>
+          <button class="reply-watch-dismiss" data-dismiss-reply-watch="${escapeAttr(item.message_id || "")}" data-server-id="${escapeAttr(item.server_id || "")}" data-channel-id="${escapeAttr(item.channel_id || "")}" title="Dismiss reply notification" type="button">
+            <i class="bi bi-x-lg"></i>
+          </button>
         </div>
         <div class="reply-watch-channel">${escapeHtml(formatChannelName(item.channel_label || item.channel_id, item.channel_type))}</div>
         <p class="reply-watch-message">${escapeHtml(item.text || "")}</p>

@@ -18,18 +18,29 @@
 
       <section class="story-panel">
         <div class="spy-scene" aria-hidden="true">
-          <img id="spySceneFrame" src="/assets/monitor_spy_frames/frame_000.png" alt="" />
+          <img id="spySceneFrameA" class="spy-frame active" src="/assets/monitor_spy_frames/frame_000.png" alt="" />
+          <img id="spySceneFrameB" class="spy-frame" src="/assets/monitor_spy_frames/frame_000.png" alt="" />
+          <div id="stageTransition" class="stage-transition"></div>
+          <div class="stage-glints"></div>
         </div>
         <div class="scan-board">
           <div class="scan-card current">
             <span>Current</span>
             <strong id="currentTarget">Idle</strong>
             <small id="currentDetail">Waiting for scanner activity.</small>
+            <div class="countdown-line">
+              <span id="currentCountdownLabel">Done in</span>
+              <strong id="currentCountdown">--</strong>
+            </div>
           </div>
           <div class="scan-card">
             <span>Next</span>
             <strong id="nextTarget">None queued</strong>
             <small id="nextDetail">No due channel yet.</small>
+            <div class="countdown-line">
+              <span id="nextCountdownLabel">Next scan</span>
+              <strong id="nextCountdown">--</strong>
+            </div>
           </div>
           <div class="scan-card completed">
             <span>Last Completed</span>
@@ -44,6 +55,7 @@
         <div id="upcomingList" class="upcoming-list"></div>
       </section>
     </main>
+    <div id="monitorToasts" class="monitor-toasts" aria-live="polite"></div>
     <script src="/monitor.js"></script>
   </body>
 </html>

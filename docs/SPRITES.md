@@ -26,6 +26,7 @@ This is the replacement checklist for animated and sprite-like visual assets cur
 | --- | --- | --- |
 | `web/assets/source/kabuki-actor-reference.png` | High-resolution actor reference for regenerating upgraded sprite frames. | `scripts/generate_monitor_spy_frames.py` |
 | `web/assets/runtime-mask-pixel.png` | Small pixel mask icon in the runtime footer. | `web/index.html` |
+| `web/assets/monitor-arigato-sprite.png` | Monitor-only success notification sprite for posted/delivered replies. | `web/monitor.js`, `web/monitor.css` |
 | `web/assets/app-icon-*.png`, `web/assets/app-icon.png` | Window/fav/taskbar app icons at multiple sizes. | `web/index.html`, packaging/runtime shell |
 | `web/assets/app-icon-badge-32.png` | Red-dot/badged favicon for activity attention. | `web/app.js` |
 | `web/assets/placeholders/server.svg` | Generic server placeholder icon. | `web/app.js`, `web/index.html` |

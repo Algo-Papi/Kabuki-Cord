@@ -2143,6 +2143,7 @@ button:disabled {
 }
 
 .reply-watch-card {
+  position: relative;
   border: 1px solid rgba(239, 107, 120, 0.22);
   border-radius: 8px;
   background:
@@ -2155,7 +2156,8 @@ button:disabled {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 10px;
+  gap: 8px;
+  padding-right: 27px;
 }
 
 .reply-watch-person {
@@ -2187,6 +2189,31 @@ button:disabled {
   flex: 0 0 auto;
   text-align: right;
   white-space: nowrap;
+}
+
+.reply-watch-dismiss {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.reply-watch-dismiss:hover {
+  border-color: rgba(239, 107, 120, 0.42);
+  color: #ffc5ca;
+}
+
+.reply-watch-dismiss i {
+  font-size: 11px;
+  line-height: 1;
 }
 
 .reply-watch-channel {

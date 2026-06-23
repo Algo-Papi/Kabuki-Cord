@@ -1,11 +1,17 @@
 let apiToken = null;
 let refreshTimer = null;
 let spyFrameTimer = null;
+let countdownTimer = null;
 let spyFrameIndex = 0;
 let spyFrames = ["/assets/monitor_spy_frames/frame_000.png"];
 let spyFrameMs = 180;
+let activeFrameLayer = "A";
+let latestState = null;
+let knownEventKeys = new Set();
+let eventNotificationsReady = false;
 
 const $ = (id) => document.getElementById(id);
+const deliveryEventTypes = new Set(["message_sent", "approval_sent"]);
 
 async function loadSession() {
   const response = await fetch("/api/session");
@@ -29,6 +35,7 @@ async function api(path) {
 async function refresh() {
   try {
     const state = await api("/api/state");
+    syncDeliveryNotifications(state);
     render(state);
   } catch (error) {
     $("monitorStatus").className = "status-pill error";
@@ -61,13 +68,29 @@ async function loadSpyAnimation() {
 }
 
 function advanceSpyFrame() {
-  const image = $("spySceneFrame");
-  if (!image || !spyFrames.length) return;
+  const active = activeFrameLayer === "A" ? $("spySceneFrameA") : $("spySceneFrameB");
+  const incoming = activeFrameLayer === "A" ? $("spySceneFrameB") : $("spySceneFrameA");
+  if (!active || !incoming || !spyFrames.length) return;
   spyFrameIndex = (spyFrameIndex + 1) % spyFrames.length;
-  image.src = spyFrames[spyFrameIndex];
+  incoming.src = spyFrames[spyFrameIndex];
+  const scene = document.querySelector(".spy-scene");
+  const transition = $("stageTransition");
+  scene?.classList.remove("transitioning");
+  transition?.classList.remove("active");
+  void scene?.offsetWidth;
+  incoming.classList.add("active");
+  active.classList.remove("active");
+  scene?.classList.add("transitioning");
+  transition?.classList.add("active");
+  activeFrameLayer = activeFrameLayer === "A" ? "B" : "A";
+  setTimeout(() => {
+    scene?.classList.remove("transitioning");
+    transition?.classList.remove("active");
+  }, 760);
 }
 
 function render(state) {
+  latestState = state;
   const runtime = state.runtime || {};
   const scan = runtime.scan || {};
   const status = scan.status || runtime.phase || "idle";
@@ -84,6 +107,7 @@ function render(state) {
   });
   renderCompleted(scan.last_completed);
   renderUpcoming(scan.upcoming || []);
+  renderCountdowns();
 }
 
 function renderTarget(kind, target, fallback) {
@@ -98,6 +122,35 @@ function renderTarget(kind, target, fallback) {
   detailEl.textContent = target.channel_id
     ? `#${target.channel_label || target.channel_id} - ${target.channel_id}`
     : fallback.detail;
+}
+
+function renderCountdowns() {
+  const runtime = latestState?.runtime || {};
+  const scan = runtime.scan || {};
+  const running = Boolean(runtime.running);
+  const now = Date.now() / 1000;
+
+  if (!running || scan.status !== "scanning" || !scan.current) {
+    $("currentCountdownLabel").textContent = "Done in";
+    $("currentCountdown").textContent = "--";
+  } else {
+    $("currentCountdownLabel").textContent = "Est. done";
+    $("currentCountdown").textContent = formatCountdown(Number(scan.current_estimated_done_at || 0) - now);
+  }
+
+  if (!running) {
+    $("nextCountdownLabel").textContent = "Next scan";
+    $("nextCountdown").textContent = "--";
+    return;
+  }
+  const nextAt = Number(scan.next_scan_at || 0);
+  if (!nextAt) {
+    $("nextCountdownLabel").textContent = scan.status === "scanning" ? "Queued after" : "Next scan";
+    $("nextCountdown").textContent = scan.next ? "soon" : "--";
+    return;
+  }
+  $("nextCountdownLabel").textContent = scan.next ? "Next channel" : "Next check";
+  $("nextCountdown").textContent = formatCountdown(nextAt - now);
 }
 
 function renderCompleted(target) {
@@ -124,10 +177,81 @@ function renderUpcoming(items) {
     : `<div class="queue-empty">No upcoming due channels are queued right now.</div>`;
 }
 
+function syncDeliveryNotifications(state) {
+  const events = Array.isArray(state.events?.items) ? state.events.items : [];
+  const currentKeys = new Set(events.map(eventKey));
+  if (!eventNotificationsReady) {
+    knownEventKeys = currentKeys;
+    eventNotificationsReady = true;
+    return;
+  }
+  const fresh = events
+    .filter((event) => !knownEventKeys.has(eventKey(event)) && deliveryEventTypes.has(event.event_type))
+    .reverse();
+  knownEventKeys = currentKeys;
+  fresh.forEach(showDeliveryToast);
+}
+
+function showDeliveryToast(event) {
+  const host = $("monitorToasts");
+  if (!host) return;
+  const toast = document.createElement("article");
+  toast.className = "monitor-toast";
+  toast.innerHTML = `
+    <div class="toast-stars" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+    <img src="/assets/monitor-arigato-sprite.png" alt="" />
+    <div>
+      <strong>Arigato</strong>
+      <span>${escapeHtml(deliveryLabel(event))}</span>
+      <small>${escapeHtml(truncate(event.summary || event.draft || "", 92))}</small>
+    </div>
+    <button type="button" title="Dismiss notification">&times;</button>
+  `;
+  const dismiss = () => {
+    toast.classList.add("leaving");
+    setTimeout(() => toast.remove(), 260);
+  };
+  toast.querySelector("button")?.addEventListener("click", dismiss);
+  host.append(toast);
+  setTimeout(dismiss, 5200);
+}
+
+function eventKey(event) {
+  return [
+    event.created_at || "",
+    event.event_type || "",
+    event.server_id || "",
+    event.channel_id || "",
+    event.summary || "",
+    event.draft || "",
+  ].join("|");
+}
+
+function deliveryLabel(event) {
+  if (event.event_type === "approval_sent") return "Approved reply posted";
+  if (event.event_type === "message_sent") return "Auto reply posted";
+  return "Response posted";
+}
+
 function formatTargetTitle(target) {
   const server = target.server_label || target.server_id || "Unknown server";
   const channel = target.channel_label || target.channel_id || "Unknown channel";
   return `${server} / ${channel}`;
+}
+
+function formatCountdown(seconds) {
+  if (!Number.isFinite(seconds)) return "--";
+  if (seconds <= 0) return "now";
+  const rounded = Math.ceil(seconds);
+  const minutes = Math.floor(rounded / 60);
+  const remainder = rounded % 60;
+  if (minutes <= 0) return `${remainder}s`;
+  return `${minutes}m ${String(remainder).padStart(2, "0")}s`;
+}
+
+function truncate(value, maxLength) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  return text.length > maxLength ? `${text.slice(0, maxLength - 3)}...` : text;
 }
 
 function currentTitle(status) {
@@ -160,7 +284,9 @@ function escapeHtml(value) {
 loadSpyAnimation();
 refresh();
 refreshTimer = setInterval(refresh, 1800);
+countdownTimer = setInterval(renderCountdowns, 1000);
 window.addEventListener("beforeunload", () => {
   if (refreshTimer) clearInterval(refreshTimer);
   if (spyFrameTimer) clearInterval(spyFrameTimer);
+  if (countdownTimer) clearInterval(countdownTimer);
 });

@@ -579,10 +579,12 @@ class RuntimeController:
                 on_target_complete=self._mark_target_complete,
             )
 
-    def _mark_cycle_complete(self) -> None:
+    def _mark_cycle_complete(self, sleep_seconds: float | None = None) -> None:
         self._last_run_at = time.time()
         self._last_error = ""
         self._set_phase("running")
+        now = time.time()
+        sleep_value = max(0.0, float(sleep_seconds or 0.0))
         with self._lock:
             self._scan = {
                 **self._scan,
@@ -590,11 +592,15 @@ class RuntimeController:
                 "current": None,
                 "next": self._scan.get("next"),
                 "upcoming": self._scan.get("upcoming", []),
-                "updated_at": time.time(),
+                "next_scan_at": now + sleep_value if sleep_value else None,
+                "current_started_at": None,
+                "current_estimated_done_at": None,
+                "updated_at": now,
             }
 
     def _mark_targets_planned(self, targets) -> None:
         planned = [self._target_payload(target) for target in targets]
+        now = time.time()
         with self._lock:
             self._scan = {
                 **self._scan,
@@ -603,11 +609,15 @@ class RuntimeController:
                 "next": planned[0] if planned else None,
                 "upcoming": planned[:5],
                 "planned_count": len(planned),
-                "updated_at": time.time(),
+                "next_scan_at": now if planned else None,
+                "current_started_at": None,
+                "current_estimated_done_at": None,
+                "updated_at": now,
             }
 
     def _mark_target_start(self, target, index: int, targets) -> None:
         remaining = [self._target_payload(item) for item in list(targets)[index + 1 : index + 6]]
+        now = time.time()
         with self._lock:
             self._scan = {
                 **self._scan,
@@ -616,7 +626,10 @@ class RuntimeController:
                 "next": remaining[0] if remaining else None,
                 "upcoming": remaining,
                 "planned_count": len(targets),
-                "updated_at": time.time(),
+                "next_scan_at": None,
+                "current_started_at": now,
+                "current_estimated_done_at": now + self._estimated_target_seconds(),
+                "updated_at": now,
             }
 
     def _mark_target_complete(self, target, visible_count: int, fresh_count: int) -> None:
@@ -631,6 +644,8 @@ class RuntimeController:
                 "status": "completed_channel",
                 "current": None,
                 "last_completed": completed,
+                "current_started_at": None,
+                "current_estimated_done_at": None,
                 "updated_at": time.time(),
             }
 
@@ -646,6 +661,9 @@ class RuntimeController:
             "upcoming": [],
             "last_completed": None,
             "planned_count": 0,
+            "next_scan_at": None,
+            "current_started_at": None,
+            "current_estimated_done_at": None,
             "updated_at": time.time(),
         }
 
@@ -657,6 +675,14 @@ class RuntimeController:
             "channel_id": str(getattr(target, "channel_id", "") or ""),
             "channel_label": str(getattr(target, "label", "") or getattr(target, "channel_id", "") or ""),
         }
+
+    @staticmethod
+    def _estimated_target_seconds() -> float:
+        try:
+            config = load_config()
+            return max(20.0, min(90.0, float(config.scanner_max_channel_delay_seconds) + 20.0))
+        except Exception:
+            return 45.0
 
 
 RUNTIME = RuntimeController()
