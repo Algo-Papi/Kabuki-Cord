@@ -441,6 +441,12 @@ textarea:focus {
   object-fit: cover;
 }
 
+.runtime-avatar img {
+  object-fit: contain;
+  padding: 3px;
+  image-rendering: pixelated;
+}
+
 .account-footer span {
   display: block;
   color: var(--muted);
@@ -469,24 +475,40 @@ textarea:focus {
 
 .operation-status {
   display: grid;
-  grid-template-columns: 16px minmax(74px, auto);
+  grid-template-columns: 42px minmax(92px, auto);
   grid-template-rows: auto auto;
   align-items: center;
-  column-gap: 7px;
-  min-width: 154px;
-  max-width: 240px;
-  min-height: 38px;
+  column-gap: 9px;
+  min-width: 212px;
+  max-width: 286px;
+  min-height: 54px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: rgba(16, 22, 28, 0.78);
   color: #cfd8e2;
-  padding: 6px 10px;
+  padding: 5px 10px 5px 6px;
   font-size: 12px;
 }
 
-.operation-status i {
+.operation-status i,
+.operation-status .scanner-sprite {
   grid-row: 1 / span 2;
+}
+
+.operation-status i {
   color: var(--faint);
+}
+
+.scanner-sprite {
+  display: block;
+  width: 42px;
+  height: 42px;
+  image-rendering: pixelated;
+  background-image: url("/assets/scanner-kabuki-sheet.png");
+  background-repeat: no-repeat;
+  background-position: 0 0;
+  background-size: 336px 42px;
+  filter: drop-shadow(0 2px 2px rgba(0, 0, 0, 0.44));
 }
 
 .operation-status span,
@@ -522,6 +544,13 @@ textarea:focus {
   animation: status-spin 1.2s linear infinite;
 }
 
+.operation-status.active .scanner-sprite,
+.operation-status.api .scanner-sprite,
+.operation-status.discord .scanner-sprite,
+.operation-status.working .scanner-sprite {
+  animation: scanner-dance 0.9s steps(8) infinite;
+}
+
 .operation-status.scanning {
   border-color: rgba(95, 201, 120, 0.32);
   background: rgba(95, 201, 120, 0.08);
@@ -530,6 +559,11 @@ textarea:focus {
 
 .operation-status.scanning i {
   color: var(--green);
+}
+
+.operation-status.scanning .scanner-sprite {
+  animation: scanner-dance 0.82s steps(8) infinite;
+  filter: drop-shadow(0 0 8px rgba(95, 201, 120, 0.32)) drop-shadow(0 2px 2px rgba(0, 0, 0, 0.44));
 }
 
 .operation-status.done {
@@ -542,6 +576,11 @@ textarea:focus {
   color: var(--green);
 }
 
+.operation-status.done .scanner-sprite {
+  background-position: -294px 0;
+  animation: none;
+}
+
 .operation-status.failed {
   border-color: rgba(239, 107, 120, 0.42);
   background: rgba(239, 107, 120, 0.1);
@@ -552,9 +591,32 @@ textarea:focus {
   color: var(--red);
 }
 
+.operation-status.failed .scanner-sprite,
+.scanner-sprite-error {
+  animation: scanner-alert 0.42s steps(2) 3;
+  filter: hue-rotate(135deg) saturate(1.35) drop-shadow(0 0 8px rgba(239, 107, 120, 0.34));
+}
+
+.operation-status.idle .scanner-sprite {
+  opacity: 0.76;
+  filter: grayscale(0.25) drop-shadow(0 2px 2px rgba(0, 0, 0, 0.44));
+}
+
 @keyframes status-spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+@keyframes scanner-dance {
+  to {
+    background-position: -336px 0;
+  }
+}
+
+@keyframes scanner-alert {
+  50% {
+    transform: translateX(1px);
   }
 }
 

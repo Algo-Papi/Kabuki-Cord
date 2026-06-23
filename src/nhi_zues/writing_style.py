@@ -25,7 +25,9 @@ def apply_human_writing_noise(
     cleaned = _reduce_dash_punctuation(cleaned)
 
     rate = max(0.0, min(float(mistake_rate or 0), 0.35))
-    if rate <= 0:
+    # Low rates should feel like a consistent human quirk, not random keyboard damage.
+    # The configured misspellings above already handle the subtle always-on mistakes.
+    if rate < 0.04:
         return cleaned
 
     digest = hashlib.sha256(f"{seed}\n{cleaned}".encode("utf-8")).hexdigest()

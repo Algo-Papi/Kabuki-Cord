@@ -11,13 +11,30 @@ class CharacterCard:
     system_prompt: str
     style_rules: tuple[str, ...]
     engagement_rules: tuple[str, ...]
+    response_moves: tuple[str, ...]
+    voice_examples: tuple[str, ...]
+    avoid_examples: tuple[str, ...]
     aliases: tuple[str, ...]
     trigger_keywords: tuple[str, ...]
 
     def prompt_text(self) -> str:
         rules = "\n".join(f"- {rule}" for rule in self.style_rules)
         engagement = "\n".join(f"- {rule}" for rule in self.engagement_rules)
-        return f"{self.system_prompt}\n\nStyle rules:\n{rules}\n\nEngagement rules:\n{engagement}"
+        sections = [
+            self.system_prompt,
+            f"Style rules:\n{rules}",
+            f"Engagement rules:\n{engagement}",
+        ]
+        if self.response_moves:
+            moves = "\n".join(f"- {move}" for move in self.response_moves)
+            sections.append(f"Available response moves:\n{moves}")
+        if self.voice_examples:
+            examples = "\n".join(f"- {example}" for example in self.voice_examples)
+            sections.append(f"Good voice examples:\n{examples}")
+        if self.avoid_examples:
+            examples = "\n".join(f"- {example}" for example in self.avoid_examples)
+            sections.append(f"Bad voice examples to avoid:\n{examples}")
+        return "\n\n".join(sections)
 
 
 class CharacterCardStore:
@@ -51,6 +68,9 @@ def _card_from_dict(payload: dict) -> CharacterCard:
         system_prompt=str(payload["system_prompt"]),
         style_rules=tuple(str(rule) for rule in payload.get("style_rules", [])),
         engagement_rules=tuple(str(rule) for rule in payload.get("engagement_rules", [])),
+        response_moves=tuple(str(move) for move in payload.get("response_moves", [])),
+        voice_examples=tuple(str(example) for example in payload.get("voice_examples", [])),
+        avoid_examples=tuple(str(example) for example in payload.get("avoid_examples", [])),
         aliases=tuple(str(alias).lower() for alias in payload.get("aliases", [])),
         trigger_keywords=tuple(str(word).lower() for word in payload.get("trigger_keywords", [])),
     )
@@ -62,6 +82,9 @@ def _card_to_dict(card: CharacterCard) -> dict:
         "system_prompt": card.system_prompt,
         "style_rules": list(card.style_rules),
         "engagement_rules": list(card.engagement_rules),
+        "response_moves": list(card.response_moves),
+        "voice_examples": list(card.voice_examples),
+        "avoid_examples": list(card.avoid_examples),
         "aliases": list(card.aliases),
         "trigger_keywords": list(card.trigger_keywords),
     }

@@ -8,7 +8,13 @@ from .character_memory import CharacterMemory
 from .models import DraftDecision, MessageRecord, UserMemory
 from .topics import TopicSnapshot
 from .user_instructions import UserInstruction
-from .voice_guard import apply_voice_guard, should_avoid_question, voice_guard_prompt
+from .voice_guard import (
+    apply_voice_guard,
+    draft_quality_issues,
+    select_response_move,
+    should_avoid_question,
+    voice_guard_prompt,
+)
 from .writing_style import apply_human_writing_noise, writing_style_prompt
 
 
@@ -105,14 +111,20 @@ class ReplyPlanner:
             recent_character_lines=recent_character_lines,
             seed=seed,
         )
+        response_move = select_response_move(
+            seed=seed,
+            avoid_question=avoid_question,
+            card_moves=character.response_moves,
+        )
         user_prompt = (
             f"Channel: {channel_id}\n"
             f"Character: {character.name}\n"
             f"Tracked topics: {topic_summary}\n\n"
             f"Known user context:\n{user_memory}\n\n"
             f"Recent conversation:\n{transcript}\n\n"
-            f"{voice_guard_prompt(avoid_question=avoid_question, recent_character_lines=recent_character_lines)}\n\n"
-            "Draft one reply, 1-2 sentences max."
+            f"{voice_guard_prompt(avoid_question=avoid_question, recent_character_lines=recent_character_lines, response_move=response_move)}\n\n"
+            "Draft one reply for approval. Aim for 12-35 words and never exceed 45 words. Prefer one sentence. Two sentences only if the second adds a real detail. "
+            "No polished mini-essay, no recap, no default opener."
         )
         instructions = character.prompt_text()
         memory_prompt = character_memory.prompt_text()
@@ -133,19 +145,18 @@ class ReplyPlanner:
                 requires_approval=requires_approval,
             )
 
-        response = await self.client.responses.create(
-            model=self.model,
+        draft, records, issues = await self._generate_with_quality_retry(
             instructions=instructions,
-            input=user_prompt,
-            max_output_tokens=self.max_output_tokens,
+            user_prompt=user_prompt,
+            seed=seed,
+            avoid_question=avoid_question,
         )
-        input_tokens, output_tokens = _usage_tokens(response, estimated_input_tokens)
-        record = self.budget.record(input_tokens=input_tokens, output_tokens=output_tokens)
-        draft = getattr(response, "output_text", "") or ""
-        draft = self._finalize_draft(draft, seed=seed, avoid_question=avoid_question)
+        cost = sum(record.cost_usd for record in records)
+        retry_count = max(0, len(records) - 1)
+        quality_note = f"; style_retry={retry_count}" if retry_count else ""
         return DraftDecision(
             True,
-            f"{reason}; api_cost=${record.cost_usd:.6f}",
+            f"{reason}; api_cost=${cost:.6f}{quality_note}",
             draft=draft.strip(),
             engagement_type=engagement_type,
             requires_approval=requires_approval,
@@ -181,6 +192,11 @@ class ReplyPlanner:
             recent_character_lines=recent_character_lines,
             seed=seed,
         )
+        response_move = select_response_move(
+            seed=seed,
+            avoid_question=avoid_question,
+            card_moves=character.response_moves,
+        )
         user_prompt = (
             f"Channel: {channel_id}\n"
             f"Character: {character.name}\n"
@@ -189,8 +205,9 @@ class ReplyPlanner:
             f"Recent conversation:\n{transcript}\n\n"
             f"Current draft:\n{current_draft or '(none)'}\n\n"
             f"Operator direction:\n{operator_instruction or 'Make a better natural response for the selected context.'}\n\n"
-            f"{voice_guard_prompt(avoid_question=avoid_question, recent_character_lines=recent_character_lines)}\n\n"
-            "Generate one revised Discord reply for approval, 1-2 sentences max."
+            f"{voice_guard_prompt(avoid_question=avoid_question, recent_character_lines=recent_character_lines, response_move=response_move)}\n\n"
+            "Generate one revised Discord reply for approval. Aim for 12-35 words and never exceed 45 words. Prefer one sentence. Two sentences only if the second adds a real detail. "
+            "Do not preserve the current draft's structure if it sounds synthetic."
         )
         instructions = character.prompt_text()
         memory_prompt = character_memory.prompt_text()
@@ -212,23 +229,93 @@ class ReplyPlanner:
                 requires_approval=True,
             )
 
+        draft, records, issues = await self._generate_with_quality_retry(
+            instructions=instructions,
+            user_prompt=user_prompt,
+            seed=seed,
+            avoid_question=avoid_question,
+        )
+        cost = sum(record.cost_usd for record in records)
+        retry_count = max(0, len(records) - 1)
+        quality_note = f"; style_retry={retry_count}" if retry_count else ""
+        return DraftDecision(
+            True,
+            f"manual approval draft generated; api_cost=${cost:.6f}{quality_note}",
+            draft=draft.strip(),
+            engagement_type="manual",
+            requires_approval=True,
+        )
+
+    async def _generate_with_quality_retry(
+        self,
+        *,
+        instructions: str,
+        user_prompt: str,
+        seed: str,
+        avoid_question: bool,
+    ):
+        draft, record = await self._request_draft(
+            instructions=instructions,
+            user_prompt=user_prompt,
+            seed=seed,
+            avoid_question=avoid_question,
+        )
+        records = [record]
+        issues = draft_quality_issues(draft)
+        if not issues:
+            return draft, records, issues
+
+        best_draft = draft
+        best_issues = issues
+        current_draft = draft
+        current_issues = issues
+        for attempt in range(1, 3):
+            retry_prompt = _quality_retry_prompt(user_prompt, current_draft, current_issues)
+            estimated_input_tokens = BudgetManager.approx_tokens(instructions + "\n" + retry_prompt)
+            retry_budget = self.budget.check(
+                estimated_input_tokens=estimated_input_tokens,
+                max_output_tokens=self.max_output_tokens,
+            )
+            if not retry_budget.allowed:
+                break
+
+            retry_draft, retry_record = await self._request_draft(
+                instructions=instructions,
+                user_prompt=retry_prompt,
+                seed=f"{seed}:style-retry:{attempt}",
+                avoid_question=avoid_question,
+            )
+            records.append(retry_record)
+            retry_issues = draft_quality_issues(retry_draft)
+            if not retry_issues:
+                return retry_draft, records, issues
+            if len(retry_issues) < len(best_issues):
+                best_draft = retry_draft
+                best_issues = retry_issues
+            current_draft = retry_draft
+            current_issues = retry_issues
+        return best_draft, records, best_issues
+
+    async def _request_draft(
+        self,
+        *,
+        instructions: str,
+        user_prompt: str,
+        seed: str,
+        avoid_question: bool,
+    ):
         response = await self.client.responses.create(
             model=self.model,
             instructions=instructions,
             input=user_prompt,
             max_output_tokens=self.max_output_tokens,
         )
+        estimated_input_tokens = BudgetManager.approx_tokens(instructions + "\n" + user_prompt)
         input_tokens, output_tokens = _usage_tokens(response, estimated_input_tokens)
         record = self.budget.record(input_tokens=input_tokens, output_tokens=output_tokens)
         draft = getattr(response, "output_text", "") or ""
         draft = self._finalize_draft(draft, seed=seed, avoid_question=avoid_question)
-        return DraftDecision(
-            True,
-            f"manual approval draft generated; api_cost=${record.cost_usd:.6f}",
-            draft=draft.strip(),
-            engagement_type="manual",
-            requires_approval=True,
-        )
+        return draft, record
 
     def _finalize_draft(self, draft: str, *, seed: str, avoid_question: bool = False) -> str:
         draft = apply_voice_guard(draft, avoid_question=avoid_question, seed=seed)
@@ -312,6 +399,18 @@ def _recent_character_lines(context: list[MessageRecord], character: CharacterCa
 
 def _normalize_author(value: str) -> str:
     return " ".join(str(value or "").lower().split())
+
+
+def _quality_retry_prompt(user_prompt: str, draft: str, issues: list[str]) -> str:
+    issue_lines = "\n".join(f"- {issue}" for issue in issues)
+    return (
+        f"{user_prompt}\n\n"
+        "The previous draft failed the voice quality gate:\n"
+        f"{draft}\n\n"
+        f"Problems:\n{issue_lines}\n\n"
+        "Rewrite from scratch. Make it sound like a normal quick Discord reply, not a polished response. "
+        "Use fewer words, fewer abstractions, no stock opener, and no more than one like-comparison."
+    )
 
 
 def _fit_text(text: str, max_chars: int) -> str:

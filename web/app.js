@@ -352,7 +352,7 @@ function renderOperationStatus() {
   if (active) {
     el.className = `operation-status active ${escapeAttr(active.kind || "working")}`;
     el.innerHTML = `
-      <i class="bi ${escapeAttr(active.icon || "bi-arrow-repeat")}"></i>
+      ${scannerSprite(active.kind || "working")}
       <span>${escapeHtml(active.label)}</span>
       ${active.detail ? `<small>${escapeHtml(active.detail)}</small>` : ""}
     `;
@@ -362,7 +362,7 @@ function renderOperationStatus() {
   if (runtime.running) {
     el.className = "operation-status scanning";
     el.innerHTML = `
-      <i class="bi bi-radar"></i>
+      ${scannerSprite("scanning")}
       <span>Scanner running</span>
       <small>${escapeHtml(formatRuntimeTime(runtime.last_run_at))}</small>
     `;
@@ -370,10 +370,15 @@ function renderOperationStatus() {
   }
   el.className = "operation-status idle";
   el.innerHTML = `
-    <i class="bi bi-circle-fill"></i>
+    ${scannerSprite(runtime.last_error ? "error" : "idle")}
     <span>Idle</span>
     <small>${escapeHtml(runtime.last_error || runtimeModeLabel(currentRuntimeMode()))}</small>
   `;
+}
+
+function scannerSprite(state = "idle") {
+  const safeState = String(state || "idle").toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
+  return `<span class="scanner-sprite scanner-sprite-${escapeAttr(safeState)}" aria-hidden="true"></span>`;
 }
 
 function startOperation(id, label, detail = "", kind = "working", icon = "bi-arrow-repeat") {
