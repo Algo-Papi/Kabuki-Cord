@@ -798,12 +798,22 @@ function renderObserved() {
     (observed.poster_summaries || [])
       .map((poster) => `
         <div class="observed-card">
-          <div>
+          <div class="observed-copy">
             <strong>${escapeHtml(poster.display_name)}</strong>
             <span>${escapeHtml(poster.summary)}</span>
           </div>
-          <button class="small-button" data-suggest-user="${escapeAttr(poster.user_key)}"><i class="bi bi-chat-left-text"></i> Suggest</button>
-          <button class="small-button" data-guide-user="${escapeAttr(poster.user_key)}"><i class="bi bi-person-gear"></i> Guide</button>
+          <div class="observed-actions">
+            <button
+              class="small-button"
+              data-suggest-user="${escapeAttr(poster.user_key)}"
+              title="Draft a suggested reply to this user's recent point."
+            ><i class="bi bi-chat-left-text"></i> Suggest Reply</button>
+            <button
+              class="small-button"
+              data-guide-user="${escapeAttr(poster.user_key)}"
+              title="Add per-user behavior guidance for future replies."
+            ><i class="bi bi-person-gear"></i> Guide User</button>
+          </div>
         </div>
       `)
       .join("") || `<div class="note-item">No recent unique posters recorded.</div>`;

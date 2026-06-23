@@ -1082,14 +1082,43 @@ button:disabled {
 
 .observed-card {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  gap: 10px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 9px;
   align-items: start;
 }
 
 .observed-card strong,
 .observed-card span {
   display: block;
+}
+
+.observed-card strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-bottom: 4px;
+}
+
+.observed-copy {
+  min-width: 0;
+}
+
+.observed-copy span {
+  color: #b9c8d6;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.observed-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.observed-actions .small-button {
+  justify-content: center;
+  min-width: 0;
+  white-space: nowrap;
 }
 
 .preview-panel {
