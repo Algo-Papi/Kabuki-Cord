@@ -680,7 +680,15 @@ class RuntimeController:
     def _estimated_target_seconds() -> float:
         try:
             config = load_config()
-            return max(20.0, min(90.0, float(config.scanner_max_channel_delay_seconds) + 20.0))
+            return max(
+                20.0,
+                min(
+                    120.0,
+                    float(config.scanner_channel_settle_seconds)
+                    + float(config.scanner_max_channel_delay_seconds)
+                    + 20.0,
+                ),
+            )
         except Exception:
             return 45.0
 
@@ -735,6 +743,7 @@ def app_state() -> dict:
             "typing_chars_per_second": config.typing_chars_per_second,
             "scanner_max_channels_per_cycle": config.scanner_max_channels_per_cycle,
             "scanner_cycle_sleep_seconds": config.scanner_cycle_sleep_seconds,
+            "scanner_channel_settle_seconds": config.scanner_channel_settle_seconds,
             "scanner_min_channel_delay_seconds": config.scanner_min_channel_delay_seconds,
             "scanner_max_channel_delay_seconds": config.scanner_max_channel_delay_seconds,
         },

@@ -54,14 +54,15 @@ This is the replacement checklist for animated and sprite-like visual assets cur
 
 ## Scanner Timing Defaults
 
-The Scanner Monitor now displays the active pace in its Pace card. With default environment values, Kabuki-Cord scans `1` channel per cycle, rests for `45s`, then checks the next due channel. The `12-35s` per-channel delay only becomes visible between channels when `NHI_ZUES_SCANNER_MAX_CHANNELS_PER_CYCLE` is raised above `1`.
+The Scanner Monitor now displays the active pace in its Pace card. With default environment values, Kabuki-Cord scans `1` channel per cycle, waits `12s` on the loaded channel before reading, rests for `45s`, then checks the next due channel. The `12-35s` per-channel delay only becomes visible between channels when `NHI_ZUES_SCANNER_MAX_CHANNELS_PER_CYCLE` is raised above `1`.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | `NHI_ZUES_SCANNER_MAX_CHANNELS_PER_CYCLE` | `1` | Number of enabled channels visited before the scanner rests. |
 | `NHI_ZUES_SCANNER_CYCLE_SLEEP_SECONDS` | `45` | Idle/rest period after a scan cycle. |
-| `NHI_ZUES_SCANNER_MIN_CHANNEL_DELAY_SECONDS` | `12` | Minimum human-paced delay between channels inside one cycle. |
-| `NHI_ZUES_SCANNER_MAX_CHANNEL_DELAY_SECONDS` | `35` | Maximum human-paced delay between channels inside one cycle. |
+| `NHI_ZUES_SCANNER_CHANNEL_SETTLE_SECONDS` | `12` | Fixed wait after loading a channel and before reading visible messages. |
+| `NHI_ZUES_SCANNER_MIN_CHANNEL_DELAY_SECONDS` | `12` | Minimum cooldown between channels inside one cycle. |
+| `NHI_ZUES_SCANNER_MAX_CHANNEL_DELAY_SECONDS` | `35` | Maximum cooldown between channels inside one cycle. |
 
 ## Upgrade Standard
 

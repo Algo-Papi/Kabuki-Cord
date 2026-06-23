@@ -244,9 +244,10 @@ The scanner should not sweep every enabled channel back-to-back. The conservativ
 
 - `NHI_ZUES_SCANNER_MAX_CHANNELS_PER_CYCLE=1`
 - `NHI_ZUES_SCANNER_CYCLE_SLEEP_SECONDS=45`
+- `NHI_ZUES_SCANNER_CHANNEL_SETTLE_SECONDS=12`
 - `NHI_ZUES_POLL_SECONDS=180`
 
-If you increase **Max channels per cycle**, the min/max wait settings add a pause between channel checks. Keep the observed channel list narrow, keep server scan cadences in minutes rather than seconds, and prefer **Dry Mode** or approval-based modes while testing.
+`NHI_ZUES_SCANNER_CHANNEL_SETTLE_SECONDS` keeps the scanner on a channel briefly after navigation before message extraction. This reduces rapid browser churn and gives Discord time to finish rendering the latest messages. If you increase **Max channels per cycle**, the min/max wait settings add a pause between channel checks. Keep the observed channel list narrow, keep server scan cadences in minutes rather than seconds, and prefer **Dry Mode** or approval-based modes while testing.
 
 ### Scanner Monitor and Replies
 

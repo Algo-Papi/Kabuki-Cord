@@ -181,6 +181,7 @@ function renderPace(state) {
   const scan = runtime.scan || {};
   const maxChannels = Number(app.scanner_max_channels_per_cycle || 1);
   const cycleRest = Number(app.scanner_cycle_sleep_seconds || 45);
+  const settleDelay = Number(app.scanner_channel_settle_seconds || 12);
   const minDelay = Number(app.scanner_min_channel_delay_seconds || 12);
   const maxDelay = Number(app.scanner_max_channel_delay_seconds || 35);
   const target = $("idleTarget");
@@ -191,7 +192,7 @@ function renderPace(state) {
       ? "Scanning now"
       : "Between channels"
     : "Paused";
-  detail.textContent = `${maxChannels} channel${maxChannels === 1 ? "" : "s"}/cycle, ${formatSeconds(cycleRest)} rest, ${formatDelayRange(minDelay, maxDelay)} channel delay`;
+  detail.textContent = `${maxChannels} channel${maxChannels === 1 ? "" : "s"}/cycle, ${formatSeconds(settleDelay)} settle, ${formatSeconds(cycleRest)} rest, ${formatDelayRange(minDelay, maxDelay)} channel delay`;
 }
 
 function renderCompleted(target) {

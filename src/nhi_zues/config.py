@@ -36,6 +36,7 @@ class AppConfig:
     poll_seconds: float
     scanner_max_channels_per_cycle: int
     scanner_cycle_sleep_seconds: float
+    scanner_channel_settle_seconds: float
     scanner_min_channel_delay_seconds: float
     scanner_max_channel_delay_seconds: float
     channels: tuple[ChannelTarget, ...]
@@ -75,6 +76,10 @@ def load_config() -> AppConfig:
         poll_seconds=_env_float("NHI_ZUES_POLL_SECONDS", 180.0),
         scanner_max_channels_per_cycle=max(1, _env_int("NHI_ZUES_SCANNER_MAX_CHANNELS_PER_CYCLE", 1)),
         scanner_cycle_sleep_seconds=max(5.0, _env_float("NHI_ZUES_SCANNER_CYCLE_SLEEP_SECONDS", 45.0)),
+        scanner_channel_settle_seconds=max(
+            0.0,
+            _env_float("NHI_ZUES_SCANNER_CHANNEL_SETTLE_SECONDS", 12.0),
+        ),
         scanner_min_channel_delay_seconds=max(
             0.0,
             _env_float("NHI_ZUES_SCANNER_MIN_CHANNEL_DELAY_SECONDS", 12.0),

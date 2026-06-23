@@ -173,6 +173,7 @@ class NhiZuesRunner:
                     session,
                     targets,
                     planned_targets=planned_targets,
+                    stop_event=stop_event,
                     on_target_start=on_target_start,
                     on_target_complete=on_target_complete,
                 )
@@ -215,6 +216,7 @@ class NhiZuesRunner:
         targets,
         *,
         planned_targets=None,
+        stop_event=None,
         on_target_start=None,
         on_target_complete=None,
     ) -> None:
@@ -251,6 +253,8 @@ class NhiZuesRunner:
                     on_target_complete(target, 0, 0)
                 continue
 
+            if await self._channel_settle_delay(stop_event):
+                return
             visible_messages = await session.read_visible_messages(target.server_id, target.channel_id)
             fresh = self.memory.ingest(target.channel_id, visible_messages)
             character = self.characters.for_server(target.server_id, target.character_card)
@@ -358,6 +362,16 @@ class NhiZuesRunner:
                     decision.engagement_type,
                     auto_respond_enabled=target.auto_respond_enabled,
                 ):
+                    approval_reason = _approval_gate_reason(
+                        self.config.runtime_mode,
+                        decision.engagement_type,
+                        auto_respond_enabled=target.auto_respond_enabled,
+                    )
+                    approval_summary = (
+                        f"{decision.reason}; queued for approval because {approval_reason}"
+                        if approval_reason
+                        else decision.reason
+                    )
                     existing = self.approvals.find_source_overlap(
                         channel_id=target.channel_id,
                         source_message_ids=source_ids,
@@ -380,7 +394,7 @@ class NhiZuesRunner:
                         channel_id=target.channel_id,
                         character_name=character.name,
                         engagement_type=decision.engagement_type,
-                        reason=decision.reason,
+                        reason=approval_summary,
                         draft=decision.draft,
                         source_messages=fresh,
                     )
@@ -389,7 +403,7 @@ class NhiZuesRunner:
                         event_type="approval_queued",
                         server_id=target.server_id,
                         channel_id=target.channel_id,
-                        summary=decision.reason,
+                        summary=approval_summary,
                         draft=decision.draft,
                     )
                 else:
@@ -425,6 +439,9 @@ class NhiZuesRunner:
         if upper <= 0:
             return
         await asyncio.sleep(random.uniform(lower, upper))
+
+    async def _channel_settle_delay(self, stop_event=None) -> bool:
+        return await _sleep_interruptible(stop_event, self.config.scanner_channel_settle_seconds)
 
     async def _raise_if_account_blocked(self, session: DiscordWebSession, target) -> None:
         state = await session.account_blocker_state()
@@ -519,6 +536,23 @@ def _requires_approval(
     if mode == "semi_auto":
         return kind in {"proactive", "manual"}
     return False
+
+
+def _approval_gate_reason(
+    runtime_mode: str,
+    engagement_type: str,
+    *,
+    auto_respond_enabled: bool,
+) -> str:
+    mode = str(runtime_mode or "dry").lower()
+    kind = str(engagement_type or "").lower()
+    if mode == "live_fire":
+        return "Live Fire requires review for every draft"
+    if not auto_respond_enabled:
+        return "Auto is off for this channel"
+    if mode == "semi_auto" and kind in {"proactive", "manual"}:
+        return "Semi Auto reviews new starts and manual drafts"
+    return ""
 
 
 def _stop_requested(stop_event) -> bool:
