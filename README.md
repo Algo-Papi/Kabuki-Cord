@@ -97,6 +97,8 @@ After signing in, click **Sync Discord** in the top bar to read the Discord serv
 
 Synced server icons are cached under ignored runtime state and displayed in the left rail when Discord exposes an icon URL.
 
+Use **Monitor** in the top bar to open a separate scanner-status window. It shows the current server/channel, next target, upcoming due channels, and the last completed scan. The server rail also shows red reply dots when local memory detects unresponded mentions or tight replies after the character's latest message; review them in the **Replies** tab.
+
 Dry-run mode prints observations and draft decisions without sending messages. Keep `NHI_ZUES_DRY_RUN=true` while testing selectors, memory, and topic behavior.
 
 For a clean test pass that exits after one sweep:

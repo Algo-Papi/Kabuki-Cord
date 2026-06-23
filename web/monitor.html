@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Kabuki-Cord Scanner Monitor</title>
+    <link rel="stylesheet" href="/monitor.css" />
+  </head>
+  <body>
+    <main class="monitor-shell">
+      <header class="monitor-header">
+        <div>
+          <span class="eyebrow">Kabuki-Cord</span>
+          <h1>Scanner Monitor</h1>
+        </div>
+        <div id="monitorStatus" class="status-pill">Connecting</div>
+      </header>
+
+      <section class="story-panel">
+        <div class="spy-scene" aria-hidden="true"></div>
+        <div class="scan-board">
+          <div class="scan-card current">
+            <span>Current</span>
+            <strong id="currentTarget">Idle</strong>
+            <small id="currentDetail">Waiting for scanner activity.</small>
+          </div>
+          <div class="scan-card">
+            <span>Next</span>
+            <strong id="nextTarget">None queued</strong>
+            <small id="nextDetail">No due channel yet.</small>
+          </div>
+          <div class="scan-card completed">
+            <span>Last Completed</span>
+            <strong id="lastCompleted">None yet</strong>
+            <small id="lastCompletedDetail">No completed channel scan in this run.</small>
+          </div>
+        </div>
+      </section>
+
+      <section class="queue-panel">
+        <div class="section-title">Upcoming Channels</div>
+        <div id="upcomingList" class="upcoming-list"></div>
+      </section>
+    </main>
+    <script src="/monitor.js"></script>
+  </body>
+</html>

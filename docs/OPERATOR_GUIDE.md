@@ -248,6 +248,12 @@ The scanner should not sweep every enabled channel back-to-back. The conservativ
 
 If you increase **Max channels per cycle**, the min/max wait settings add a pause between channel checks. Keep the observed channel list narrow, keep server scan cadences in minutes rather than seconds, and prefer **Dry Mode** or approval-based modes while testing.
 
+### Scanner Monitor and Replies
+
+Click **Monitor** in the top bar to open a separate scanner-status window. It reports the live scanner phase, current channel, next due channel, the next five due channels, and the last completed scan counts. Normal scanner passes update remembered conversation history from the visible messages in each enabled channel; use **Backfill** when you need deeper scrollback.
+
+The **Replies** tab lists remembered messages that appear to need attention after the character's last post. It flags explicit mentions/tags plus immediate adjacent replies in a short window, then shows red dots on the matching server icons. These indicators are based on local scan memory, so they clear after a later character response is scanned back into memory.
+
 ## Safe Test Checklist
 
 Use this sequence before allowing live sends:

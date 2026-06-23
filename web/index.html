@@ -88,6 +88,7 @@
             <span id="apiStatus" class="status-pill"></span>
             <div class="topbar-button-group">
               <button id="runtimeControl" class="secondary-button" type="button"><i class="bi bi-play-fill"></i> Start</button>
+              <button id="openScannerMonitor" class="secondary-button" type="button"><i class="bi bi-binoculars"></i> Monitor</button>
               <button id="syncDiscordServers" class="secondary-button"><i class="bi bi-diagram-3"></i> Sync Discord</button>
               <button id="refresh" class="secondary-button"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
               <button id="saveAll" class="primary-button"><i class="bi bi-check2"></i> Save Changes</button>
@@ -410,6 +411,7 @@
         <div class="preview-tabs">
           <button class="preview-tab active" data-preview-tab="preview">Preview</button>
           <button class="preview-tab" data-preview-tab="events">Events <span id="eventBadge" class="event-badge"></span></button>
+          <button class="preview-tab" data-preview-tab="replies">Replies <span id="replyBadge" class="event-badge"></span></button>
           <div class="api-spend-pill" title="OpenAI API spend today">
             <i class="bi bi-cash-coin"></i>
             <span id="topDailySpend">$0.000000</span>
@@ -460,6 +462,13 @@
           <section class="preview-block">
             <div class="section-title">Activity Feed</div>
             <div id="eventFeed" class="event-feed"></div>
+          </section>
+        </div>
+
+        <div id="repliesMode" class="preview-mode">
+          <section class="preview-block">
+            <div class="section-title">Unresponded Mentions</div>
+            <div id="unrespondedReplies" class="reply-watch-list"></div>
           </section>
         </div>
       </aside>

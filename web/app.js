@@ -125,6 +125,7 @@ function render() {
   renderApprovalReview();
   renderObserved();
   renderHistory();
+  renderUnrespondedReplies();
   renderMetrics();
   renderEventsPanel();
   renderPreviewTabs();
@@ -137,11 +138,13 @@ function renderRail() {
       const label = srv.label || `S${index + 1}`;
       const icon = srv.icon_path || srv.icon_url || "/assets/placeholders/server.svg";
       const railLabel = compactServerRailLabel(label, index);
+      const replyCount = Number(appState?.unresponded?.by_server?.[srv.server_id] || 0);
       return `
-        <button class="server-bubble ${index === selectedServer ? "active" : ""}" data-server="${index}" title="${escapeHtml(label)}">
+        <button class="server-bubble ${index === selectedServer ? "active" : ""} ${replyCount ? "has-replies" : ""}" data-server="${index}" title="${escapeHtml(label)}${replyCount ? ` - ${replyCount} unresponded mention${replyCount === 1 ? "" : "s"}` : ""}">
           <span class="server-icon-frame">
             <img src="${escapeAttr(icon)}" alt="" onerror="this.src='/assets/placeholders/server.svg'" />
           </span>
+          ${replyCount ? `<span class="server-reply-dot">${replyCount > 9 ? "9+" : replyCount}</span>` : ""}
           <span class="server-bubble-label">${escapeHtml(railLabel)}</span>
         </button>
       `;
@@ -1335,7 +1338,9 @@ function renderPreviewTabs() {
   });
   $("previewMode").classList.toggle("active", previewPanelMode === "preview");
   $("eventsMode").classList.toggle("active", previewPanelMode === "events");
+  $("repliesMode").classList.toggle("active", previewPanelMode === "replies");
   renderEventBadge();
+  renderReplyBadge();
 }
 
 function renderEventsPanel() {
@@ -1394,6 +1399,59 @@ function renderEventCard(event) {
       ${detail ? `<p>${escapeHtml(detail)}</p>` : ""}
     </div>
   `;
+}
+
+function renderUnrespondedReplies() {
+  const items = appState.unresponded?.items || [];
+  $("unrespondedReplies").innerHTML = items
+    .map((item) => `
+      <article class="reply-watch-card">
+        <div class="reply-watch-head">
+          <strong>${escapeHtml(item.author || "unknown")}</strong>
+          <span>${escapeHtml(item.server_label || item.server_id || "Unknown server")} / ${escapeHtml(formatChannelName(item.channel_label || item.channel_id, item.channel_type))}</span>
+        </div>
+        <p>${escapeHtml(item.text || "")}</p>
+        <div class="reply-watch-context">
+          <span>${escapeHtml(item.reason || "unresponded mention")}</span>
+          ${item.since_text ? `<small>After you: ${escapeHtml(item.since_text)}</small>` : ""}
+          <small>${escapeHtml(formatTime(item.observed_at))}</small>
+        </div>
+        <div class="reply-watch-actions">
+          <button class="small-button" data-open-reply-watch="${escapeAttr(item.message_id || "")}" data-server-id="${escapeAttr(item.server_id || "")}" data-channel-id="${escapeAttr(item.channel_id || "")}">
+            <i class="bi bi-box-arrow-up-right"></i> Open
+          </button>
+          <button class="small-button" data-suggest-reply-watch="${escapeAttr(item.message_id || "")}" data-server-id="${escapeAttr(item.server_id || "")}" data-channel-id="${escapeAttr(item.channel_id || "")}" data-user-key="${escapeAttr(item.user_key || "")}">
+            <i class="bi bi-chat-left-text"></i> Suggest Reply
+          </button>
+        </div>
+      </article>
+    `)
+    .join("") || `<div class="note-item">No unresponded mentions or tight replies detected from remembered channel history.</div>`;
+
+  document.querySelectorAll("[data-open-reply-watch]").forEach((button) => {
+    button.addEventListener("click", () => openDiscordMessage(
+      button.dataset.serverId,
+      button.dataset.channelId,
+      button.dataset.openReplyWatch,
+    ).catch((error) => toast(error.message)));
+  });
+  document.querySelectorAll("[data-suggest-reply-watch]").forEach((button) => {
+    button.addEventListener("click", () => createTargetedMessageApproval({
+      serverId: button.dataset.serverId,
+      channelId: button.dataset.channelId,
+      messageId: button.dataset.suggestReplyWatch,
+      userKey: button.dataset.userKey,
+      instruction: "Suggest a natural response to this unresponded mention or reply using the selected character.",
+    }));
+  });
+}
+
+function renderReplyBadge() {
+  const badge = $("replyBadge");
+  if (!badge) return;
+  const count = Number(appState?.unresponded?.count || 0);
+  badge.textContent = count > 99 ? "99+" : String(count);
+  badge.classList.toggle("visible", count > 0);
 }
 
 function renderObserved() {
@@ -1462,16 +1520,23 @@ async function openObservedPosterMessage(messageId) {
     toast("No recent observed post target for this user yet");
     return;
   }
+  await openDiscordMessage(currentServer.server_id, currentChannel.channel_id, messageId);
+  toast("Opened latest observed post");
+}
+
+async function openDiscordMessage(serverId, channelId, messageId = "") {
+  if (!serverId || !channelId) {
+    throw new Error("Missing Discord server or channel.");
+  }
   await api("/api/open-discord-channel", {
     method: "POST",
     body: JSON.stringify({
-      server_id: currentServer.server_id,
-      channel_id: currentChannel.channel_id,
-      message_id: messageId,
+      server_id: serverId,
+      channel_id: channelId,
+      message_id: messageId || "",
     }),
   });
   await loadState();
-  toast("Opened latest observed post");
 }
 
 async function suggestReactionForMessage(messageId) {
@@ -1639,6 +1704,37 @@ async function createMessageApproval(messageId, userKey) {
       }),
     });
     appState = result.state || (await api("/api/state"));
+    render();
+    finishOperation(opId, "Approval queued", "done", "bi-check-circle");
+    toast("Response queued for approval");
+  } catch (error) {
+    await loadState().catch(() => {});
+    finishOperation(opId, "Draft failed", "failed", "bi-exclamation-triangle");
+    toast(error.message);
+  }
+}
+
+async function createTargetedMessageApproval({ serverId, channelId, messageId, userKey, instruction }) {
+  if (!serverId || !channelId || !messageId) {
+    toast("Select a remembered message first");
+    return;
+  }
+  const opId = `reply-watch-approval:${messageId}`;
+  startOperation(opId, "Drafting response", "Using reply-watch context", "api", "bi-reply");
+  toast("Generating response for unresponded mention...");
+  try {
+    const result = await api("/api/approval-create", {
+      method: "POST",
+      body: JSON.stringify({
+        server_id: serverId,
+        channel_id: channelId,
+        target_user_key: userKey || "",
+        target_message_id: messageId,
+        instruction: instruction || "Suggest a natural response to this selected message using the selected character.",
+      }),
+    });
+    appState = result.state || (await api("/api/state"));
+    previewPanelMode = "preview";
     render();
     finishOperation(opId, "Approval queued", "done", "bi-check-circle");
     toast("Response queued for approval");
@@ -1994,6 +2090,19 @@ async function toggleRuntime() {
     finishFailedOperation(opId, "Runtime change failed", error);
     throw error;
   }
+}
+
+function openScannerMonitor() {
+  const popup = window.open(
+    "/monitor.html",
+    "kabukiScannerMonitor",
+    "width=820,height=760,menubar=no,toolbar=no,location=no,status=no",
+  );
+  if (!popup) {
+    toast("Popup blocked. Allow popups for this local app, then click Monitor again.");
+    return;
+  }
+  popup.focus();
 }
 
 function renderUpdateResult(result) {
@@ -2539,6 +2648,7 @@ $("refresh").addEventListener("click", () => refreshAppStateManual().catch((erro
 $("soundToggle").addEventListener("pointerdown", (event) => event.stopPropagation());
 $("soundToggle").addEventListener("click", testKabukiAudio);
 $("runtimeControl").addEventListener("click", () => toggleRuntime().catch((error) => toast(error.message)));
+$("openScannerMonitor").addEventListener("click", openScannerMonitor);
 $("saveAll").addEventListener("click", saveAll);
 $("saveServers").addEventListener("click", saveAll);
 $("syncDiscordServers").addEventListener("click", () => syncDiscordServers().catch((error) => toast(error.message)));

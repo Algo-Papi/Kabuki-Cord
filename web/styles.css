@@ -271,6 +271,24 @@ body.runtime-mode-live-fire .shell::before {
   color: #f1edff;
 }
 
+.server-reply-dot {
+  position: absolute;
+  top: 1px;
+  right: 7px;
+  display: grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  border: 2px solid #0c1116;
+  border-radius: 999px;
+  background: var(--red);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 900;
+  line-height: 1;
+  box-shadow: 0 0 12px rgba(239, 107, 120, 0.55);
+}
+
 .rail-add,
 .icon-button {
   display: grid;
@@ -2111,6 +2129,64 @@ button:disabled {
   color: inherit;
   font-size: 13px;
   line-height: 1;
+}
+
+.reply-watch-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.reply-watch-card {
+  border: 1px solid rgba(239, 107, 120, 0.22);
+  border-radius: 8px;
+  background: rgba(239, 107, 120, 0.055);
+  padding: 10px;
+}
+
+.reply-watch-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.reply-watch-head strong {
+  min-width: 0;
+  color: #fff;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reply-watch-head span,
+.reply-watch-context span,
+.reply-watch-context small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.reply-watch-card p {
+  margin: 8px 0;
+  color: #dce7ef;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.reply-watch-context {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-bottom: 9px;
+}
+
+.reply-watch-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
 }
 
 .preview-panel {

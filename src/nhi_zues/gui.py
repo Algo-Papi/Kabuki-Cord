@@ -16,6 +16,7 @@ import urllib.error
 import urllib.request
 import webbrowser
 from dataclasses import asdict
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -396,6 +397,7 @@ class RuntimeController:
         self._last_run_at: float | None = None
         self._last_error: str = ""
         self._phase = "idle"
+        self._scan = self._empty_scan()
 
     def start(self) -> None:
         with self._lock:
@@ -408,6 +410,7 @@ class RuntimeController:
             self._last_started_at = time.time()
             self._last_error = ""
             self._phase = "starting"
+            self._scan = self._empty_scan("starting")
             self._thread = threading.Thread(target=self._loop, name="kabuki-runtime", daemon=True)
             self._thread.start()
         _record_runtime_event("runtime_started", "Scanner start requested.")
@@ -423,6 +426,7 @@ class RuntimeController:
             self._last_started_at = time.time()
             self._last_error = ""
             self._phase = "waiting_for_discord_login"
+            self._scan = self._empty_scan("waiting_for_discord_login")
             self._thread = threading.Thread(
                 target=self._login_handoff_loop,
                 name="kabuki-runtime-login-handoff",
@@ -440,21 +444,25 @@ class RuntimeController:
             self._running = False
             self._stop.set()
             self._phase = "stopping"
+            self._scan = self._empty_scan("stopping")
             thread = self._thread
         _record_runtime_event("runtime_paused", "Scanner pause requested.")
         if wait and thread and thread.is_alive() and thread is not threading.current_thread():
             thread.join(timeout=timeout)
 
     def state(self) -> dict:
-        thread_alive = bool(self._thread and self._thread.is_alive())
-        return {
-            "running": self._running and thread_alive,
-            "paused": not (self._running and thread_alive),
-            "last_started_at": self._last_started_at,
-            "last_run_at": self._last_run_at,
-            "last_error": self._last_error,
-            "phase": self._phase if self._running and thread_alive else "idle",
-        }
+        with self._lock:
+            thread_alive = bool(self._thread and self._thread.is_alive())
+            running = self._running and thread_alive
+            return {
+                "running": running,
+                "paused": not running,
+                "last_started_at": self._last_started_at,
+                "last_run_at": self._last_run_at,
+                "last_error": self._last_error,
+                "phase": self._phase if running else "idle",
+                "scan": self._copy_scan() if running else self._empty_scan(),
+            }
 
     def _set_phase(self, phase: str) -> None:
         with self._lock:
@@ -479,6 +487,9 @@ class RuntimeController:
                     NhiZuesRunner(config).run_until_stopped(
                         self._stop,
                         on_cycle=self._mark_cycle_complete,
+                        on_targets_planned=self._mark_targets_planned,
+                        on_target_start=self._mark_target_start,
+                        on_target_complete=self._mark_target_complete,
                     )
                 )
                 if self._stop.is_set():
@@ -494,6 +505,7 @@ class RuntimeController:
             with self._lock:
                 self._running = False
                 self._phase = "idle"
+                self._scan = self._empty_scan()
 
     def _login_handoff_loop(self) -> None:
         acquired = False
@@ -521,6 +533,7 @@ class RuntimeController:
             with self._lock:
                 self._running = False
                 self._phase = "idle"
+                self._scan = self._empty_scan()
 
     async def _run_login_handoff(self, config: AppConfig) -> None:
         async with DiscordWebSession(
@@ -553,12 +566,89 @@ class RuntimeController:
                 session,
                 self._stop,
                 on_cycle=self._mark_cycle_complete,
+                on_targets_planned=self._mark_targets_planned,
+                on_target_start=self._mark_target_start,
+                on_target_complete=self._mark_target_complete,
             )
 
     def _mark_cycle_complete(self) -> None:
         self._last_run_at = time.time()
         self._last_error = ""
         self._set_phase("running")
+        with self._lock:
+            self._scan = {
+                **self._scan,
+                "status": "resting",
+                "current": None,
+                "next": self._scan.get("next"),
+                "upcoming": self._scan.get("upcoming", []),
+                "updated_at": time.time(),
+            }
+
+    def _mark_targets_planned(self, targets) -> None:
+        planned = [self._target_payload(target) for target in targets]
+        with self._lock:
+            self._scan = {
+                **self._scan,
+                "status": "queued" if planned else "waiting",
+                "current": None,
+                "next": planned[0] if planned else None,
+                "upcoming": planned[:5],
+                "planned_count": len(planned),
+                "updated_at": time.time(),
+            }
+
+    def _mark_target_start(self, target, index: int, targets) -> None:
+        remaining = [self._target_payload(item) for item in list(targets)[index + 1 : index + 6]]
+        with self._lock:
+            self._scan = {
+                **self._scan,
+                "status": "scanning",
+                "current": self._target_payload(target),
+                "next": remaining[0] if remaining else None,
+                "upcoming": remaining,
+                "planned_count": len(targets),
+                "updated_at": time.time(),
+            }
+
+    def _mark_target_complete(self, target, visible_count: int, fresh_count: int) -> None:
+        completed = {
+            **self._target_payload(target),
+            "visible_messages": int(visible_count or 0),
+            "fresh_messages": int(fresh_count or 0),
+        }
+        with self._lock:
+            self._scan = {
+                **self._scan,
+                "status": "completed_channel",
+                "current": None,
+                "last_completed": completed,
+                "updated_at": time.time(),
+            }
+
+    def _copy_scan(self) -> dict:
+        return json.loads(json.dumps(self._scan))
+
+    @staticmethod
+    def _empty_scan(status: str = "idle") -> dict:
+        return {
+            "status": status,
+            "current": None,
+            "next": None,
+            "upcoming": [],
+            "last_completed": None,
+            "planned_count": 0,
+            "updated_at": time.time(),
+        }
+
+    @staticmethod
+    def _target_payload(target) -> dict:
+        return {
+            "server_id": str(getattr(target, "server_id", "") or ""),
+            "server_label": str(getattr(target, "server_label", "") or getattr(target, "server_id", "") or ""),
+            "channel_id": str(getattr(target, "channel_id", "") or ""),
+            "channel_label": str(getattr(target, "label", "") or getattr(target, "channel_id", "") or ""),
+        }
 
 
 RUNTIME = RuntimeController()
@@ -672,6 +762,7 @@ def app_state() -> dict:
         ),
         "events": events_state(config.state_dir / "events.json"),
         "memory": memory_state(config.state_dir / "memory.json"),
+        "unresponded": unresponded_replies_state(config),
         "reply_ledger": reply_ledger_state(config.state_dir / "sent_replies.json"),
     }
 
@@ -1460,6 +1551,121 @@ def recent_posters_state(path: Path) -> dict:
                 break
         result[str(channel_id)] = posters
     return result
+
+
+def unresponded_replies_state(config: AppConfig) -> dict:
+    memory_payload = _read_json(config.state_dir / "memory.json", default={"channels": {}})
+    server_labels, channel_labels = _approval_config_indexes(config.servers_file)
+    store = CharacterCardStore(config.character_dir, config.character_card)
+    items: list[dict] = []
+    by_server: dict[str, int] = {}
+    by_channel: dict[str, int] = {}
+
+    for channel_id, rows in memory_payload.get("channels", {}).items():
+        sorted_rows = _sorted_message_rows(rows)
+        if not sorted_rows:
+            continue
+        server_id = _channel_server_id(str(channel_id), sorted_rows, channel_labels)
+        card = store.for_server(server_id, _server_character_card(config, server_id))
+        own_names = _character_name_set(card)
+        last_own_index = _last_own_message_index(sorted_rows, own_names)
+        if last_own_index < 0:
+            continue
+
+        own_row = sorted_rows[last_own_index]
+        own_at = _parse_iso_time(str(own_row.get("observed_at") or ""))
+        for index, row in enumerate(sorted_rows[last_own_index + 1 :], start=last_own_index + 1):
+            if _is_own_author(row, own_names):
+                continue
+            text = str(row.get("text") or "")
+            explicit_mention = _text_mentions_character(text, own_names)
+            adjacent_reply = index == last_own_index + 1 and _within_hours(
+                own_at,
+                _parse_iso_time(str(row.get("observed_at") or "")),
+                hours=0.75,
+            )
+            if not explicit_mention and not adjacent_reply:
+                continue
+            preview = _message_preview(row)
+            channel_meta = channel_labels.get(str(channel_id), {})
+            reason = "mentioned/tagged the character" if explicit_mention else "posted immediately after the character"
+            item = {
+                **preview,
+                "server_id": server_id,
+                "server_label": server_labels.get(server_id) or channel_meta.get("server_label") or server_id,
+                "channel_label": channel_meta.get("label") or str(channel_id),
+                "channel_type": channel_meta.get("channel_type") or "",
+                "reason": reason,
+                "since_message_id": str(own_row.get("message_id") or ""),
+                "since_text": sanitize_outgoing_draft(str(own_row.get("text") or "")),
+            }
+            items.append(item)
+            by_server[server_id] = by_server.get(server_id, 0) + 1
+            by_channel[str(channel_id)] = by_channel.get(str(channel_id), 0) + 1
+
+    items = sorted(items, key=lambda item: _message_row_sort_key(item), reverse=True)[:80]
+    return {
+        "count": len(items),
+        "items": items,
+        "by_server": by_server,
+        "by_channel": by_channel,
+    }
+
+
+def _channel_server_id(channel_id: str, rows: list[dict], channel_labels: dict[str, dict]) -> str:
+    channel_meta = channel_labels.get(channel_id, {})
+    if channel_meta.get("server_id"):
+        return str(channel_meta["server_id"])
+    for row in reversed(rows):
+        if row.get("server_id"):
+            return str(row["server_id"])
+    return ""
+
+
+def _character_name_set(card) -> set[str]:
+    names = {card.name, *card.aliases}
+    return {_normalize_character_match(name) for name in names if _normalize_character_match(name)}
+
+
+def _last_own_message_index(rows: list[dict], own_names: set[str]) -> int:
+    for index in range(len(rows) - 1, -1, -1):
+        if _is_own_author(rows[index], own_names):
+            return index
+    return -1
+
+
+def _is_own_author(row: dict, own_names: set[str]) -> bool:
+    author = _normalize_character_match(clean_discord_display_name(str(row.get("author") or "")))
+    return bool(author and author in own_names)
+
+
+def _text_mentions_character(text: str, own_names: set[str]) -> bool:
+    normalized = _normalize_character_match(text)
+    if not normalized:
+        return False
+    return any(name and name in normalized for name in own_names)
+
+
+def _normalize_character_match(value: str) -> str:
+    return " ".join(str(value or "").lower().replace("@", " ").split())
+
+
+def _parse_iso_time(value: str) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _within_hours(left: datetime | None, right: datetime | None, *, hours: float) -> bool:
+    if left is None or right is None:
+        return False
+    return 0 <= (right - left).total_seconds() <= hours * 3600
 
 
 def character_memory_state(state_dir: Path, card_id: str) -> dict:
