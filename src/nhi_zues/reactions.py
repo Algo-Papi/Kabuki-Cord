@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import re
+import random
 
 LAUGH_EMOJI = "\U0001f602"
 THUMBS_UP_EMOJI = "\U0001f44d"
 APPRECIATION_EMOJI = "\U0001f64f"
 EYES_EMOJI = "\U0001f440"
+REACTION_THRESHOLDS = {"strict", "normal", "loose"}
 
 
 def suggest_emoji_reaction(text: str) -> tuple[str, str]:
@@ -66,21 +68,54 @@ def should_auto_laugh_react(text: str) -> tuple[bool, str]:
     return False, "joke-like, but not strong enough for automatic reaction"
 
 
-def should_auto_react(text: str) -> tuple[bool, str, str]:
+def should_auto_react(
+    text: str,
+    *,
+    threshold: str = "normal",
+    sample_percent: float = 0.0,
+    emoji_override: str = "",
+    sample_roll: float | None = None,
+) -> tuple[bool, str, str]:
     cleaned = " ".join(str(text or "").split())
     if not _has_enough_reaction_signal(cleaned):
         return False, "", "message is too short or low-signal for an automatic reaction"
 
+    threshold = _normalize_threshold(threshold)
+    emoji_override = _clean_emoji_override(emoji_override)
     emoji, reason = suggest_emoji_reaction(cleaned)
     lowered = f" {cleaned.lower()} "
+
+    should_react = False
+    blocked_reason = "no configured automatic reaction cue found"
     if emoji == LAUGH_EMOJI:
         strong_markers = (" lmao", " lol", " haha", f" {LAUGH_EMOJI}", " \U0001f923", " shitpost", " meme", " /s ")
         if any(marker in lowered for marker in strong_markers) or re.search(r"\b(lol+|lmao+|haha+)\b", lowered):
-            return True, emoji, reason
-        return False, "", "joke-like, but not strong enough for automatic reaction"
-    if emoji in {THUMBS_UP_EMOJI, APPRECIATION_EMOJI, EYES_EMOJI}:
+            should_react = True
+        elif threshold == "loose":
+            should_react = True
+        else:
+            blocked_reason = "joke-like, but not strong enough for automatic reaction"
+    elif emoji == EYES_EMOJI:
+        should_react = threshold in {"normal", "loose"}
+    elif emoji in {THUMBS_UP_EMOJI, APPRECIATION_EMOJI} and "safe light acknowledgement" not in reason:
+        should_react = True
+    elif threshold == "loose":
+        should_react = True
+        reason = "loose threshold accepted a safe light acknowledgement"
+
+    if should_react:
+        if emoji_override:
+            return True, emoji_override, f"emoji override applied; {reason}"
         return True, emoji, reason
-    return False, "", "no configured automatic reaction cue found"
+
+    sample_percent = max(0.0, min(float(sample_percent or 0.0), 100.0))
+    if sample_percent > 0:
+        roll = sample_roll if sample_roll is not None else random.random()
+        if roll <= sample_percent / 100.0:
+            emoji = emoji_override or LAUGH_EMOJI
+            return True, emoji, f"sampled by reaction percentage setting ({sample_percent:g}%)"
+
+    return False, "", blocked_reason
 
 
 def _has_enough_reaction_signal(text: str) -> bool:
@@ -93,3 +128,15 @@ def _has_enough_reaction_signal(text: str) -> bool:
     if lowered.startswith(("http://", "https://", "www.")):
         return False
     return True
+
+
+def _normalize_threshold(value: str) -> str:
+    cleaned = str(value or "normal").strip().lower().replace("-", "_").replace(" ", "_")
+    return cleaned if cleaned in REACTION_THRESHOLDS else "normal"
+
+
+def _clean_emoji_override(value: str) -> str:
+    cleaned = str(value or "").strip()
+    if not cleaned:
+        return ""
+    return cleaned[:8]

@@ -474,14 +474,18 @@ class NhiZuesRunner:
         for message in fresh:
             if len(reacted_message_ids) >= self.config.reaction_max_per_channel:
                 break
-            should_react, emoji, reason = should_auto_react(message.text)
-            if not should_react:
-                continue
-            if self.reaction_ledger.has_reacted(
+            if self.reaction_ledger.has_reacted_to_message(
                 channel_id=message.channel_id,
                 message_id=message.message_id,
-                emoji=emoji,
             ):
+                continue
+            should_react, emoji, reason = should_auto_react(
+                message.text,
+                threshold=self.config.reaction_threshold,
+                sample_percent=self.config.reaction_sample_percent,
+                emoji_override=self.config.reaction_emoji_override,
+            )
+            if not should_react:
                 continue
             try:
                 result = await session.add_reaction(message.message_id, emoji)

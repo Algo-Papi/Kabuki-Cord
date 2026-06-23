@@ -327,6 +327,9 @@ function renderSettings() {
   $("scannerMinDelay").value = appState.env.NHI_ZUES_SCANNER_MIN_CHANNEL_DELAY_SECONDS || "12";
   $("scannerMaxDelay").value = appState.env.NHI_ZUES_SCANNER_MAX_CHANNEL_DELAY_SECONDS || "35";
   $("reactionMaxPerChannel").value = appState.env.NHI_ZUES_REACTION_MAX_PER_CHANNEL || "2";
+  $("reactionThreshold").value = appState.env.NHI_ZUES_REACTION_THRESHOLD || "normal";
+  $("reactionSamplePercent").value = appState.env.NHI_ZUES_REACTION_SAMPLE_PERCENT || "0";
+  $("reactionEmojiOverride").value = appState.env.NHI_ZUES_REACTION_EMOJI_OVERRIDE || "";
 }
 
 function renderModelOptions() {
@@ -1814,6 +1817,9 @@ async function saveAll() {
       NHI_ZUES_SCANNER_MIN_CHANNEL_DELAY_SECONDS: $("scannerMinDelay").value,
       NHI_ZUES_SCANNER_MAX_CHANNEL_DELAY_SECONDS: $("scannerMaxDelay").value,
       NHI_ZUES_REACTION_MAX_PER_CHANNEL: $("reactionMaxPerChannel").value,
+      NHI_ZUES_REACTION_THRESHOLD: $("reactionThreshold").value,
+      NHI_ZUES_REACTION_SAMPLE_PERCENT: $("reactionSamplePercent").value,
+      NHI_ZUES_REACTION_EMOJI_OVERRIDE: $("reactionEmojiOverride").value.trim(),
     };
     if ($("apiKey").value.trim()) settings.OPENAI_API_KEY = $("apiKey").value.trim();
     await api("/api/servers", { method: "POST", body: JSON.stringify(appState.servers) });

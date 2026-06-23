@@ -33,6 +33,13 @@ class ReactionLedger:
             for record in self._records
         )
 
+    def has_reacted_to_message(self, *, channel_id: str, message_id: str) -> bool:
+        return any(
+            record.channel_id == channel_id
+            and record.message_id == message_id
+            for record in self._records
+        )
+
     def record(self, *, server_id: str, message: MessageRecord, emoji: str, reason: str) -> ReactionRecord:
         existing = next(
             (

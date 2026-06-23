@@ -738,6 +738,9 @@ def app_state() -> dict:
             "writing_quirk": config.writing_quirk,
             "writing_misspellings": config.writing_misspellings,
             "reaction_max_per_channel": config.reaction_max_per_channel,
+            "reaction_threshold": config.reaction_threshold,
+            "reaction_sample_percent": config.reaction_sample_percent,
+            "reaction_emoji_override": config.reaction_emoji_override,
             "typing_indicator_enabled": config.typing_indicator_enabled,
             "typing_min_seconds": config.typing_min_seconds,
             "typing_max_seconds": config.typing_max_seconds,
@@ -791,6 +794,9 @@ def app_state() -> dict:
             "NHI_ZUES_SCANNER_MIN_CHANNEL_DELAY_SECONDS": env.get("NHI_ZUES_SCANNER_MIN_CHANNEL_DELAY_SECONDS", "12"),
             "NHI_ZUES_SCANNER_MAX_CHANNEL_DELAY_SECONDS": env.get("NHI_ZUES_SCANNER_MAX_CHANNEL_DELAY_SECONDS", "35"),
             "NHI_ZUES_REACTION_MAX_PER_CHANNEL": env.get("NHI_ZUES_REACTION_MAX_PER_CHANNEL", "2"),
+            "NHI_ZUES_REACTION_THRESHOLD": env.get("NHI_ZUES_REACTION_THRESHOLD", "normal"),
+            "NHI_ZUES_REACTION_SAMPLE_PERCENT": env.get("NHI_ZUES_REACTION_SAMPLE_PERCENT", "0"),
+            "NHI_ZUES_REACTION_EMOJI_OVERRIDE": env.get("NHI_ZUES_REACTION_EMOJI_OVERRIDE", ""),
         },
         "servers": _read_json(config.servers_file, default={"servers": []}),
         "characters": character_cards(config.character_dir),
@@ -2685,6 +2691,9 @@ def update_env(values: dict) -> None:
         "NHI_ZUES_SCANNER_MIN_CHANNEL_DELAY_SECONDS",
         "NHI_ZUES_SCANNER_MAX_CHANNEL_DELAY_SECONDS",
         "NHI_ZUES_REACTION_MAX_PER_CHANNEL",
+        "NHI_ZUES_REACTION_THRESHOLD",
+        "NHI_ZUES_REACTION_SAMPLE_PERCENT",
+        "NHI_ZUES_REACTION_EMOJI_OVERRIDE",
     }
     for key, value in values.items():
         if key not in allowed:
@@ -2702,6 +2711,10 @@ def _clean_env_value(key: str, value) -> str:
         raise ValueError(f"{key} cannot contain line breaks.")
     if key == "NHI_ZUES_RUNTIME_MODE" and cleaned not in {"dry", "full_auto", "semi_auto", "live_fire"}:
         raise ValueError("Response mode must be dry, full_auto, semi_auto, or live_fire.")
+    if key == "NHI_ZUES_REACTION_THRESHOLD" and cleaned not in {"strict", "normal", "loose"}:
+        raise ValueError("Reaction threshold must be strict, normal, or loose.")
+    if key == "NHI_ZUES_REACTION_EMOJI_OVERRIDE":
+        return cleaned[:8]
     return cleaned
 
 

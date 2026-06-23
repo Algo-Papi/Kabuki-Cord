@@ -339,6 +339,22 @@
                   <span>Reaction cap per scan</span>
                   <input id="reactionMaxPerChannel" type="number" min="0" max="10" step="1" />
                 </label>
+                <label class="field">
+                  <span>Reaction threshold</span>
+                  <select id="reactionThreshold">
+                    <option value="strict">Strict - only high-confidence cues</option>
+                    <option value="normal">Normal - jokes, agreement, thanks, weird claims</option>
+                    <option value="loose">Loose - lower confidence acknowledgements</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>Random reaction percent</span>
+                  <input id="reactionSamplePercent" type="number" min="0" max="100" step="0.5" />
+                </label>
+                <label class="field">
+                  <span>Reaction emoji override</span>
+                  <input id="reactionEmojiOverride" type="text" maxlength="8" placeholder="Auto, or e.g. 😂" />
+                </label>
               </div>
             </div>
             <label class="field">

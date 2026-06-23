@@ -70,7 +70,15 @@ If React is on and Observe is on:
 - The channel can receive reactions even when Engage is off.
 - Reactions are still blocked by Dry-run mode.
 - Each channel scan is capped by `NHI_ZUES_REACTION_MAX_PER_CHANNEL`, which defaults to `2`.
-- The reaction ledger prevents repeating the same emoji on the same Discord message.
+- The reaction ledger prevents repeating any app-made reaction on the same Discord message.
+
+Reaction behavior has three app-level controls:
+
+- **Reaction threshold**: `strict`, `normal`, or `loose`. Loose accepts lower-confidence acknowledgement-style messages.
+- **Random reaction percent**: optional percentage of otherwise eligible fresh messages to react to. Keep this low.
+- **Reaction emoji override**: optional emoji that replaces the smart choice. When random sampling is enabled and this is blank, sampled reactions use the laugh emoji.
+
+Suggested testing baseline: `normal` threshold, `0%` random sample, cap `1-2` per channel scan.
 
 ### Auto
 
@@ -259,6 +267,17 @@ The scanner should not sweep every enabled channel back-to-back. The conservativ
 - `NHI_ZUES_POLL_SECONDS=180`
 
 `NHI_ZUES_SCANNER_CHANNEL_SETTLE_SECONDS` keeps the scanner on a channel briefly after navigation before message extraction. This reduces rapid browser churn and gives Discord time to finish rendering the latest messages. If you increase **Max channels per cycle**, the min/max wait settings add a pause between channel checks. Keep the observed channel list narrow, keep server scan cadences in minutes rather than seconds, and prefer **Dry Mode** or approval-based modes while testing.
+
+If Discord repeatedly forces password resets or login checkpoints, treat that as an account security signal and reduce activity rather than retrying harder:
+
+- Keep only one Kabuki automation profile active and close extra Kabuki-opened Discord windows.
+- Keep **Max channels per cycle** at `1` and use longer cycle rests while testing.
+- Keep React cap and random reaction percent low; reaction writes are still Discord actions.
+- Prefer Observe-only scanning for a while after a checkpoint, then re-enable Engage/React gradually.
+- Avoid frequent sign-out/sign-in loops; use **Sign In & Run** so a manually completed login continues in the same persistent browser profile.
+- Use a stable network/browser profile, keep the account's email/2FA/security settings current, and complete Discord security prompts manually.
+
+Kabuki-Cord should not attempt to bypass Discord account security systems. If checkpoints continue even with conservative settings, stop automation for that account and review Discord account/security status before continuing.
 
 ### Scanner Monitor and Replies
 

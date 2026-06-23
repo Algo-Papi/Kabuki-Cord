@@ -156,7 +156,7 @@ The routing path is deliberately conservative: new messages are read first, loca
 
 Per-channel auto-respond can be enabled from the Behavior tab, but it is off by default. When Auto is off, generated replies are queued for approval even if they came from a direct name/alias cue. Dry-run still prevents sending even if auto-respond is enabled.
 
-Per-channel React can run independently of Engage. When Observe and React are enabled for a channel and dry-run is off, Kabuki-Cord can add capped lightweight reactions to clear cues such as jokes, agreement, thanks, or unusually weird claims. The default cap is `NHI_ZUES_REACTION_MAX_PER_CHANNEL=2` per channel scan, and the reaction ledger prevents repeating the same emoji on the same Discord message.
+Per-channel React can run independently of Engage. When Observe and React are enabled for a channel and dry-run is off, Kabuki-Cord can add capped lightweight reactions to clear cues such as jokes, agreement, thanks, or unusually weird claims. The default cap is `NHI_ZUES_REACTION_MAX_PER_CHANNEL=2` per channel scan, and the reaction ledger prevents repeating any app-made reaction on the same Discord message. The **Reaction threshold**, **Random reaction percent**, and **Reaction emoji override** settings let you make reaction behavior stricter, looser, partially random, or fixed to a specific emoji.
 
 The top-bar **Start/Pause** control runs or pauses the local scanner loop. **Dry-run mode** means the scanner can observe, remember, and draft, but approved messages are blocked until dry-run is turned off in **API & Runtime**.
 

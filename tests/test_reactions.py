@@ -72,6 +72,56 @@ class ReactionSuggestionTests(unittest.TestCase):
         self.assertEqual("", emoji)
         self.assertIn("low-signal", reason)
 
+    def test_auto_react_normal_ignores_safe_light_acknowledgement(self) -> None:
+        should_react, emoji, reason = should_auto_react("I saw the update from earlier and will check it later")
+
+        self.assertFalse(should_react)
+        self.assertEqual("", emoji)
+        self.assertIn("no configured", reason)
+
+    def test_auto_react_loose_accepts_safe_light_acknowledgement(self) -> None:
+        should_react, emoji, reason = should_auto_react(
+            "I saw the update from earlier and will check it later",
+            threshold="loose",
+        )
+
+        self.assertTrue(should_react)
+        self.assertEqual(THUMBS_UP_EMOJI, emoji)
+        self.assertIn("loose threshold", reason)
+
+    def test_auto_react_can_sample_with_override(self) -> None:
+        should_react, emoji, reason = should_auto_react(
+            "I saw the update from earlier and will check it later",
+            sample_percent=10,
+            emoji_override=LAUGH_EMOJI,
+            sample_roll=0.05,
+        )
+
+        self.assertTrue(should_react)
+        self.assertEqual(LAUGH_EMOJI, emoji)
+        self.assertIn("10%", reason)
+
+    def test_auto_react_sample_respects_roll(self) -> None:
+        should_react, emoji, reason = should_auto_react(
+            "I saw the update from earlier and will check it later",
+            sample_percent=10,
+            sample_roll=0.5,
+        )
+
+        self.assertFalse(should_react)
+        self.assertEqual("", emoji)
+        self.assertIn("no configured", reason)
+
+    def test_auto_react_override_applies_to_smart_match(self) -> None:
+        should_react, emoji, reason = should_auto_react(
+            "exactly, that is a fair point",
+            emoji_override=LAUGH_EMOJI,
+        )
+
+        self.assertTrue(should_react)
+        self.assertEqual(LAUGH_EMOJI, emoji)
+        self.assertIn("override", reason)
+
 
 if __name__ == "__main__":
     unittest.main()
