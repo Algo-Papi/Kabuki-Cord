@@ -1566,8 +1566,30 @@ def events_state(event_path: Path) -> dict:
     items = payload.get("items", [])
     if not isinstance(items, list):
         items = []
+    tail = items[-180:]
+    reaction_tail = [
+        item
+        for item in items
+        if str(item.get("event_type") or "").startswith("reaction_")
+    ][-80:]
+    combined = []
+    seen = set()
+    for item in [*tail, *reaction_tail]:
+        key = (
+            item.get("created_at"),
+            item.get("event_type"),
+            item.get("server_id"),
+            item.get("channel_id"),
+            item.get("summary"),
+            item.get("draft"),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        combined.append(item)
+    combined.sort(key=lambda item: str(item.get("created_at") or ""))
     return {
-        "items": list(reversed(items[-120:])),
+        "items": list(reversed(combined)),
         "count": len(items),
     }
 

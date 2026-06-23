@@ -259,7 +259,17 @@ class NhiZuesRunner:
             fresh = self.memory.ingest(target.channel_id, visible_messages)
             character = self.characters.for_server(target.server_id, target.character_card)
             fresh = _without_own_messages(fresh, character_names=(character.name, *character.aliases))
-            reacted_message_ids = await self._process_reactions(session, target, fresh) if fresh else set()
+            reaction_candidates = _recent_reaction_candidates(
+                visible_messages,
+                fresh,
+                character_names=(character.name, *character.aliases),
+            )
+            reacted_message_ids = await self._process_reactions(
+                session,
+                target,
+                reaction_candidates,
+                fresh_count=len(fresh),
+            )
             reply_fresh = [
                 message
                 for message in fresh
@@ -456,7 +466,14 @@ class NhiZuesRunner:
         )
         raise RuntimeError(message)
 
-    async def _process_reactions(self, session: DiscordWebSession, target, fresh) -> set[str]:
+    async def _process_reactions(
+        self,
+        session: DiscordWebSession,
+        target,
+        candidates,
+        *,
+        fresh_count: int,
+    ) -> set[str]:
         if not getattr(target, "react_enabled", False):
             return set()
         if self.config.runtime_mode == "dry":
@@ -464,20 +481,41 @@ class NhiZuesRunner:
                 event_type="reaction_skipped",
                 server_id=target.server_id,
                 channel_id=target.channel_id,
-                summary="React is enabled, but Dry Mode blocks Discord reactions.",
+                summary=(
+                    "React is enabled, but Dry Mode blocks Discord reactions. "
+                    f"fresh={fresh_count}, candidates={len(candidates)}."
+                ),
             )
             return set()
         if self.config.reaction_max_per_channel <= 0:
+            self.events.add(
+                event_type="reaction_skipped",
+                server_id=target.server_id,
+                channel_id=target.channel_id,
+                summary=(
+                    "React is enabled, but the per-scan reaction cap is 0. "
+                    f"fresh={fresh_count}, candidates={len(candidates)}."
+                ),
+            )
             return set()
 
         reacted_message_ids: set[str] = set()
-        for message in fresh:
+        ledgered = 0
+        ineligible = 0
+        attempted = 0
+        already_present = 0
+        failed = 0
+        cap_reached = False
+        last_reason = ""
+        for message in candidates:
             if len(reacted_message_ids) >= self.config.reaction_max_per_channel:
+                cap_reached = True
                 break
             if self.reaction_ledger.has_reacted_to_message(
                 channel_id=message.channel_id,
                 message_id=message.message_id,
             ):
+                ledgered += 1
                 continue
             should_react, emoji, reason = should_auto_react(
                 message.text,
@@ -486,10 +524,14 @@ class NhiZuesRunner:
                 emoji_override=self.config.reaction_emoji_override,
             )
             if not should_react:
+                ineligible += 1
+                last_reason = reason
                 continue
             try:
+                attempted += 1
                 result = await session.add_reaction(message.message_id, emoji)
             except Exception as exc:
+                failed += 1
                 self.events.add(
                     event_type="reaction_failed",
                     server_id=target.server_id,
@@ -498,6 +540,19 @@ class NhiZuesRunner:
                     draft=message.text,
                 )
                 return reacted_message_ids
+            if not result.get("applied"):
+                already_present += 1
+                self.events.add(
+                    event_type="reaction_already_present",
+                    server_id=target.server_id,
+                    channel_id=target.channel_id,
+                    summary=(
+                        f"{emoji} reaction was already present from this account on "
+                        f"{message.author}; path={result.get('path') or 'existing'}."
+                    ),
+                    draft=message.text,
+                )
+                continue
 
             self.reaction_ledger.record(
                 server_id=target.server_id,
@@ -516,6 +571,21 @@ class NhiZuesRunner:
                 draft=message.text,
             )
             reacted_message_ids.add(message.message_id)
+        if not reacted_message_ids:
+            self.events.add(
+                event_type="reaction_scan",
+                server_id=target.server_id,
+                channel_id=target.channel_id,
+                summary=(
+                    "React scan made no new reaction. "
+                    f"fresh={fresh_count}, candidates={len(candidates)}, ledgered={ledgered}, "
+                    f"ineligible={ineligible}, attempted={attempted}, already_present={already_present}, "
+                    f"failed={failed}, cap_reached={str(cap_reached).lower()}, "
+                    f"threshold={self.config.reaction_threshold}, sample={self.config.reaction_sample_percent:g}%"
+                    + (f", last_skip={last_reason}" if last_reason else "")
+                    + "."
+                ),
+            )
         return reacted_message_ids
 
 
@@ -524,6 +594,30 @@ def _without_own_messages(messages, *, character_names: tuple[str, ...]):
     if not names:
         return list(messages)
     return [message for message in messages if _normalize_author(message.author) not in names]
+
+
+def _recent_reaction_candidates(
+    visible_messages,
+    fresh_messages,
+    *,
+    character_names: tuple[str, ...],
+    max_visible: int = 12,
+):
+    candidates = []
+    seen_ids = set()
+    for message in _without_own_messages(fresh_messages, character_names=character_names):
+        if message.message_id in seen_ids:
+            continue
+        candidates.append(message)
+        seen_ids.add(message.message_id)
+    for message in reversed(_without_own_messages(visible_messages, character_names=character_names)):
+        if len(candidates) >= max_visible:
+            break
+        if message.message_id in seen_ids:
+            continue
+        candidates.append(message)
+        seen_ids.add(message.message_id)
+    return candidates
 
 
 def _normalize_author(value: str) -> str:

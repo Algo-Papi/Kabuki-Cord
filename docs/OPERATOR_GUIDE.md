@@ -80,6 +80,8 @@ Reaction behavior has three app-level controls:
 
 Suggested testing baseline: `normal` threshold, `0%` random sample, cap `1-2` per channel scan.
 
+The **Events -> Reaction events** filter shows successful reactions, reaction failures, Dry/cap skips, already-present reactions, and no-action reaction scan summaries. A no-action scan summary includes candidate counts and the last skip reason so you can tell whether React was blocked by config, the ledger, threshold, or lack of recent eligible messages.
+
 ### Auto
 
 Auto allows proactive, approval-required opportunities to be sent without manual approval when live sending is otherwise allowed.

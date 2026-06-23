@@ -22,6 +22,7 @@ let kabukiBootAudio = null;
 let bootSoundQueued = false;
 let bootSoundPlayed = false;
 let kabukiAudioUnlocked = false;
+let serverPersistTimer = null;
 
 const runtimeModeClassNames = ["runtime-mode-dry", "runtime-mode-full-auto", "runtime-mode-semi-auto", "runtime-mode-live-fire"];
 const kabukiBootThemeSrc = "/assets/kabuki-launch-theme.wav?v=3";
@@ -222,6 +223,8 @@ function renderServerPanel() {
       if (button.dataset.toggle === "scan") chan.scan_enabled = !chan.scan_enabled;
       if (button.dataset.toggle === "react") chan.react_enabled = !chan.react_enabled;
       if (button.dataset.toggle === "engage") chan.engage_enabled = !chan.engage_enabled;
+      persistServersSoon();
+      if (appState.runtime?.running) toast("Channel setting saved. Pause and Start scanner to apply it to the live loop.");
       render();
     });
   });
@@ -231,6 +234,7 @@ function renderServerPanel() {
       const chan = channels()[Number(button.dataset.pinChannel)];
       if (!chan) return;
       chan.pinned = !chan.pinned;
+      persistServersSoon();
       renderServerPanel();
     });
   });
@@ -1786,6 +1790,17 @@ function syncFormsToState() {
   card.engagement_rules = lines("engagementRules");
 }
 
+function persistServersSoon() {
+  clearTimeout(serverPersistTimer);
+  serverPersistTimer = setTimeout(async () => {
+    try {
+      await api("/api/servers", { method: "POST", body: JSON.stringify(appState.servers) });
+    } catch (error) {
+      toast(`Could not save server/channel settings: ${error.message}`);
+    }
+  }, 300);
+}
+
 async function saveAll() {
   const opId = "save-all";
   startOperation(opId, "Saving settings", "Writing local config files", "working", "bi-save2");
@@ -2277,7 +2292,14 @@ function allEvents() {
 }
 
 function reactionEventTypes() {
-  return ["reaction_added", "reaction_failed", "reaction_skipped", "reaction_suggested"];
+  return [
+    "reaction_added",
+    "reaction_already_present",
+    "reaction_failed",
+    "reaction_scan",
+    "reaction_skipped",
+    "reaction_suggested",
+  ];
 }
 
 function filteredEvents() {
@@ -2332,7 +2354,9 @@ function eventTypeLabel(event) {
     channel_refreshed: "Channel refreshed",
     reaction_suggested: "Reaction suggested",
     reaction_added: "Reaction made",
+    reaction_already_present: "Reaction already present",
     reaction_failed: "Reaction failed",
+    reaction_scan: "Reaction scan",
     reaction_skipped: "Reaction skipped",
     unresponded_reply_dismissed: "Reply notice dismissed",
   };
@@ -2348,6 +2372,9 @@ function eventClass(event) {
     "manual_approval_created",
     "approval_send_started",
     "duplicate_reply_blocked",
+    "reaction_already_present",
+    "reaction_scan",
+    "reaction_skipped",
     "reaction_suggested",
   ].includes(event.event_type)) return "attention";
   return "";
@@ -2372,6 +2399,8 @@ function isNotifiableEvent(event) {
     "approval_send_failed",
     "message_sent",
     "channel_unavailable",
+    "reaction_added",
+    "reaction_failed",
   ].includes(event.event_type);
 }
 

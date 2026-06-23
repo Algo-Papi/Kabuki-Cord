@@ -1282,8 +1282,8 @@ class DiscordWebSession:
         except Exception as exc:
             raise RuntimeError("Discord could not find the selected message to react to.") from exc
 
-        if await self._message_has_reaction(message, emoji):
-            return {"applied": False, "already_present": True, "emoji": emoji}
+        if await self._message_has_own_reaction(message, emoji):
+            return {"applied": False, "already_present": True, "emoji": emoji, "path": "own-existing"}
         if await self._click_quick_reaction(message, emoji):
             await self.page.wait_for_timeout(500)
             return {"applied": True, "already_present": False, "emoji": emoji, "path": "quick"}
@@ -1295,7 +1295,7 @@ class DiscordWebSession:
 
         raise RuntimeError("Discord did not expose a usable Add Reaction control for the selected message.")
 
-    async def _message_has_reaction(self, message, emoji: str) -> bool:
+    async def _message_has_own_reaction(self, message, emoji: str) -> bool:
         try:
             return bool(
                 await message.evaluate(
@@ -1303,7 +1303,10 @@ class DiscordWebSession:
                     (messageNode, emoji) => {
                         const labels = Array.from(messageNode.querySelectorAll('[aria-label], [title], button, [role="button"]'))
                             .map((node) => `${node.getAttribute("aria-label") || ""} ${node.getAttribute("title") || ""} ${node.textContent || ""}`);
-                        return labels.some((label) => label.includes(emoji));
+                        return labels.some((label) => {
+                            if (!label.includes(emoji)) return false;
+                            return /you reacted|your reaction|remove reaction|unreact|click to remove|press to remove|already reacted/i.test(label);
+                        });
                     }
                     """,
                     emoji,
