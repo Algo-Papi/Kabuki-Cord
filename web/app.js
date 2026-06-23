@@ -473,10 +473,11 @@ function renderOperationStatus() {
     `;
     return;
   }
-  el.className = "operation-status idle";
+  const discordBlocked = isDiscordBlockedError(runtime.last_error || "");
+  el.className = discordBlocked ? "operation-status discord-blocked" : "operation-status idle";
   el.innerHTML = `
-    ${scannerSprite(runtime.last_error ? "error" : "idle")}
-    <span>Idle</span>
+    ${scannerSprite(discordBlocked ? "discord-blocked" : runtime.last_error ? "error" : "idle")}
+    <span>${discordBlocked ? "Discord sign-in needed" : "Idle"}</span>
     <small>${escapeHtml(runtime.last_error || runtimeModeLabel(currentRuntimeMode()))}</small>
   `;
 }
@@ -510,6 +511,19 @@ function finishOperation(id, label = "", kind = "idle", icon = "bi-check-circle"
   }
   activeOperations.delete(id);
   renderOperationStatus();
+}
+
+function finishFailedOperation(id, defaultLabel, error) {
+  if (isDiscordBlockedError(error?.message || error || "")) {
+    finishOperation(id, "Discord sign-in needed", "discord-blocked", "bi-door-closed");
+    return;
+  }
+  finishOperation(id, defaultLabel, "failed", "bi-exclamation-triangle");
+}
+
+function isDiscordBlockedError(value) {
+  return /discord/i.test(String(value || ""))
+    && /(password reset|security action|verification|verify|2fa|authentication code|login screen|not signed in|human|not a robot|account)/i.test(String(value || ""));
 }
 
 function renderGrowth() {
@@ -1169,7 +1183,7 @@ async function sendApproval(approvalId) {
       message: error.message,
     };
     await loadState().catch(() => {});
-    finishOperation(opId, "Post failed", "failed", "bi-exclamation-triangle");
+    finishFailedOperation(opId, "Post failed", error);
     toast(error.message);
   }
 }
@@ -1628,7 +1642,7 @@ async function syncDiscordServers() {
     const addedText = addedIds.length ? `, added ${addedIds.length} new` : ", no new servers";
     toast(`Synced ${result.discovered} servers${addedText}; ${result.channels_discovered || 0} channels checked`);
   } catch (error) {
-    finishOperation(opId, "Sync failed", "failed", "bi-exclamation-triangle");
+    finishFailedOperation(opId, "Sync failed", error);
     throw error;
   }
 }
@@ -1658,7 +1672,7 @@ async function repairDiscordServer() {
     finishOperation(opId, "Channels repaired", "done", "bi-check-circle");
     toast(`Repair found ${result.discovered || 0} items, added ${result.added || 0}`);
   } catch (error) {
-    finishOperation(opId, "Repair failed", "failed", "bi-exclamation-triangle");
+    finishFailedOperation(opId, "Repair failed", error);
     throw error;
   }
 }
@@ -1758,7 +1772,7 @@ async function backfillChannelHistory() {
     finishOperation(opId, "History updated", "done", "bi-check-circle");
     toast(`Backfilled ${result.messages || 0} messages, ${result.new || 0} new`);
   } catch (error) {
-    finishOperation(opId, "Backfill failed", "failed", "bi-exclamation-triangle");
+    finishFailedOperation(opId, "Backfill failed", error);
     throw error;
   }
 }
@@ -1788,7 +1802,7 @@ async function refreshChannelLatest() {
     finishOperation(opId, "Latest refreshed", "done", "bi-check-circle");
     toast(`Latest refresh found ${result.messages || 0}, ${result.new || 0} new`);
   } catch (error) {
-    finishOperation(opId, "Refresh failed", "failed", "bi-exclamation-triangle");
+    finishFailedOperation(opId, "Refresh failed", error);
     throw error;
   }
 }
@@ -1850,7 +1864,7 @@ async function toggleRuntime() {
     finishOperation(opId, appState.runtime.running ? "Scanner started" : "Scanner paused", "done", "bi-check-circle");
     toast(appState.runtime.running ? "Scanner started" : "Scanner paused");
   } catch (error) {
-    finishOperation(opId, "Runtime change failed", "failed", "bi-exclamation-triangle");
+    finishFailedOperation(opId, "Runtime change failed", error);
     throw error;
   }
 }

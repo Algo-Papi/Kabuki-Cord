@@ -719,6 +719,10 @@ textarea:disabled {
   --scanner-sheet: url("/assets/scanner-kabuki-posting-sheet.png");
 }
 
+.scanner-sprite-discord-blocked {
+  --scanner-sheet: url("/assets/scanner-kabuki-discord-blocked-sheet.png");
+}
+
 .operation-status span,
 .operation-status small {
   overflow: hidden;
@@ -744,7 +748,8 @@ textarea:disabled {
 .operation-status.backfill,
 .operation-status.latest,
 .operation-status.refresh,
-.operation-status.posting {
+.operation-status.posting,
+.operation-status.discord-blocked {
   border-color: rgba(217, 185, 91, 0.35);
   background: rgba(217, 185, 91, 0.09);
   color: #f0dfa8;
@@ -759,7 +764,8 @@ textarea:disabled {
 .operation-status.backfill i,
 .operation-status.latest i,
 .operation-status.refresh i,
-.operation-status.posting i {
+.operation-status.posting i,
+.operation-status.discord-blocked i {
   color: var(--yellow);
   animation: status-spin 1.2s linear infinite;
 }
@@ -773,7 +779,8 @@ textarea:disabled {
 .operation-status.backfill .scanner-sprite,
 .operation-status.latest .scanner-sprite,
 .operation-status.refresh .scanner-sprite,
-.operation-status.posting .scanner-sprite {
+.operation-status.posting .scanner-sprite,
+.operation-status.discord-blocked .scanner-sprite {
   animation: scanner-dance 6.4s steps(20, end) infinite;
 }
 
@@ -813,6 +820,12 @@ textarea:disabled {
   color: #d7ffdf;
 }
 
+.operation-status.discord-blocked {
+  border-color: rgba(239, 107, 120, 0.48);
+  background: rgba(239, 107, 120, 0.11);
+  color: #ffcbd1;
+}
+
 .operation-status.sync .scanner-sprite {
   animation-duration: 6.9s;
   filter: drop-shadow(0 0 7px rgba(89, 224, 239, 0.28)) drop-shadow(0 2px 2px rgba(0, 0, 0, 0.44));
@@ -841,6 +854,11 @@ textarea:disabled {
 .operation-status.posting .scanner-sprite {
   animation-duration: 5.8s;
   filter: drop-shadow(0 0 7px rgba(98, 218, 130, 0.3)) drop-shadow(0 2px 2px rgba(0, 0, 0, 0.44));
+}
+
+.operation-status.discord-blocked .scanner-sprite {
+  animation-duration: 7.2s;
+  filter: drop-shadow(0 0 8px rgba(239, 107, 120, 0.36)) drop-shadow(0 2px 2px rgba(0, 0, 0, 0.44));
 }
 
 .operation-status.scanning {

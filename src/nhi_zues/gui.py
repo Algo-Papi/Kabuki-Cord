@@ -14,6 +14,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import webbrowser
 from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.metadata import PackageNotFoundError, version
@@ -2216,26 +2217,13 @@ def start_discord_channel(body: dict) -> None:
     message_id = str(body.get("message_id") or "").strip()
     if not server_id or not channel_id:
         raise RuntimeError("Missing server or channel.")
-    _acquire_discord_session_or_raise(pause_runtime=True)
-    DISCORD_SESSION_LOCK.release()
-    kwargs = {}
-    if sys.platform == "win32":
-        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-    command = [
-        _background_python_executable(),
-        "-m",
-        "nhi_zues.cli",
-        "--open-channel",
-        server_id,
-        channel_id,
-    ]
-    if message_id:
-        command.extend(["--message-id", message_id])
-    subprocess.Popen(
-        command,
-        cwd=ROOT,
-        close_fds=True,
-        **kwargs,
+    url = _discord_channel_url(server_id, channel_id, message_id)
+    _open_external_discord_url(url)
+    EventLog(load_config().state_dir / "events.json").add(
+        event_type="conversation_opened",
+        server_id=server_id,
+        channel_id=channel_id,
+        summary="Opened Discord conversation in the default browser so the automation profile stays undisturbed.",
     )
 
 
@@ -2320,6 +2308,51 @@ def _background_python_executable() -> str:
         if pythonw.exists():
             return str(pythonw)
     return sys.executable
+
+
+def _discord_channel_url(server_id: str, channel_id: str, message_id: str = "") -> str:
+    url = f"https://discord.com/channels/{server_id}/{channel_id}"
+    token = _discord_message_token(message_id)
+    return f"{url}/{token}" if token else url
+
+
+def _discord_message_token(message_id: str) -> str:
+    raw = str(message_id or "").strip()
+    if not raw:
+        return ""
+    if raw.startswith("chat-messages-"):
+        return raw.rsplit("-", 1)[-1]
+    return raw
+
+
+def _open_external_discord_url(url: str) -> None:
+    if sys.platform == "win32":
+        chrome = _first_existing_path(
+            Path(os.environ.get("LOCALAPPDATA", "")) / "Google" / "Chrome" / "Application" / "chrome.exe",
+            Path(os.environ.get("PROGRAMFILES", "")) / "Google" / "Chrome" / "Application" / "chrome.exe",
+            Path(os.environ.get("PROGRAMFILES(X86)", "")) / "Google" / "Chrome" / "Application" / "chrome.exe",
+        )
+        edge = _first_existing_path(
+            Path(os.environ.get("PROGRAMFILES(X86)", "")) / "Microsoft" / "Edge" / "Application" / "msedge.exe",
+            Path(os.environ.get("PROGRAMFILES", "")) / "Microsoft" / "Edge" / "Application" / "msedge.exe",
+        )
+        browser = chrome or edge
+        if browser:
+            subprocess.Popen(
+                [str(browser), "--new-window", url],
+                cwd=ROOT,
+                close_fds=True,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+            return
+    webbrowser.open_new(url)
+
+
+def _first_existing_path(*paths: Path) -> Path | None:
+    for path in paths:
+        if path and path.exists():
+            return path
+    return None
 
 
 def update_state() -> dict:

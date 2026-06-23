@@ -178,7 +178,9 @@ Approval cards can be edited before sending. Source context is collapsed by defa
 
 If Discord shows a human verification, 2FA, or login checkpoint, Kabuki-Cord keeps the approval queued and reports the blocker. Use **Sign In** to complete the visible Discord check, then retry the approval.
 
-Use **Open** in the channel panel to launch the selected Discord channel in the persistent browser profile. This pauses the local scanner first so the browser profile is not shared by two Playwright sessions at once.
+Use **Open** in the channel panel, or **Open Conversation** in approvals, to launch the selected Discord URL in your normal browser. This is intentionally separate from Kabuki-Cord's automation browser profile so reviewing a conversation does not force-close or lock the hidden automation session.
+
+Password resets, 2FA, human checks, phone/email verification, and other Discord account security flows must be completed manually in Discord. Kabuki-Cord stops and reports those blockers; it does not rotate passwords or automate reset links.
 
 ## Character Cards
 
