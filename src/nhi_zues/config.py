@@ -34,6 +34,10 @@ class AppConfig:
     dry_run: bool
     headless: bool
     poll_seconds: float
+    scanner_max_channels_per_cycle: int
+    scanner_cycle_sleep_seconds: float
+    scanner_min_channel_delay_seconds: float
+    scanner_max_channel_delay_seconds: float
     channels: tuple[ChannelTarget, ...]
     openai_api_key: str | None
     openai_model: str
@@ -68,7 +72,17 @@ def load_config() -> AppConfig:
         runtime_mode=_runtime_mode(),
         dry_run=_env_bool("NHI_ZUES_DRY_RUN", default=True),
         headless=_env_bool("NHI_ZUES_HEADLESS", default=False),
-        poll_seconds=float(_env("NHI_ZUES_POLL_SECONDS", "20")),
+        poll_seconds=_env_float("NHI_ZUES_POLL_SECONDS", 180.0),
+        scanner_max_channels_per_cycle=max(1, _env_int("NHI_ZUES_SCANNER_MAX_CHANNELS_PER_CYCLE", 1)),
+        scanner_cycle_sleep_seconds=max(5.0, _env_float("NHI_ZUES_SCANNER_CYCLE_SLEEP_SECONDS", 45.0)),
+        scanner_min_channel_delay_seconds=max(
+            0.0,
+            _env_float("NHI_ZUES_SCANNER_MIN_CHANNEL_DELAY_SECONDS", 12.0),
+        ),
+        scanner_max_channel_delay_seconds=max(
+            0.0,
+            _env_float("NHI_ZUES_SCANNER_MAX_CHANNEL_DELAY_SECONDS", 35.0),
+        ),
         channels=_load_channels(
             Path(_env("NHI_ZUES_SERVERS_FILE", "config/servers.json")),
             _env("NHI_ZUES_CHANNELS", ""),
@@ -142,6 +156,16 @@ def _env_float(name: str, default: float) -> float:
         return default
     try:
         return float(value.strip())
+    except ValueError:
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return default
+    try:
+        return int(value.strip())
     except ValueError:
         return default
 

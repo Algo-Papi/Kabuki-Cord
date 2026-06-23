@@ -510,6 +510,10 @@ def app_state() -> dict:
             "typing_min_seconds": config.typing_min_seconds,
             "typing_max_seconds": config.typing_max_seconds,
             "typing_chars_per_second": config.typing_chars_per_second,
+            "scanner_max_channels_per_cycle": config.scanner_max_channels_per_cycle,
+            "scanner_cycle_sleep_seconds": config.scanner_cycle_sleep_seconds,
+            "scanner_min_channel_delay_seconds": config.scanner_min_channel_delay_seconds,
+            "scanner_max_channel_delay_seconds": config.scanner_max_channel_delay_seconds,
         },
         "discord": discord_credential_status(),
         "runtime": RUNTIME.state(),
@@ -549,6 +553,10 @@ def app_state() -> dict:
             "NHI_ZUES_TYPING_MIN_SECONDS": env.get("NHI_ZUES_TYPING_MIN_SECONDS", "2.5"),
             "NHI_ZUES_TYPING_MAX_SECONDS": env.get("NHI_ZUES_TYPING_MAX_SECONDS", "18.0"),
             "NHI_ZUES_TYPING_CHARS_PER_SECOND": env.get("NHI_ZUES_TYPING_CHARS_PER_SECOND", "10.0"),
+            "NHI_ZUES_SCANNER_MAX_CHANNELS_PER_CYCLE": env.get("NHI_ZUES_SCANNER_MAX_CHANNELS_PER_CYCLE", "1"),
+            "NHI_ZUES_SCANNER_CYCLE_SLEEP_SECONDS": env.get("NHI_ZUES_SCANNER_CYCLE_SLEEP_SECONDS", "45"),
+            "NHI_ZUES_SCANNER_MIN_CHANNEL_DELAY_SECONDS": env.get("NHI_ZUES_SCANNER_MIN_CHANNEL_DELAY_SECONDS", "12"),
+            "NHI_ZUES_SCANNER_MAX_CHANNEL_DELAY_SECONDS": env.get("NHI_ZUES_SCANNER_MAX_CHANNEL_DELAY_SECONDS", "35"),
         },
         "servers": _read_json(config.servers_file, default={"servers": []}),
         "characters": character_cards(config.character_dir),
@@ -1133,7 +1141,7 @@ async def _discover_discord_workspace(config: AppConfig) -> list[dict]:
             allow_human_challenge=False,
         )
         if not logged_in:
-            raise RuntimeError(discord_login_blocker_message(await session.login_blocker_state()))
+            raise RuntimeError(discord_login_blocker_message(await session.account_blocker_state()))
         servers = await session.discover_servers()
         for server in servers:
             server["channels"] = await session.discover_channels(server["server_id"])
@@ -1156,7 +1164,7 @@ async def _discover_discord_server_channels(config: AppConfig, server_id: str) -
             allow_human_challenge=False,
         )
         if not logged_in:
-            raise RuntimeError(discord_login_blocker_message(await session.login_blocker_state()))
+            raise RuntimeError(discord_login_blocker_message(await session.account_blocker_state()))
         return await session.discover_channels(server_id)
 
 
@@ -1180,7 +1188,7 @@ async def _backfill_channel_history(
             allow_human_challenge=False,
         )
         if not logged_in:
-            raise RuntimeError(discord_login_blocker_message(await session.login_blocker_state()))
+            raise RuntimeError(discord_login_blocker_message(await session.account_blocker_state()))
         current_url = await session.navigate_channel(server_id, channel_id)
         if channel_id not in current_url:
             raise RuntimeError("Discord redirected away from the selected channel.")
@@ -1205,7 +1213,7 @@ async def _read_latest_channel_messages(
             allow_human_challenge=False,
         )
         if not logged_in:
-            raise RuntimeError(discord_login_blocker_message(await session.login_blocker_state()))
+            raise RuntimeError(discord_login_blocker_message(await session.account_blocker_state()))
         current_url = await session.navigate_channel(server_id, channel_id)
         if channel_id not in current_url:
             raise RuntimeError("Discord redirected away from the selected channel.")
@@ -2178,7 +2186,7 @@ async def _send_approval_message(
             allow_human_challenge=False,
         )
         if not logged_in:
-            raise RuntimeError(discord_login_blocker_message(await session.login_blocker_state()))
+            raise RuntimeError(discord_login_blocker_message(await session.account_blocker_state()))
         current_url = await session.navigate_channel(
             server_id,
             channel_id,
@@ -2268,6 +2276,10 @@ def update_env(values: dict) -> None:
         "NHI_ZUES_TYPING_MIN_SECONDS",
         "NHI_ZUES_TYPING_MAX_SECONDS",
         "NHI_ZUES_TYPING_CHARS_PER_SECOND",
+        "NHI_ZUES_SCANNER_MAX_CHANNELS_PER_CYCLE",
+        "NHI_ZUES_SCANNER_CYCLE_SLEEP_SECONDS",
+        "NHI_ZUES_SCANNER_MIN_CHANNEL_DELAY_SECONDS",
+        "NHI_ZUES_SCANNER_MAX_CHANNEL_DELAY_SECONDS",
     }
     for key, value in values.items():
         if key not in allowed:

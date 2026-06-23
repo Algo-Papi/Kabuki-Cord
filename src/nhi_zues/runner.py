@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 import time
 
 from .approvals import ApprovalQueue
@@ -87,7 +88,7 @@ class NhiZuesRunner:
                 allow_human_challenge=False,
             )
             if not logged_in:
-                raise RuntimeError(discord_login_blocker_message(await session.login_blocker_state()))
+                raise RuntimeError(discord_login_blocker_message(await session.account_blocker_state()))
             last_checked: dict[tuple[str, str], float] = {}
             while not _stop_requested(stop_event):
                 targets = self._due_targets(last_checked) if loop else list(self.config.channels)
@@ -101,13 +102,12 @@ class NhiZuesRunner:
                 if not loop:
                     return
 
-                sleep_seconds = min(self.config.poll_seconds, 10)
-                if stop_event is not None:
-                    should_stop = await asyncio.to_thread(stop_event.wait, sleep_seconds)
-                    if should_stop:
-                        return
-                else:
-                    await asyncio.sleep(sleep_seconds)
+                sleep_seconds = self.config.scanner_cycle_sleep_seconds if targets else min(
+                    self.config.poll_seconds,
+                    self.config.scanner_cycle_sleep_seconds,
+                )
+                if await _sleep_interruptible(stop_event, sleep_seconds):
+                    return
 
     def _due_targets(self, last_checked: dict[tuple[str, str], float]):
         now = time.monotonic()
@@ -117,11 +117,18 @@ class NhiZuesRunner:
             interval = target.poll_seconds or self.config.poll_seconds
             if key not in last_checked or now - last_checked[key] >= interval:
                 due.append(target)
+        limit = max(1, self.config.scanner_max_channels_per_cycle)
+        if len(due) > limit:
+            due = due[:limit]
         return due
 
     async def _process_channels(self, session: DiscordWebSession, targets) -> None:
-        for target in targets:
+        for index, target in enumerate(targets):
+            if index > 0:
+                await self._channel_pacing_delay()
+            await self._raise_if_account_blocked(session, target)
             current_url = await session.navigate_channel(target.server_id, target.channel_id)
+            await self._raise_if_account_blocked(session, target)
             if f"/{target.channel_id}" not in current_url:
                 log.warning(
                     "channel=%s redirected to %s; account may not have access",
@@ -300,6 +307,26 @@ class NhiZuesRunner:
 
             self.memory.save()
 
+    async def _channel_pacing_delay(self) -> None:
+        lower = max(0.0, self.config.scanner_min_channel_delay_seconds)
+        upper = max(lower, self.config.scanner_max_channel_delay_seconds)
+        if upper <= 0:
+            return
+        await asyncio.sleep(random.uniform(lower, upper))
+
+    async def _raise_if_account_blocked(self, session: DiscordWebSession, target) -> None:
+        state = await session.account_blocker_state()
+        if not state.get("blocked"):
+            return
+        message = discord_login_blocker_message(state)
+        self.events.add(
+            event_type="discord_account_challenge",
+            server_id=getattr(target, "server_id", ""),
+            channel_id=getattr(target, "channel_id", ""),
+            summary=message,
+        )
+        raise RuntimeError(message)
+
     async def _process_reactions(self, session: DiscordWebSession, target, fresh) -> set[str]:
         if not getattr(target, "react_enabled", False):
             return set()
@@ -384,3 +411,13 @@ def _requires_approval(
 
 def _stop_requested(stop_event) -> bool:
     return bool(stop_event is not None and stop_event.is_set())
+
+
+async def _sleep_interruptible(stop_event, seconds: float) -> bool:
+    wait_seconds = max(0.0, float(seconds or 0.0))
+    if wait_seconds <= 0:
+        return _stop_requested(stop_event)
+    if stop_event is not None:
+        return bool(await asyncio.to_thread(stop_event.wait, wait_seconds))
+    await asyncio.sleep(wait_seconds)
+    return False

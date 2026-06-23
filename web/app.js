@@ -316,6 +316,10 @@ function renderSettings() {
   $("typingMinSeconds").value = appState.env.NHI_ZUES_TYPING_MIN_SECONDS || "2.5";
   $("typingMaxSeconds").value = appState.env.NHI_ZUES_TYPING_MAX_SECONDS || "18.0";
   $("typingCharsPerSecond").value = appState.env.NHI_ZUES_TYPING_CHARS_PER_SECOND || "10.0";
+  $("scannerMaxChannels").value = appState.env.NHI_ZUES_SCANNER_MAX_CHANNELS_PER_CYCLE || "1";
+  $("scannerCycleSleep").value = appState.env.NHI_ZUES_SCANNER_CYCLE_SLEEP_SECONDS || "45";
+  $("scannerMinDelay").value = appState.env.NHI_ZUES_SCANNER_MIN_CHANNEL_DELAY_SECONDS || "12";
+  $("scannerMaxDelay").value = appState.env.NHI_ZUES_SCANNER_MAX_CHANNEL_DELAY_SECONDS || "35";
 }
 
 function renderModelOptions() {
@@ -1576,6 +1580,10 @@ async function saveAll() {
       NHI_ZUES_TYPING_MIN_SECONDS: $("typingMinSeconds").value,
       NHI_ZUES_TYPING_MAX_SECONDS: $("typingMaxSeconds").value,
       NHI_ZUES_TYPING_CHARS_PER_SECOND: $("typingCharsPerSecond").value,
+      NHI_ZUES_SCANNER_MAX_CHANNELS_PER_CYCLE: $("scannerMaxChannels").value,
+      NHI_ZUES_SCANNER_CYCLE_SLEEP_SECONDS: $("scannerCycleSleep").value,
+      NHI_ZUES_SCANNER_MIN_CHANNEL_DELAY_SECONDS: $("scannerMinDelay").value,
+      NHI_ZUES_SCANNER_MAX_CHANNEL_DELAY_SECONDS: $("scannerMaxDelay").value,
     };
     if ($("apiKey").value.trim()) settings.OPENAI_API_KEY = $("apiKey").value.trim();
     await api("/api/servers", { method: "POST", body: JSON.stringify(appState.servers) });

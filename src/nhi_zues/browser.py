@@ -599,8 +599,8 @@ class DiscordWebSession:
             await password_input.press("Enter")
             if not allow_human_challenge:
                 await self.page.wait_for_timeout(2500)
-                blocker = await self.login_blocker_state()
-                if blocker.get("human_verification"):
+                blocker = await self.account_blocker_state()
+                if blocker.get("blocked"):
                     return False
 
         try:
@@ -643,6 +643,76 @@ class DiscordWebSession:
                     two_factor: lowered.includes("two-factor")
                         || lowered.includes("2fa")
                         || lowered.includes("authentication code"),
+                    body_preview: bodyText.slice(0, 240),
+                };
+            }
+            """
+        )
+
+    async def account_blocker_state(self) -> dict[str, object]:
+        return await self.page.evaluate(
+            """
+            () => {
+                const visible = (node) => {
+                    if (!node) return false;
+                    const rect = node.getBoundingClientRect();
+                    const style = window.getComputedStyle(node);
+                    return rect.width > 0
+                        && rect.height > 0
+                        && style.display !== "none"
+                        && style.visibility !== "hidden";
+                };
+                const bodyText = (document.body?.innerText || "").replace(/\\s+/g, " ").trim();
+                const lowered = bodyText.toLowerCase();
+                const loginFormVisible = Boolean(Array.from(
+                    document.querySelectorAll('input[name="email"], input[type="email"]')
+                ).find(visible));
+                const humanVerification = lowered.includes("are you human")
+                    || lowered.includes("not a robot")
+                    || lowered.includes("confirm you're not a robot")
+                    || lowered.includes("confirm you are not a robot")
+                    || lowered.includes("verify that you are human");
+                const twoFactor = lowered.includes("two-factor")
+                    || lowered.includes("2fa")
+                    || lowered.includes("authentication code");
+                const passwordReset = lowered.includes("reset your password")
+                    || lowered.includes("change your password")
+                    || lowered.includes("choose a new password")
+                    || lowered.includes("new password");
+                const accountActionRequired = lowered.includes("suspicious activity")
+                    || lowered.includes("unusual activity")
+                    || lowered.includes("something's going on here")
+                    || lowered.includes("verify your account")
+                    || lowered.includes("verify your identity")
+                    || lowered.includes("phone verification")
+                    || lowered.includes("verify by phone")
+                    || lowered.includes("email verification");
+                const loginUrl = location.href.includes("/login");
+                const hasMessages = document.querySelectorAll('[id^="chat-messages-"]').length > 0;
+                const hasComposer = Boolean(Array.from(document.querySelectorAll(
+                    '[data-slate-editor="true"][role="textbox"], div[role="textbox"][contenteditable="true"]'
+                )).find(visible));
+                const securitySurface = loginUrl
+                    || loginFormVisible
+                    || !location.href.includes("/channels/")
+                    || (!hasMessages && !hasComposer);
+                const blocked = loginFormVisible
+                    || loginUrl
+                    || (securitySurface && (
+                        humanVerification
+                        || twoFactor
+                        || passwordReset
+                        || accountActionRequired
+                    ));
+                return {
+                    url: location.href,
+                    login_form_visible: loginFormVisible,
+                    login_url: loginUrl,
+                    human_verification: humanVerification,
+                    two_factor: twoFactor,
+                    password_reset: passwordReset,
+                    account_action_required: accountActionRequired,
+                    blocked,
                     body_preview: bodyText.slice(0, 240),
                 };
             }
@@ -1577,6 +1647,18 @@ Get-CimInstance Win32_Process |
 
 
 def discord_login_blocker_message(state: dict[str, object]) -> str:
+    if state.get("password_reset"):
+        return (
+            "Discord is requiring a password reset or account security action. Pause "
+            "Kabuki-Cord, complete the visible Discord flow yourself, then leave the "
+            "scanner off for a cooldown before retrying. No message was sent."
+        )
+    if state.get("account_action_required"):
+        return (
+            "Discord is asking for account verification or another security action. "
+            "Kabuki-Cord has stopped this operation. Open Sign In, complete the visible "
+            "Discord flow yourself, then retry later. No message was sent."
+        )
     if state.get("human_verification"):
         return (
             "Discord is showing a human verification check. Click Sign In, complete the "

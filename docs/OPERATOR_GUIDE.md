@@ -233,6 +233,17 @@ Important constraints:
 - Starting scanner operations can conflict with a separate open Kabuki Discord channel window.
 - The app pauses scanning before sync/open/send operations and waits for the profile lock.
 - If a separate Kabuki-opened Discord window is still holding the profile, close that window and retry.
+- If Discord asks for a password reset, human verification, 2FA, phone/email verification, or another account security action, stop the scanner and complete the visible Discord flow yourself. Kabuki-Cord records this as a `discord_account_challenge` event and does not keep retrying.
+
+### Account Safety Pacing
+
+The scanner should not sweep every enabled channel back-to-back. The conservative defaults are:
+
+- `NHI_ZUES_SCANNER_MAX_CHANNELS_PER_CYCLE=1`
+- `NHI_ZUES_SCANNER_CYCLE_SLEEP_SECONDS=45`
+- `NHI_ZUES_POLL_SECONDS=180`
+
+If you increase **Max channels per cycle**, the min/max wait settings add a pause between channel checks. Keep the observed channel list narrow, keep server scan cadences in minutes rather than seconds, and prefer **Dry Mode** or approval-based modes while testing.
 
 ## Safe Test Checklist
 
