@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .models import MessageRecord, UserMemory
+from .state_io import try_write_json_file
 
 
 class ConversationMemory:
@@ -72,7 +73,7 @@ class ConversationMemory:
                 for user_key, user in sorted(self._users.items())
             },
         }
-        self.state_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        try_write_json_file(self.state_file, payload)
 
     def ingest(self, channel_id: str, messages: list[MessageRecord]) -> list[MessageRecord]:
         fresh: list[MessageRecord] = []

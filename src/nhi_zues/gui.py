@@ -388,11 +388,13 @@ class RuntimeController:
             self._stop.clear()
             if self._thread and self._thread.is_alive():
                 self._running = True
+                _record_runtime_event("runtime_start_requested", "Scanner was already running.")
                 return
             self._running = True
             self._last_started_at = time.time()
             self._thread = threading.Thread(target=self._loop, name="kabuki-runtime", daemon=True)
             self._thread.start()
+        _record_runtime_event("runtime_started", "Scanner start requested.")
 
     def pause(self, *, wait: bool = False, timeout: float = 10.0) -> None:
         thread: threading.Thread | None = None
@@ -400,6 +402,7 @@ class RuntimeController:
             self._running = False
             self._stop.set()
             thread = self._thread
+        _record_runtime_event("runtime_paused", "Scanner pause requested.")
         if wait and thread and thread.is_alive() and thread is not threading.current_thread():
             thread.join(timeout=timeout)
 
@@ -419,10 +422,12 @@ class RuntimeController:
             config = load_config()
             if not config.channels:
                 self._last_error = "No channels are enabled for Observe."
+                _record_runtime_event("runtime_error", self._last_error)
                 return
             acquired = DISCORD_SESSION_LOCK.acquire(blocking=False)
             if not acquired:
                 self._last_error = "Discord browser profile is busy."
+                _record_runtime_event("runtime_error", self._last_error)
                 return
             try:
                 asyncio.run(
@@ -433,11 +438,13 @@ class RuntimeController:
                 )
                 if self._stop.is_set():
                     self._last_error = ""
+                    _record_runtime_event("runtime_stopped", "Scanner stopped cleanly.")
             finally:
                 if acquired:
                     DISCORD_SESSION_LOCK.release()
         except Exception as exc:
-            self._last_error = str(exc)
+            self._last_error = _redact_secret_text(str(exc))
+            _record_runtime_event("runtime_error", self._last_error)
         finally:
             with self._lock:
                 self._running = False
@@ -448,6 +455,19 @@ class RuntimeController:
 
 
 RUNTIME = RuntimeController()
+
+
+def _record_runtime_event(event_type: str, summary: str) -> None:
+    try:
+        config = load_config()
+        EventLog(config.state_dir / "events.json").add(
+            event_type=event_type,
+            server_id="",
+            channel_id="",
+            summary=_redact_secret_text(summary),
+        )
+    except Exception:
+        return
 
 
 def app_state() -> dict:

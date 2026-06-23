@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .models import MessageRecord
+from .state_io import write_json_file
 
 
 @dataclass(frozen=True)
@@ -140,7 +141,7 @@ class ApprovalQueue:
     def _save(self) -> None:
         self.queue_file.parent.mkdir(parents=True, exist_ok=True)
         payload = {"items": [asdict(item) for item in self._items]}
-        self.queue_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        write_json_file(self.queue_file, payload)
 
 
 def _approval_id(*, channel_id: str, draft: str, source_ids: tuple[str, ...]) -> str:

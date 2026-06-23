@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .state_io import write_json_file
+
 
 @dataclass(frozen=True)
 class UserInstruction:
@@ -61,10 +63,7 @@ class UserInstructionStore:
 
     def _save(self) -> None:
         self.instruction_file.parent.mkdir(parents=True, exist_ok=True)
-        self.instruction_file.write_text(
-            json.dumps({"items": [item.__dict__ for item in self._items]}, indent=2),
-            encoding="utf-8",
-        )
+        write_json_file(self.instruction_file, {"items": [item.__dict__ for item in self._items]})
 
 
 def _scope_applies(item: UserInstruction, *, server_id: str | None, channel_id: str | None) -> bool:

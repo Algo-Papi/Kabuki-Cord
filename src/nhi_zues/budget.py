@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .state_io import write_json_file
+
 
 MODEL_PRICES_PER_MILLION: dict[str, tuple[float, float]] = {
     "gpt-5.4-nano": (0.20, 1.25),
@@ -121,7 +123,4 @@ class BudgetManager:
 
     def _save(self) -> None:
         self.usage_file.parent.mkdir(parents=True, exist_ok=True)
-        self.usage_file.write_text(
-            json.dumps({"records": [record.__dict__ for record in self._records]}, indent=2),
-            encoding="utf-8",
-        )
+        write_json_file(self.usage_file, {"records": [record.__dict__ for record in self._records]})

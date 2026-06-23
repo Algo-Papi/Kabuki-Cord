@@ -5,6 +5,8 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .state_io import try_write_json_file
+
 
 @dataclass(frozen=True)
 class EventItem:
@@ -45,6 +47,7 @@ class EventLog:
         self._items.append(item)
         self._items = self._items[-self.limit :]
         self._save()
+        self._append_app_log(item)
         return item
 
     def list(self) -> list[EventItem]:
@@ -58,7 +61,28 @@ class EventLog:
 
     def _save(self) -> None:
         self.event_file.parent.mkdir(parents=True, exist_ok=True)
-        self.event_file.write_text(
-            json.dumps({"items": [asdict(item) for item in self._items]}, indent=2),
-            encoding="utf-8",
-        )
+        try_write_json_file(self.event_file, {"items": [asdict(item) for item in self._items]})
+
+    def _append_app_log(self, item: EventItem) -> None:
+        self.event_file.parent.mkdir(parents=True, exist_ok=True)
+        line_parts = [
+            item.created_at,
+            item.event_type,
+            f"server={_log_value(item.server_id)}",
+            f"channel={_log_value(item.channel_id)}",
+        ]
+        if item.user_key:
+            line_parts.append(f"user={_log_value(item.user_key)}")
+        if item.summary:
+            line_parts.append(f"summary={_log_value(item.summary)}")
+        if item.draft:
+            line_parts.append(f"draft={_log_value(item.draft)}")
+        try:
+            with (self.event_file.parent / "app.log").open("a", encoding="utf-8") as handle:
+                handle.write(" | ".join(line_parts) + "\n")
+        except OSError:
+            return
+
+
+def _log_value(value: str) -> str:
+    return json.dumps(str(value or ""), ensure_ascii=False)

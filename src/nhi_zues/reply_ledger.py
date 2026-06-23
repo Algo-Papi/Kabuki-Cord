@@ -6,6 +6,8 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .state_io import write_json_file
+
 
 @dataclass(frozen=True)
 class SentReply:
@@ -91,10 +93,7 @@ class ReplyLedger:
 
     def _save(self) -> None:
         self.ledger_file.parent.mkdir(parents=True, exist_ok=True)
-        self.ledger_file.write_text(
-            json.dumps({"items": [asdict(item) for item in self._items]}, indent=2),
-            encoding="utf-8",
-        )
+        write_json_file(self.ledger_file, {"items": [asdict(item) for item in self._items]})
 
 
 def duplicate_reply_message(overlaps: list[SentReply]) -> str:

@@ -6,6 +6,8 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .state_io import write_json_file
+
 
 @dataclass(frozen=True)
 class CharacterMemory:
@@ -71,7 +73,7 @@ class CharacterMemoryStore:
 
     def _save(self, memory: CharacterMemory) -> None:
         self.memory_dir.mkdir(parents=True, exist_ok=True)
-        self._path(memory.card_id).write_text(json.dumps(asdict(memory), indent=2), encoding="utf-8")
+        write_json_file(self._path(memory.card_id), asdict(memory))
 
     def _path(self, card_id: str) -> Path:
         safe = re.sub(r"[^a-zA-Z0-9_.-]+", "_", card_id).strip("_") or "default"
