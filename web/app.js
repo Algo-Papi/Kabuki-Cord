@@ -193,6 +193,7 @@ function renderServerPanel() {
           <div class="channel-actions">
             <button class="icon-mini pin ${chan.pinned ? "on" : ""}" data-pin-channel="${index}" title="${chan.pinned ? "Unpin channel" : "Pin channel to top"}"><i class="bi bi-pin-angle${chan.pinned ? "-fill" : ""}"></i></button>
             <button class="pill-toggle observe ${chan.scan_enabled ? "on" : ""}" data-toggle="scan" data-channel="${index}">Observe</button>
+            <button class="pill-toggle react ${chan.react_enabled ? "on" : ""}" data-toggle="react" data-channel="${index}" title="Auto-add a laugh reaction to obvious jokes when not in Dry Mode">React</button>
             <button class="pill-toggle engage ${chan.engage_enabled ? "on" : ""}" data-toggle="engage" data-channel="${index}">Engage</button>
           </div>
         </div>
@@ -211,6 +212,7 @@ function renderServerPanel() {
       event.stopPropagation();
       const chan = channels()[Number(button.dataset.channel)];
       if (button.dataset.toggle === "scan") chan.scan_enabled = !chan.scan_enabled;
+      if (button.dataset.toggle === "react") chan.react_enabled = !chan.react_enabled;
       if (button.dataset.toggle === "engage") chan.engage_enabled = !chan.engage_enabled;
       render();
     });
@@ -373,6 +375,7 @@ function renderOnboardingSteps() {
   const discordReady = Boolean(appState?.discord?.complete);
   const serversReady = servers().length > 0;
   const engagedChannels = servers().flatMap((srv) => srv.channels || []).filter((chan) => chan.scan_enabled || chan.engage_enabled).length;
+  const reactionChannels = servers().flatMap((srv) => srv.channels || []).filter((chan) => chan.react_enabled).length;
   const mode = runtimeModeLabel(currentRuntimeMode());
   const steps = [
     {
@@ -405,8 +408,8 @@ function renderOnboardingSteps() {
       title: "5. Choose observed channels",
       ready: engagedChannels > 0,
       body: engagedChannels
-        ? `${engagedChannels} channel setting${engagedChannels === 1 ? "" : "s"} are enabled. Observe reads; Engage allows draft decisions.`
-        : "Turn on Observe for channels to track. Turn on Engage only where drafts should be considered.",
+        ? `${engagedChannels} channel setting${engagedChannels === 1 ? "" : "s"} are enabled. Observe reads; Engage drafts. React is on for ${reactionChannels}.`
+        : "Turn on Observe for channels to track. React can laugh-react to obvious jokes; Engage allows draft decisions.",
     },
     {
       title: "6. Test safely",
@@ -2067,6 +2070,7 @@ $("addChannel").addEventListener("click", () => {
     channel_id: id.trim(),
     label: "",
     scan_enabled: true,
+    react_enabled: false,
     engage_enabled: false,
     auto_respond_enabled: false,
   });

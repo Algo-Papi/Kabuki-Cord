@@ -17,6 +17,7 @@ class ChannelTarget:
     character_card: str | None = None
     scan_enabled: bool = True
     engage_enabled: bool = True
+    react_enabled: bool = False
     auto_respond_enabled: bool = False
     poll_seconds: float | None = None
 
@@ -188,6 +189,7 @@ def _load_channels(servers_file: Path, fallback_raw: str) -> tuple[ChannelTarget
                         character_card=character_card,
                         scan_enabled=bool(channel.get("scan_enabled", True)),
                         engage_enabled=bool(channel.get("engage_enabled", True)),
+                        react_enabled=bool(channel.get("react_enabled", False)),
                         auto_respond_enabled=bool(channel.get("auto_respond_enabled", False)),
                         poll_seconds=float(poll_seconds) if poll_seconds else None,
                     )

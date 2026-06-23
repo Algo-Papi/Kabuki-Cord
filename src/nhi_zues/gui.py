@@ -32,6 +32,7 @@ from .events import EventLog
 from .llm import ReplyPlanner
 from .memory import ConversationMemory
 from .models import MessageRecord
+from .reactions import suggest_emoji_reaction
 from .reply_ledger import ReplyLedger, duplicate_reply_message
 from .runner import NhiZuesRunner
 from .secrets import discord_credential_status, get_discord_credentials, set_discord_credentials
@@ -1026,7 +1027,7 @@ def suggest_reaction(body: dict) -> dict:
     if not text:
         raise RuntimeError("Kabuki could not find the selected message text in local memory.")
 
-    emoji, reason = _suggest_emoji_reaction(text)
+    emoji, reason = suggest_emoji_reaction(text)
     snippet = " ".join(text.split())
     if len(snippet) > 140:
         snippet = snippet[:137].rstrip() + "..."
@@ -1090,6 +1091,7 @@ def _merge_channels(server: dict, discovered_channels: list[dict]) -> dict[str, 
                 "parent_channel_id": str(channel.get("parent_channel_id") or ""),
                 "scan_enabled": False,
                 "engage_enabled": False,
+                "react_enabled": False,
                 "auto_respond_enabled": False,
             }
             added += 1
@@ -1890,51 +1892,6 @@ def _summarize_messages(texts: list[str]) -> str:
     if len(latest) > 130:
         latest = latest[:127].rstrip() + "..."
     return f"Talking about {topic_text}. Latest: {latest}"
-
-
-def _suggest_emoji_reaction(text: str) -> tuple[str, str]:
-    lowered = f" {str(text or '').lower()} "
-    joke_markers = (
-        " lol ",
-        " lmao ",
-        " haha",
-        " 😂",
-        " 🤣",
-        " joke",
-        " kidding",
-        " satire",
-        " parody",
-        " meme",
-        " shitpost",
-        " bit ",
-    )
-    if any(marker in lowered for marker in joke_markers) or re.search(r"\b(lol+|lmao+|haha+)\b", lowered):
-        return "😂", "message reads as a joke, bit, meme, or satire"
-
-    agreement_markers = (
-        " exactly",
-        " agreed",
-        " agree ",
-        " true ",
-        " facts",
-        " good point",
-        " makes sense",
-        " fair point",
-        " correct",
-        " this is it",
-    )
-    if any(marker in lowered for marker in agreement_markers):
-        return "👍", "message reads like a clear agreement or solid point"
-
-    appreciation_markers = (" thanks", " thank you", " appreciate", " helpful", " good info")
-    if any(marker in lowered for marker in appreciation_markers):
-        return "🙏", "message reads as helpful or appreciative"
-
-    surprise_markers = (" wild", " crazy", " insane", " wtf", " weird", " bizarre", " unreal")
-    if any(marker in lowered for marker in surprise_markers):
-        return "👀", "message has a surprising or unusually weird claim"
-
-    return "👍", "safe light acknowledgement; no strong joke or surprise cue found"
 
 
 def _memory_context(memory_path: Path, channel_id: str):

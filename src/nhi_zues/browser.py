@@ -1157,6 +1157,218 @@ class DiscordWebSession:
             "The draft remains queued and no message was sent."
         )
 
+    async def add_reaction(self, message_id: str, emoji: str = "😂") -> dict[str, object]:
+        safe_id = str(message_id or "").strip()
+        if not safe_id:
+            raise RuntimeError("Missing Discord message ID for reaction.")
+        message = self.page.locator(f"#{safe_id}").first
+        try:
+            await message.wait_for(state="visible", timeout=8_000)
+            await message.scroll_into_view_if_needed(timeout=5_000)
+            await message.hover(timeout=5_000)
+            await self.page.wait_for_timeout(350)
+        except Exception as exc:
+            raise RuntimeError("Discord could not find the selected message to react to.") from exc
+
+        if await self._message_has_reaction(message, emoji):
+            return {"applied": False, "already_present": True, "emoji": emoji}
+        if await self._click_quick_reaction(message, emoji):
+            await self.page.wait_for_timeout(500)
+            return {"applied": True, "already_present": False, "emoji": emoji, "path": "quick"}
+        if await self._click_add_reaction_action(message):
+            await self.page.wait_for_timeout(450)
+            if await self._select_emoji_from_picker(emoji):
+                await self.page.wait_for_timeout(700)
+                return {"applied": True, "already_present": False, "emoji": emoji, "path": "picker"}
+
+        raise RuntimeError("Discord did not expose a usable Add Reaction control for the selected message.")
+
+    async def _message_has_reaction(self, message, emoji: str) -> bool:
+        try:
+            return bool(
+                await message.evaluate(
+                    """
+                    (messageNode, emoji) => {
+                        const labels = Array.from(messageNode.querySelectorAll('[aria-label], [title], button, [role="button"]'))
+                            .map((node) => `${node.getAttribute("aria-label") || ""} ${node.getAttribute("title") || ""} ${node.textContent || ""}`);
+                        return labels.some((label) => label.includes(emoji));
+                    }
+                    """,
+                    emoji,
+                )
+            )
+        except Exception:
+            return False
+
+    async def _click_quick_reaction(self, message, emoji: str) -> bool:
+        try:
+            return bool(
+                await message.evaluate(
+                    """
+                    (messageNode, emoji) => {
+                        const visible = (node) => {
+                            if (!node) return false;
+                            const rect = node.getBoundingClientRect();
+                            const style = window.getComputedStyle(node);
+                            return rect.width > 0
+                                && rect.height > 0
+                                && style.display !== "none"
+                                && style.visibility !== "hidden";
+                        };
+                        const msgRect = messageNode.getBoundingClientRect();
+                        const candidates = Array.from(document.querySelectorAll(
+                            'button[aria-label], [role="button"][aria-label], [aria-label], button'
+                        )).filter((node) => {
+                            if (!visible(node)) return false;
+                            const label = `${node.getAttribute("aria-label") || ""} ${node.getAttribute("title") || ""} ${node.textContent || ""}`;
+                            if (!label.includes(emoji) && !/joy|laugh|face with tears/i.test(label)) return false;
+                            const rect = node.getBoundingClientRect();
+                            const nearVertically = rect.bottom >= msgRect.top - 90 && rect.top <= msgRect.bottom + 130;
+                            const toTheRight = rect.left >= msgRect.left;
+                            return nearVertically && toTheRight;
+                        }).sort((left, right) => {
+                            const a = left.getBoundingClientRect();
+                            const b = right.getBoundingClientRect();
+                            return Math.abs(a.top - msgRect.top) - Math.abs(b.top - msgRect.top);
+                        });
+                        if (!candidates.length) return false;
+                        candidates[0].click();
+                        return true;
+                    }
+                    """,
+                    emoji,
+                )
+            )
+        except Exception:
+            return False
+
+    async def _click_add_reaction_action(self, message) -> bool:
+        if await self._click_visible_reaction_action(message):
+            return True
+        try:
+            await message.click(button="right", timeout=5_000)
+            await self.page.wait_for_timeout(350)
+            return await self._click_context_reaction_action()
+        except Exception:
+            return False
+
+    async def _click_visible_reaction_action(self, message) -> bool:
+        try:
+            return bool(
+                await message.evaluate(
+                    """
+                    (messageNode) => {
+                        const visible = (node) => {
+                            if (!node) return false;
+                            const rect = node.getBoundingClientRect();
+                            const style = window.getComputedStyle(node);
+                            return rect.width > 0
+                                && rect.height > 0
+                                && style.display !== "none"
+                                && style.visibility !== "hidden";
+                        };
+                        const msgRect = messageNode.getBoundingClientRect();
+                        const candidates = Array.from(document.querySelectorAll(
+                            'button[aria-label], [role="button"][aria-label], [aria-label]'
+                        )).filter((node) => {
+                            const label = `${node.getAttribute("aria-label") || ""} ${node.textContent || ""}`;
+                            if (!/add reaction|react/i.test(label) || !visible(node)) return false;
+                            if (/reply|forward|thread|more/i.test(label)) return false;
+                            const rect = node.getBoundingClientRect();
+                            const nearVertically = rect.bottom >= msgRect.top - 90 && rect.top <= msgRect.bottom + 130;
+                            const toTheRight = rect.left >= msgRect.left;
+                            return nearVertically && toTheRight;
+                        }).sort((left, right) => {
+                            const a = left.getBoundingClientRect();
+                            const b = right.getBoundingClientRect();
+                            return Math.abs(a.top - msgRect.top) - Math.abs(b.top - msgRect.top);
+                        });
+                        if (!candidates.length) return false;
+                        candidates[0].click();
+                        return true;
+                    }
+                    """
+                )
+            )
+        except Exception:
+            return False
+
+    async def _click_context_reaction_action(self) -> bool:
+        try:
+            return bool(
+                await self.page.evaluate(
+                    """
+                    () => {
+                        const visible = (node) => {
+                            if (!node) return false;
+                            const rect = node.getBoundingClientRect();
+                            const style = window.getComputedStyle(node);
+                            return rect.width > 0
+                                && rect.height > 0
+                                && style.display !== "none"
+                                && style.visibility !== "hidden";
+                        };
+                        const candidates = Array.from(document.querySelectorAll(
+                            '[role="menuitem"], [role="menuitemradio"], [aria-label], [role="button"]'
+                        )).filter((node) => {
+                            const label = `${node.getAttribute("aria-label") || ""} ${node.textContent || ""}`;
+                            return /add reaction|react/i.test(label) && !/reply/i.test(label) && visible(node);
+                        });
+                        if (!candidates.length) return false;
+                        candidates[0].click();
+                        return true;
+                    }
+                    """
+                )
+            )
+        except Exception:
+            return False
+
+    async def _select_emoji_from_picker(self, emoji: str) -> bool:
+        emoji_query = _emoji_search_query(emoji)
+        try:
+            search = self.page.locator(
+                'input[placeholder*="Search"], input[aria-label*="Search"], [role="textbox"][aria-label*="Search"]'
+            ).last
+            if await search.count():
+                await search.fill(emoji_query, timeout=3_000)
+                await self.page.wait_for_timeout(450)
+        except Exception:
+            pass
+
+        try:
+            return bool(
+                await self.page.evaluate(
+                    """
+                    ({ emoji, query }) => {
+                        const visible = (node) => {
+                            if (!node) return false;
+                            const rect = node.getBoundingClientRect();
+                            const style = window.getComputedStyle(node);
+                            return rect.width > 0
+                                && rect.height > 0
+                                && style.display !== "none"
+                                && style.visibility !== "hidden";
+                        };
+                        const pattern = new RegExp(query === "joy" ? "joy|laugh|face with tears" : query, "i");
+                        const candidates = Array.from(document.querySelectorAll(
+                            '[role="gridcell"], [role="option"], button[aria-label], [aria-label], [role="button"]'
+                        )).filter((node) => {
+                            if (!visible(node)) return false;
+                            const label = `${node.getAttribute("aria-label") || ""} ${node.getAttribute("title") || ""} ${node.textContent || ""}`;
+                            return label.includes(emoji) || pattern.test(label);
+                        });
+                        if (!candidates.length) return false;
+                        candidates[0].click();
+                        return true;
+                    }
+                    """,
+                    {"emoji": emoji, "query": emoji_query},
+                )
+            )
+        except Exception:
+            return False
+
     async def _click_visible_reply_action(self, message) -> bool:
         try:
             return bool(
@@ -1309,6 +1521,18 @@ def _discord_message_token(message_id: str) -> str:
     if raw.startswith("chat-messages-"):
         return raw.rsplit("-", 1)[-1]
     return raw
+
+
+def _emoji_search_query(emoji: str) -> str:
+    return {
+        "😂": "joy",
+        "🤣": "rofl",
+        "👍": "thumbsup",
+        "🙏": "pray",
+        "👀": "eyes",
+        "❤️": "heart",
+        "❤": "heart",
+    }.get(str(emoji or "").strip(), str(emoji or "joy").strip() or "joy")
 
 
 def _profile_in_use_error(exc: Exception) -> bool:

@@ -13,6 +13,8 @@ from .config import AppConfig
 from .events import EventLog
 from .llm import ReplyPlanner
 from .memory import ConversationMemory
+from .reaction_ledger import ReactionLedger
+from .reactions import LAUGH_EMOJI, should_auto_laugh_react
 from .reply_ledger import ReplyLedger, duplicate_reply_message
 from .secrets import get_discord_credentials
 from .topics import TopicTracker
@@ -52,6 +54,7 @@ class NhiZuesRunner:
         self.character_memory = CharacterMemoryStore(config.state_dir / "character_memory")
         self.approvals = ApprovalQueue(config.state_dir / "approvals.json")
         self.reply_ledger = ReplyLedger(config.state_dir / "sent_replies.json")
+        self.reaction_ledger = ReactionLedger(config.state_dir / "reactions.json")
         self.user_instructions = UserInstructionStore(config.state_dir / "user_instructions.json")
         self.events = EventLog(config.state_dir / "events.json")
 
@@ -137,6 +140,12 @@ class NhiZuesRunner:
             fresh = self.memory.ingest(target.channel_id, visible_messages)
             character = self.characters.for_server(target.server_id, target.character_card)
             fresh = _without_own_messages(fresh, character_names=(character.name, *character.aliases))
+            reacted_message_ids = await self._process_reactions(session, target, fresh) if fresh else set()
+            reply_fresh = [
+                message
+                for message in fresh
+                if message.message_id not in reacted_message_ids
+            ]
             snapshot = self.topics.update(target.channel_id, fresh)
             context = self.memory.context(target.channel_id)
             user_memories = self.memory.user_context_for(context)
@@ -171,7 +180,7 @@ class NhiZuesRunner:
                 channel_id=target.channel_id,
                 character=character,
                 character_memory=character_memory,
-                new_messages=fresh,
+                new_messages=reply_fresh,
                 context=context,
                 topics=snapshot,
                 user_memories=user_memories,
@@ -199,7 +208,7 @@ class NhiZuesRunner:
                 ),
             )
             if decision.should_reply and decision.draft:
-                source_ids = tuple(message.message_id for message in fresh)
+                source_ids = tuple(message.message_id for message in reply_fresh)
                 duplicate_message = duplicate_reply_message(
                     self.reply_ledger.find_overlap(
                         channel_id=target.channel_id,
@@ -290,6 +299,59 @@ class NhiZuesRunner:
                     )
 
             self.memory.save()
+
+    async def _process_reactions(self, session: DiscordWebSession, target, fresh) -> set[str]:
+        if not getattr(target, "react_enabled", False):
+            return set()
+        if self.config.runtime_mode == "dry":
+            self.events.add(
+                event_type="reaction_skipped",
+                server_id=target.server_id,
+                channel_id=target.channel_id,
+                summary="React is enabled, but Dry Mode blocks Discord reactions.",
+            )
+            return set()
+
+        for message in fresh:
+            if self.reaction_ledger.has_reacted(
+                channel_id=message.channel_id,
+                message_id=message.message_id,
+                emoji=LAUGH_EMOJI,
+            ):
+                continue
+            should_react, reason = should_auto_laugh_react(message.text)
+            if not should_react:
+                continue
+            try:
+                result = await session.add_reaction(message.message_id, LAUGH_EMOJI)
+            except Exception as exc:
+                self.events.add(
+                    event_type="reaction_failed",
+                    server_id=target.server_id,
+                    channel_id=target.channel_id,
+                    summary=f"Could not add laugh reaction: {exc}",
+                    draft=message.text,
+                )
+                return set()
+
+            self.reaction_ledger.record(
+                server_id=target.server_id,
+                message=message,
+                emoji=LAUGH_EMOJI,
+                reason=reason,
+            )
+            self.events.add(
+                event_type="reaction_added",
+                server_id=target.server_id,
+                channel_id=target.channel_id,
+                summary=(
+                    f"Added {LAUGH_EMOJI} reaction to {message.author}: "
+                    f"{reason}; path={result.get('path') or 'existing'}."
+                ),
+                draft=message.text,
+            )
+            return {message.message_id}
+        return set()
 
 
 def _without_own_messages(messages, *, character_names: tuple[str, ...]):

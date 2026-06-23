@@ -455,7 +455,7 @@ textarea:disabled {
 
 .channel-actions {
   display: grid;
-  grid-template-columns: 32px repeat(2, minmax(0, 1fr));
+  grid-template-columns: 32px repeat(3, minmax(0, 1fr));
   gap: 6px;
   width: 100%;
 }
@@ -499,6 +499,12 @@ textarea:disabled {
   background: rgba(149, 101, 255, 0.24);
   color: #d7c8ff;
   border-color: rgba(149, 101, 255, 0.45);
+}
+
+.pill-toggle.on.react {
+  background: rgba(217, 185, 91, 0.22);
+  color: #f4dd96;
+  border-color: rgba(217, 185, 91, 0.48);
 }
 
 .pill-toggle.on.auto {
