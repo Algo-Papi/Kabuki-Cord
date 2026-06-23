@@ -14,11 +14,13 @@ const activeOperations = new Map();
 let knownEventKeys = new Set();
 let desktopBadgeActive = null;
 let kabukiAudioContext = null;
+let kabukiBootAudio = null;
 let bootSoundQueued = false;
 let bootSoundPlayed = false;
 let kabukiAudioUnlocked = false;
 
 const runtimeModeClassNames = ["runtime-mode-dry", "runtime-mode-full-auto", "runtime-mode-semi-auto", "runtime-mode-live-fire"];
+const kabukiBootThemeSrc = "/assets/kabuki-launch-theme.wav";
 
 const $ = (id) => document.getElementById(id);
 
@@ -443,6 +445,7 @@ function renderGrowth() {
       .join("") || `<div class="note-item">No users observed yet.</div>`;
   document.querySelectorAll("[data-user]").forEach((row) => {
     row.addEventListener("click", () => {
+      if (selectedUserKey !== row.dataset.user) $("newUserNote").value = "";
       selectedUserKey = row.dataset.user;
       renderGrowth();
     });
@@ -454,6 +457,7 @@ function renderSelectedUserDetails() {
   const user = (appState.memory.users || []).find((item) => item.user_key === selectedUserKey);
   const notes = (appState.user_instructions.items || []).filter((item) => item.user_key === selectedUserKey);
   const activeNotes = notes.filter(userInstructionAppliesNow);
+  renderUserGuidanceControls(user);
   $("selectedUserDetails").innerHTML = user
     ? `
       <div class="note-item">
@@ -476,7 +480,17 @@ function renderSelectedUserDetails() {
         `).join("") || `<div class="note-item">No behavior notes for this user yet.</div>`}
       </div>
     `
-    : `<div class="note-item">Select a user to add scoped behavior guidance.</div>`;
+    : `<div class="note-item">Select a remembered user below to view and add per-user behavior notes.</div>`;
+}
+
+function renderUserGuidanceControls(user) {
+  const hasUser = Boolean(user);
+  $("userNoteScope").disabled = !hasUser;
+  $("newUserNote").disabled = !hasUser;
+  $("addUserNote").disabled = !hasUser;
+  $("newUserNote").placeholder = hasUser
+    ? `Example: With ${user.display_name || "this user"}, keep pushing on semantics without making it personal.`
+    : "Select a remembered user first.";
 }
 
 function renderApprovals() {
@@ -1411,6 +1425,7 @@ function openUserGuidance(userKey) {
     toast("No stable user ID recorded for that message yet");
     return;
   }
+  if (selectedUserKey !== userKey) $("newUserNote").value = "";
   selectedUserKey = userKey;
   activateTab("growth");
   renderGrowth();
@@ -1674,7 +1689,7 @@ function unlockKabukiAudio() {
 async function testKabukiAudio() {
   bootSoundQueued = true;
   const played = await playKabukiSound("boot");
-  toast(played ? "Kabuki launch sound played" : "Audio is still blocked. Click once in the app, then try sound again.");
+  toast(played ? "Kabuki launch theme played" : "Audio is still blocked. Click once in the app, then try sound again.");
 }
 
 function renderAudioStatus() {
@@ -1683,9 +1698,42 @@ function renderAudioStatus() {
   button.classList.toggle("audio-on", kabukiAudioUnlocked);
   button.classList.toggle("audio-pending", bootSoundQueued && !bootSoundPlayed);
   button.title = kabukiAudioUnlocked
-    ? "Kabuki sound enabled. Click to replay launch sound."
-    : "Enable and test Kabuki launch sound";
-  button.innerHTML = `<i class="bi ${kabukiAudioUnlocked ? "bi-volume-up" : "bi-volume-mute"}"></i>`;
+    ? "Kabuki sound enabled. Click to replay launch theme."
+    : bootSoundQueued && !bootSoundPlayed
+      ? "Launch sound is queued. Click to play it."
+      : "Enable and test Kabuki launch sound";
+  const icon = kabukiAudioUnlocked
+    ? "bi-volume-up"
+    : bootSoundQueued && !bootSoundPlayed
+      ? "bi-volume-down"
+      : "bi-volume-mute";
+  button.innerHTML = `<i class="bi ${icon}"></i>`;
+}
+
+function getKabukiBootAudio() {
+  if (!kabukiBootAudio) {
+    kabukiBootAudio = new Audio(kabukiBootThemeSrc);
+    kabukiBootAudio.preload = "auto";
+    kabukiBootAudio.volume = 0.92;
+  }
+  return kabukiBootAudio;
+}
+
+async function playKabukiBootTheme() {
+  try {
+    const audio = getKabukiBootAudio();
+    audio.pause();
+    audio.currentTime = 0;
+    audio.volume = 0.92;
+    await audio.play();
+    kabukiAudioUnlocked = true;
+    bootSoundPlayed = true;
+    renderAudioStatus();
+    return true;
+  } catch {
+    renderAudioStatus();
+    return false;
+  }
 }
 
 function getKabukiAudioContext() {
@@ -1696,6 +1744,7 @@ function getKabukiAudioContext() {
 }
 
 function playKabukiSound(kind = "mode") {
+  if (kind === "boot") return playKabukiBootTheme();
   const context = getKabukiAudioContext();
   if (!context) {
     renderAudioStatus();

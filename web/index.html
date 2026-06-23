@@ -214,34 +214,40 @@
         <section id="growth" class="tab-pane">
           <div class="growth-layout">
             <div>
-              <div class="section-title">Character Growth</div>
+              <div class="section-title">Character Continuity</div>
+              <div class="note-item">
+                Global story/claim memory for the selected character card. These notes are not tied to a Discord user.
+              </div>
               <div id="growthNotes" class="note-list"></div>
               <label class="field">
-                <span>Add Story / Claim Continuity</span>
+                <span>Add Character Story / Claim</span>
                 <textarea id="newStoryNote" rows="4" placeholder="What new detail should this character remember as part of their ongoing story?"></textarea>
               </label>
-              <button id="addStoryNote" class="secondary-button"><i class="bi bi-journal-plus"></i> Add Story Note</button>
+              <button id="addStoryNote" class="secondary-button"><i class="bi bi-journal-plus"></i> Add Character Story Note</button>
             </div>
             <div>
               <div class="section-title">Per-User Behavior Notes</div>
               <div class="note-item">
                 Select a remembered user, choose the scope, then save guidance. Saved notes are active automatically whenever the app drafts or regenerates against that user in the matching server/channel.
               </div>
+              <div class="user-guidance-editor">
+                <div id="selectedUserDetails" class="selected-user-details"></div>
+                <label class="field">
+                  <span>Guidance Scope</span>
+                  <select id="userNoteScope">
+                    <option value="global">All servers</option>
+                    <option value="server">Selected server</option>
+                    <option value="channel">Selected channel</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>User Guidance</span>
+                  <textarea id="newUserNote" rows="4" placeholder="Example: Push back more with this user on immigration claims."></textarea>
+                </label>
+                <button id="addUserNote" class="secondary-button"><i class="bi bi-person-plus"></i> Add User Note</button>
+              </div>
+              <div class="section-title user-directory-title">Remembered Users</div>
               <div id="userList" class="user-list"></div>
-              <div id="selectedUserDetails" class="selected-user-details"></div>
-              <label class="field">
-                <span>Guidance Scope</span>
-                <select id="userNoteScope">
-                  <option value="global">All servers</option>
-                  <option value="server">Selected server</option>
-                  <option value="channel">Selected channel</option>
-                </select>
-              </label>
-              <label class="field">
-                <span>User Guidance</span>
-                <textarea id="newUserNote" rows="4" placeholder="Example: Push back more with this user on immigration claims."></textarea>
-              </label>
-              <button id="addUserNote" class="secondary-button"><i class="bi bi-person-plus"></i> Add User Note</button>
             </div>
           </div>
         </section>
