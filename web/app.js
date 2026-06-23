@@ -6,6 +6,7 @@ let userSearchQuery = "";
 let userSortMode = "recent";
 let apiToken = null;
 let previewPanelMode = "preview";
+let eventFilterMode = "all";
 let unreadEventCount = 0;
 let autoRefreshTimer = null;
 let refreshInFlight = false;
@@ -1346,6 +1347,7 @@ function renderPreviewTabs() {
 function renderEventsPanel() {
   renderRuntimeCheckSummary();
   renderResponseHistory();
+  if ($("eventFilter")) $("eventFilter").value = eventFilterMode;
   renderEventFeed();
 }
 
@@ -1384,10 +1386,10 @@ function renderResponseHistory() {
 }
 
 function renderEventFeed() {
-  const events = allEvents().slice(0, 60);
+  const events = filteredEvents().slice(0, 60);
   $("eventFeed").innerHTML =
     events.map(renderEventCard).join("") ||
-    `<div class="note-item">No runtime events recorded yet.</div>`;
+    `<div class="note-item">${escapeHtml(emptyEventFilterMessage())}</div>`;
 }
 
 function renderEventCard(event) {
@@ -1403,26 +1405,36 @@ function renderEventCard(event) {
 
 function renderUnrespondedReplies() {
   const items = appState.unresponded?.items || [];
+  const dismissAllButton = $("dismissAllReplies");
+  if (dismissAllButton) dismissAllButton.disabled = items.length === 0;
   $("unrespondedReplies").innerHTML = items
     .map((item) => `
       <article class="reply-watch-card">
         <div class="reply-watch-head">
-          <strong>${escapeHtml(item.author || "unknown")}</strong>
-          <span>${escapeHtml(item.server_label || item.server_id || "Unknown server")} / ${escapeHtml(formatChannelName(item.channel_label || item.channel_id, item.channel_type))}</span>
+          <div class="reply-watch-person">
+            <strong>${escapeHtml(item.author || "unknown")}</strong>
+            <span>${escapeHtml(item.server_label || item.server_id || "Unknown server")}</span>
+          </div>
+          <time>${escapeHtml(formatTime(item.observed_at))}</time>
         </div>
-        <p>${escapeHtml(item.text || "")}</p>
+        <div class="reply-watch-channel">${escapeHtml(formatChannelName(item.channel_label || item.channel_id, item.channel_type))}</div>
+        <p class="reply-watch-message">${escapeHtml(item.text || "")}</p>
         <div class="reply-watch-context">
           <span>${escapeHtml(item.reason || "unresponded mention")}</span>
           ${item.since_text ? `<small>After you: ${escapeHtml(item.since_text)}</small>` : ""}
-          <small>${escapeHtml(formatTime(item.observed_at))}</small>
         </div>
         <div class="reply-watch-actions">
-          <button class="small-button" data-open-reply-watch="${escapeAttr(item.message_id || "")}" data-server-id="${escapeAttr(item.server_id || "")}" data-channel-id="${escapeAttr(item.channel_id || "")}">
-            <i class="bi bi-box-arrow-up-right"></i> Open
-          </button>
           <button class="small-button" data-suggest-reply-watch="${escapeAttr(item.message_id || "")}" data-server-id="${escapeAttr(item.server_id || "")}" data-channel-id="${escapeAttr(item.channel_id || "")}" data-user-key="${escapeAttr(item.user_key || "")}">
             <i class="bi bi-chat-left-text"></i> Suggest Reply
           </button>
+          <div class="reply-watch-action-row">
+            <button class="small-button" data-open-reply-watch="${escapeAttr(item.message_id || "")}" data-server-id="${escapeAttr(item.server_id || "")}" data-channel-id="${escapeAttr(item.channel_id || "")}">
+              <i class="bi bi-box-arrow-up-right"></i> Open
+            </button>
+            <button class="small-button ghost-button" data-dismiss-reply-watch="${escapeAttr(item.message_id || "")}" data-server-id="${escapeAttr(item.server_id || "")}" data-channel-id="${escapeAttr(item.channel_id || "")}">
+              <i class="bi bi-check2"></i> Dismiss
+            </button>
+          </div>
         </div>
       </article>
     `)
@@ -1442,6 +1454,13 @@ function renderUnrespondedReplies() {
       messageId: button.dataset.suggestReplyWatch,
       userKey: button.dataset.userKey,
       instruction: "Suggest a natural response to this unresponded mention or reply using the selected character.",
+    }));
+  });
+  document.querySelectorAll("[data-dismiss-reply-watch]").forEach((button) => {
+    button.addEventListener("click", () => dismissUnrespondedReplies({
+      messageIds: [button.dataset.dismissReplyWatch],
+      serverId: button.dataset.serverId,
+      channelId: button.dataset.channelId,
     }));
   });
 }
@@ -2093,6 +2112,19 @@ async function toggleRuntime() {
 }
 
 function openScannerMonitor() {
+  const apiBridge = window.pywebview?.api;
+  if (apiBridge?.open_monitor) {
+    Promise.resolve(apiBridge.open_monitor())
+      .then((opened) => {
+        if (!opened) openScannerMonitorFallback();
+      })
+      .catch(() => openScannerMonitorFallback());
+    return;
+  }
+  openScannerMonitorFallback();
+}
+
+function openScannerMonitorFallback() {
   const popup = window.open(
     "/monitor.html",
     "kabukiScannerMonitor",
@@ -2103,6 +2135,27 @@ function openScannerMonitor() {
     return;
   }
   popup.focus();
+}
+
+async function dismissUnrespondedReplies({ messageIds = [], serverId = "", channelId = "", all = false } = {}) {
+  const ids = messageIds.filter(Boolean);
+  if (!all && !ids.length) return;
+  try {
+    const result = await api("/api/unresponded-dismiss", {
+      method: "POST",
+      body: JSON.stringify({
+        all,
+        message_ids: ids,
+        server_id: serverId,
+        channel_id: channelId,
+      }),
+    });
+    appState = result.state;
+    render();
+    toast(all ? "Unresponded reply notices dismissed" : "Reply notice dismissed");
+  } catch (error) {
+    toast(error.message);
+  }
 }
 
 function renderUpdateResult(result) {
@@ -2212,6 +2265,28 @@ function allEvents() {
   return Array.isArray(appState.events?.items) ? appState.events.items : [];
 }
 
+function reactionEventTypes() {
+  return ["reaction_added", "reaction_failed", "reaction_skipped", "reaction_suggested"];
+}
+
+function filteredEvents() {
+  const events = allEvents();
+  if (eventFilterMode === "reactions") {
+    const reactionTypes = new Set(reactionEventTypes());
+    return events.filter((event) => reactionTypes.has(event.event_type));
+  }
+  if (eventFilterMode === "reaction_added") {
+    return events.filter((event) => event.event_type === "reaction_added");
+  }
+  return events;
+}
+
+function emptyEventFilterMessage() {
+  if (eventFilterMode === "reactions") return "No reaction events recorded yet.";
+  if (eventFilterMode === "reaction_added") return "No reactions made yet.";
+  return "No runtime events recorded yet.";
+}
+
 function eventKey(event) {
   return [
     event.created_at || "",
@@ -2227,6 +2302,7 @@ function eventTypeLabel(event) {
   const labels = {
     channel_checked: "Channel checked",
     channel_unavailable: "Channel unavailable",
+    discord_account_challenge: "Discord account challenge",
     approval_queued: "Approval queued",
     manual_approval_created: "Draft queued",
     approval_regenerated: "Draft regenerated",
@@ -2243,18 +2319,25 @@ function eventTypeLabel(event) {
     discord_repair: "Discord repair",
     channel_backfilled: "Channel backfilled",
     channel_refreshed: "Channel refreshed",
+    reaction_suggested: "Reaction suggested",
+    reaction_added: "Reaction made",
+    reaction_failed: "Reaction failed",
+    reaction_skipped: "Reaction skipped",
+    unresponded_reply_dismissed: "Reply notice dismissed",
   };
   return labels[event.event_type] || event.event_type || "Event";
 }
 
 function eventClass(event) {
-  if (["approval_send_failed", "channel_unavailable"].includes(event.event_type)) return "failed";
+  if (["approval_send_failed", "channel_unavailable", "reaction_failed", "discord_account_challenge"].includes(event.event_type)) return "failed";
   if (["message_sent", "approval_sent"].includes(event.event_type)) return "sent";
+  if (["reaction_added"].includes(event.event_type)) return "reaction";
   if ([
     "approval_queued",
     "manual_approval_created",
     "approval_send_started",
     "duplicate_reply_blocked",
+    "reaction_suggested",
   ].includes(event.event_type)) return "attention";
   return "";
 }
@@ -2649,6 +2732,11 @@ $("soundToggle").addEventListener("pointerdown", (event) => event.stopPropagatio
 $("soundToggle").addEventListener("click", testKabukiAudio);
 $("runtimeControl").addEventListener("click", () => toggleRuntime().catch((error) => toast(error.message)));
 $("openScannerMonitor").addEventListener("click", openScannerMonitor);
+$("eventFilter").addEventListener("change", () => {
+  eventFilterMode = $("eventFilter").value || "all";
+  renderEventFeed();
+});
+$("dismissAllReplies").addEventListener("click", () => dismissUnrespondedReplies({ all: true }));
 $("saveAll").addEventListener("click", saveAll);
 $("saveServers").addEventListener("click", saveAll);
 $("syncDiscordServers").addEventListener("click", () => syncDiscordServers().catch((error) => toast(error.message)));

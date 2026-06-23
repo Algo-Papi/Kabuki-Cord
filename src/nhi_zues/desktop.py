@@ -16,8 +16,36 @@ BADGE_ICON_HANDLE = None
 
 
 class DesktopBridge:
+    def __init__(self, base_url: str) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.monitor_window = None
+
     def set_badge(self, active: bool) -> bool:
         return set_taskbar_badge(bool(active))
+
+    def open_monitor(self) -> bool:
+        try:
+            import webview
+
+            if self.monitor_window is not None:
+                try:
+                    for method_name in ("show", "restore", "bring_to_front"):
+                        method = getattr(self.monitor_window, method_name, None)
+                        if callable(method):
+                            method()
+                    return True
+                except Exception:
+                    self.monitor_window = None
+            self.monitor_window = webview.create_window(
+                "Kabuki-Cord Scanner Monitor",
+                f"{self.base_url}/monitor.html",
+                width=860,
+                height=820,
+                min_size=(720, 620),
+            )
+            return True
+        except Exception:
+            return False
 
 
 class GUID(ctypes.Structure):
@@ -145,7 +173,7 @@ def main() -> None:
             width=1440,
             height=980,
             min_size=(1180, 720),
-            js_api=DesktopBridge(),
+            js_api=DesktopBridge(url),
         )
         webview.start(icon=str(icon_path) if icon_path.exists() else None)
         _ = window

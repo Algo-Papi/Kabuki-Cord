@@ -6,7 +6,7 @@ This is the replacement checklist for animated and sprite-like visual assets cur
 
 | Asset | Purpose | Used by |
 | --- | --- | --- |
-| `web/assets/monitor_spy_frames/frame_000.png` through `frame_047.png` | Scanner Monitor popup activity animation: kabuki actor sneaks between buildings, drops mail, and peeks into windows. | `web/monitor.html`, `web/monitor.js`, `web/monitor.css` |
+| `web/assets/monitor_spy_frames/frame_000.png` through `frame_005.png` | Scanner Monitor popup activity animation: generated high-resolution keyframes of the kabuki actor sneaking through Japanese alleys, dropping mail, scanning with a magnifying glass, peeking into a shoji window from behind, and looping out of frame. | `web/monitor.html`, `web/monitor.js`, `web/monitor.css` |
 | `web/assets/scanner-kabuki-sheet.png` | Default topbar operation/status sprite, including idle/working/scanning fallback. | `web/styles.css`, `web/app.js` |
 | `web/assets/scanner-kabuki-sync-sheet.png` | Topbar animation while syncing Discord servers/channels. | `web/styles.css`, `web/app.js` |
 | `web/assets/scanner-kabuki-repair-sheet.png` | Topbar animation while repairing/reloading a server channel list. | `web/styles.css`, `web/app.js` |
@@ -45,6 +45,6 @@ This is the replacement checklist for animated and sprite-like visual assets cur
 
 | Script | Output |
 | --- | --- |
-| `scripts/generate_monitor_spy_frames.py` | Regenerates the high-resolution frame-by-frame Scanner Monitor animation from `web/assets/source/kabuki-actor-reference.png`. |
+| `scripts/generate_monitor_spy_frames.py` | Legacy deterministic compositor for the Scanner Monitor animation. The current active frames were generated as individual imagegen keyframes instead. |
 | `scripts/generate_spy_story_sprite.py` | Generates the legacy single-sheet Scanner Monitor animation. |
 | `scripts/generate_discord_blocked_sprite.py` | Regenerates `scanner-kabuki-discord-blocked-sheet.png`. |

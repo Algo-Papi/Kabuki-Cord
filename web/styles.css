@@ -551,6 +551,11 @@ textarea:disabled {
   cursor: pointer;
 }
 
+.ghost-button {
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--muted);
+}
+
 .primary-button {
   border-color: rgba(149, 101, 255, 0.55);
   background: linear-gradient(135deg, var(--purple), var(--purple-2));
@@ -2134,14 +2139,16 @@ button:disabled {
 .reply-watch-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
 }
 
 .reply-watch-card {
   border: 1px solid rgba(239, 107, 120, 0.22);
   border-radius: 8px;
-  background: rgba(239, 107, 120, 0.055);
-  padding: 10px;
+  background:
+    linear-gradient(180deg, rgba(239, 107, 120, 0.07), rgba(255, 255, 255, 0.025)),
+    #111820;
+  padding: 12px;
 }
 
 .reply-watch-head {
@@ -2151,7 +2158,13 @@ button:disabled {
   gap: 10px;
 }
 
-.reply-watch-head strong {
+.reply-watch-person {
+  min-width: 0;
+}
+
+.reply-watch-head strong,
+.reply-watch-person strong {
+  display: block;
   min-width: 0;
   color: #fff;
   font-size: 13px;
@@ -2160,7 +2173,9 @@ button:disabled {
   white-space: nowrap;
 }
 
-.reply-watch-head span,
+.reply-watch-head time,
+.reply-watch-person span,
+.reply-watch-channel,
 .reply-watch-context span,
 .reply-watch-context small {
   color: var(--muted);
@@ -2168,11 +2183,21 @@ button:disabled {
   line-height: 1.35;
 }
 
-.reply-watch-card p {
-  margin: 8px 0;
+.reply-watch-head time {
+  flex: 0 0 auto;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.reply-watch-channel {
+  margin-top: 4px;
+}
+
+.reply-watch-message {
+  margin: 9px 0;
   color: #dce7ef;
-  font-size: 12px;
-  line-height: 1.45;
+  font-size: 13px;
+  line-height: 1.48;
   overflow-wrap: anywhere;
 }
 
@@ -2185,8 +2210,22 @@ button:disabled {
 
 .reply-watch-actions {
   display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+.reply-watch-actions .small-button {
+  justify-content: center;
+  min-width: 0;
+  width: 100%;
+  padding-inline: 10px;
+}
+
+.reply-watch-action-row {
+  display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
+  min-width: 0;
 }
 
 .preview-panel {
@@ -2212,6 +2251,17 @@ button:disabled {
 .preview-tab.active {
   color: #fff;
   border-color: var(--purple);
+}
+
+.event-filter {
+  max-width: 150px;
+  min-height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text);
+  padding: 6px 8px;
+  font-size: 12px;
 }
 
 .event-badge {
@@ -2266,6 +2316,11 @@ button:disabled {
 
 .event-card.sent {
   border-color: rgba(95, 201, 120, 0.34);
+}
+
+.event-card.reaction {
+  border-color: rgba(126, 216, 255, 0.34);
+  background: rgba(126, 216, 255, 0.045);
 }
 
 .event-card.failed {

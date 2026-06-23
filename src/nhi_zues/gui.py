@@ -161,6 +161,14 @@ class GuiHandler(BaseHTTPRequestHandler):
             except RuntimeError as exc:
                 self._json({"ok": False, "error": str(exc)}, status=400)
             return
+        if parsed.path == "/api/unresponded-dismiss":
+            try:
+                dismissed = dismiss_unresponded_replies(body)
+            except ValueError as exc:
+                self._json({"ok": False, "error": str(exc)}, status=400)
+                return
+            self._json({"ok": True, "dismissed": dismissed, "state": app_state()})
+            return
         if parsed.path == "/api/settings":
             try:
                 update_env(body)
@@ -1553,10 +1561,68 @@ def recent_posters_state(path: Path) -> dict:
     return result
 
 
-def unresponded_replies_state(config: AppConfig) -> dict:
+def dismiss_unresponded_replies(body: dict) -> int:
+    config = load_config()
+    path = config.state_dir / "dismissed_unresponded.json"
+    payload = _read_json(path, default={"message_ids": []})
+    existing = {
+        str(message_id)
+        for message_id in payload.get("message_ids", [])
+        if str(message_id).strip()
+    }
+    raw_message_ids = body.get("message_ids", [])
+    if isinstance(raw_message_ids, str):
+        raw_message_ids = [raw_message_ids]
+    if not isinstance(raw_message_ids, list):
+        raw_message_ids = []
+    requested = {
+        str(message_id)
+        for message_id in raw_message_ids
+        if str(message_id).strip()
+    }
+    single_id = str(body.get("message_id") or "").strip()
+    if single_id:
+        requested.add(single_id)
+    if body.get("all"):
+        requested.update(
+            str(item.get("message_id") or "")
+            for item in unresponded_replies_state(config, include_dismissed=True).get("items", [])
+            if str(item.get("message_id") or "").strip()
+        )
+    if not requested and body.get("all"):
+        return 0
+    if not requested:
+        raise ValueError("No unresponded reply id was provided.")
+
+    next_ids = sorted(existing | requested)
+    _write_json(
+        path,
+        {
+            "message_ids": next_ids,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+    EventLog(config.state_dir / "events.json").add(
+        event_type="unresponded_reply_dismissed",
+        server_id=str(body.get("server_id") or ""),
+        channel_id=str(body.get("channel_id") or ""),
+        summary=f"Dismissed {len(requested)} unresponded reply notification(s).",
+    )
+    return len(requested)
+
+
+def unresponded_replies_state(config: AppConfig, *, include_dismissed: bool = False) -> dict:
     memory_payload = _read_json(config.state_dir / "memory.json", default={"channels": {}})
     server_labels, channel_labels = _approval_config_indexes(config.servers_file)
     store = CharacterCardStore(config.character_dir, config.character_card)
+    dismissed_ids: set[str] = set()
+    if not include_dismissed:
+        dismissed_payload = _read_json(config.state_dir / "dismissed_unresponded.json", default={"message_ids": []})
+        dismissed_ids = {
+            str(message_id)
+            for message_id in dismissed_payload.get("message_ids", [])
+            if str(message_id).strip()
+        }
     items: list[dict] = []
     by_server: dict[str, int] = {}
     by_channel: dict[str, int] = {}
@@ -1585,6 +1651,9 @@ def unresponded_replies_state(config: AppConfig) -> dict:
                 hours=0.75,
             )
             if not explicit_mention and not adjacent_reply:
+                continue
+            message_id = str(row.get("message_id") or "")
+            if message_id and message_id in dismissed_ids:
                 continue
             preview = _message_preview(row)
             channel_meta = channel_labels.get(str(channel_id), {})

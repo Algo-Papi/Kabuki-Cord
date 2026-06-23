@@ -460,14 +460,24 @@
           </section>
 
           <section class="preview-block">
-            <div class="section-title">Activity Feed</div>
+            <div class="section-title with-action">
+              <span>Activity Feed</span>
+              <select id="eventFilter" class="event-filter" title="Filter event feed">
+                <option value="all">All events</option>
+                <option value="reactions">Reaction events</option>
+                <option value="reaction_added">Reactions made</option>
+              </select>
+            </div>
             <div id="eventFeed" class="event-feed"></div>
           </section>
         </div>
 
         <div id="repliesMode" class="preview-mode">
           <section class="preview-block">
-            <div class="section-title">Unresponded Mentions</div>
+            <div class="section-title with-action">
+              <span>Unresponded Mentions</span>
+              <button id="dismissAllReplies" class="small-button" type="button"><i class="bi bi-check2-circle"></i> Dismiss All</button>
+            </div>
             <div id="unrespondedReplies" class="reply-watch-list"></div>
           </section>
         </div>

@@ -1,7 +1,8 @@
-{
-  "frame_count": 48,
-  "frame_ms": 180,
-  "width": 960,
-  "height": 720,
-  "source": "../source/kabuki-actor-reference.png"
+﻿{
+    "frame_count":  6,
+    "frame_ms":  900,
+    "width":  1448,
+    "height":  1086,
+    "source":  "../source/kabuki-actor-reference.png",
+    "generation":  "built-in image_gen individual keyframes, 2026-06-23"
 }
