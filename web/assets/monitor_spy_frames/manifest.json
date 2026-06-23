@@ -1,6 +1,6 @@
 ﻿{
     "frame_count":  6,
-    "frame_ms":  900,
+    "frame_ms":  3000,
     "width":  1448,
     "height":  1086,
     "source":  "../source/kabuki-actor-reference.png",

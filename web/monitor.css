@@ -135,14 +135,56 @@ h1 {
 .stage-transition {
   z-index: 4;
   opacity: 0;
+  overflow: hidden;
   background:
-    linear-gradient(90deg, transparent 0 15%, rgba(178, 43, 58, 0.88) 15% 20%, transparent 20% 34%, rgba(11, 13, 18, 0.78) 34% 40%, transparent 40% 58%, rgba(178, 43, 58, 0.78) 58% 64%, transparent 64% 100%),
-    radial-gradient(circle at 50% 50%, rgba(243, 211, 129, 0.22), transparent 45%);
-  transform: translateX(-110%);
+    linear-gradient(90deg, transparent 0 34%, rgba(5, 7, 12, 0.58) 42%, rgba(77, 39, 92, 0.42) 50%, rgba(5, 7, 12, 0.58) 58%, transparent 66%),
+    linear-gradient(110deg, transparent 0 46%, rgba(178, 43, 58, 0.38) 47% 49%, transparent 51% 100%);
+}
+
+.stage-transition::before,
+.stage-transition::after {
+  content: "";
+  position: absolute;
+  top: 51%;
+  pointer-events: none;
+}
+
+.stage-transition::before {
+  left: -180px;
+  width: 148px;
+  height: 82px;
+  background:
+    radial-gradient(circle at 74% 22%, #111723 0 11px, transparent 12px),
+    radial-gradient(circle at 78% 22%, rgba(178, 43, 58, 0.95) 0 2px, transparent 3px),
+    radial-gradient(ellipse at 58% 48%, #05070b 0 31px, transparent 32px),
+    linear-gradient(20deg, transparent 0 38%, #05070b 39% 54%, transparent 55% 100%),
+    linear-gradient(150deg, transparent 0 42%, #05070b 43% 55%, transparent 56% 100%);
+  clip-path: polygon(7% 56%, 24% 34%, 42% 26%, 55% 6%, 72% 13%, 84% 34%, 100% 45%, 86% 55%, 66% 49%, 56% 70%, 38% 84%, 40% 62%, 20% 76%);
+  filter: drop-shadow(0 0 12px rgba(149, 101, 255, 0.38));
+  transform: translateY(-50%) scale(1);
+}
+
+.stage-transition::after {
+  left: -260px;
+  width: 240px;
+  height: 94px;
+  background:
+    linear-gradient(90deg, transparent, rgba(5, 7, 12, 0.82) 58%, rgba(149, 101, 255, 0.32) 74%, transparent),
+    repeating-linear-gradient(92deg, transparent 0 17px, rgba(244, 221, 150, 0.42) 18px 20px, transparent 21px 34px);
+  clip-path: polygon(0 42%, 76% 0, 100% 50%, 76% 100%, 0 58%);
+  transform: translateY(-50%);
 }
 
 .stage-transition.active {
-  animation: curtain-sweep 760ms cubic-bezier(0.18, 0.82, 0.2, 1) forwards;
+  animation: ninja-field 1650ms cubic-bezier(0.18, 0.78, 0.18, 1) forwards;
+}
+
+.stage-transition.active::before {
+  animation: ninja-runner 1650ms cubic-bezier(0.16, 0.78, 0.17, 1) forwards;
+}
+
+.stage-transition.active::after {
+  animation: ninja-trail 1650ms cubic-bezier(0.16, 0.78, 0.17, 1) forwards;
 }
 
 .stage-glints {
@@ -155,12 +197,12 @@ h1 {
 }
 
 .spy-scene.transitioning .stage-glints {
-  animation: glint-pop 760ms ease-out forwards;
+  animation: glint-pop 1650ms ease-out forwards;
 }
 
 .scan-board {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
   padding: 14px;
 }
@@ -181,6 +223,11 @@ h1 {
 .scan-card.completed {
   border-color: rgba(95, 201, 120, 0.26);
   background: rgba(95, 201, 120, 0.06);
+}
+
+.scan-card.pace {
+  border-color: rgba(244, 221, 150, 0.26);
+  background: rgba(244, 221, 150, 0.055);
 }
 
 .scan-card strong,
@@ -366,20 +413,46 @@ h1 {
   animation-delay: 480ms;
 }
 
-@keyframes curtain-sweep {
+@keyframes ninja-field {
   0% {
     opacity: 0;
-    transform: translateX(-105%) skewX(-10deg);
   }
-  22% {
+  20%,
+  72% {
     opacity: 1;
-  }
-  58% {
-    opacity: 0.92;
   }
   100% {
     opacity: 0;
-    transform: translateX(105%) skewX(-10deg);
+  }
+}
+
+@keyframes ninja-runner {
+  0% {
+    transform: translate(-170px, -50%) scale(0.9) skewX(-7deg);
+  }
+  36% {
+    transform: translate(calc(50vw - 74px), -53%) scale(1.08) skewX(4deg);
+  }
+  68% {
+    transform: translate(calc(78vw - 74px), -48%) scale(1) skewX(-3deg);
+  }
+  100% {
+    transform: translate(calc(100vw + 180px), -50%) scale(0.92) skewX(-8deg);
+  }
+}
+
+@keyframes ninja-trail {
+  0% {
+    opacity: 0;
+    transform: translate(-240px, -50%) scaleX(0.72);
+  }
+  22%,
+  74% {
+    opacity: 0.9;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(calc(100vw + 200px), -50%) scaleX(0.95);
   }
 }
 
@@ -447,5 +520,20 @@ h1 {
   .monitor-toast img {
     width: 56px;
     height: 56px;
+  }
+}
+
+@media (max-width: 900px) and (min-width: 681px) {
+  .scan-board {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stage-transition.active,
+  .stage-transition.active::before,
+  .stage-transition.active::after,
+  .spy-scene.transitioning .stage-glints {
+    animation-duration: 1ms;
   }
 }

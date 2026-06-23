@@ -10,7 +10,7 @@ This is the replacement checklist for animated and sprite-like visual assets cur
 | `web/assets/scanner-kabuki-sheet.png` | Default topbar operation/status sprite, including idle/working/scanning fallback. | `web/styles.css`, `web/app.js` |
 | `web/assets/scanner-kabuki-sync-sheet.png` | Topbar animation while syncing Discord servers/channels. | `web/styles.css`, `web/app.js` |
 | `web/assets/scanner-kabuki-repair-sheet.png` | Topbar animation while repairing/reloading a server channel list. | `web/styles.css`, `web/app.js` |
-| `web/assets/scanner-kabuki-backfill-sheet.png` | Topbar animation while backfilling older channel history. | `web/styles.css`, `web/app.js` |
+| `web/assets/scanner-kabuki-backfill-sheet.png` | Upgraded 8-frame, 256px-source topbar animation while backfilling older channel history: the actor pulls a ledger from a wooden archive shelf, indexes it, files it back, and settles into a loop. | `web/styles.css`, `web/app.js` |
 | `web/assets/scanner-kabuki-latest-sheet.png` | Topbar animation while refreshing the latest visible messages. | `web/styles.css`, `web/app.js` |
 | `web/assets/scanner-kabuki-refresh-sheet.png` | Topbar animation while refreshing local app state. | `web/styles.css`, `web/app.js` |
 | `web/assets/scanner-kabuki-posting-sheet.png` | Topbar animation while posting an approved reply. | `web/styles.css`, `web/app.js` |
@@ -25,6 +25,8 @@ This is the replacement checklist for animated and sprite-like visual assets cur
 | Asset | Purpose | Used by |
 | --- | --- | --- |
 | `web/assets/source/kabuki-actor-reference.png` | High-resolution actor reference for regenerating upgraded sprite frames. | `scripts/generate_monitor_spy_frames.py` |
+| `web/assets/source/kabuki-bookcase-reference.png` | High-resolution bookcase/backfill reference used for the upgraded Backfill action sprite. | Source/reference asset |
+| `web/assets/source/backfill_keyframes/frame_000.png` through `frame_007.png` | Cleaned transparent keyframes used to assemble the upgraded Backfill topbar sprite sheet. | Source/reference asset |
 | `web/assets/runtime-mask-pixel.png` | Small pixel mask icon in the runtime footer. | `web/index.html` |
 | `web/assets/monitor-arigato-sprite.png` | Monitor-only success notification sprite for posted/delivered replies. | `web/monitor.js`, `web/monitor.css` |
 | `web/assets/app-icon-*.png`, `web/assets/app-icon.png` | Window/fav/taskbar app icons at multiple sizes. | `web/index.html`, packaging/runtime shell |
@@ -49,3 +51,27 @@ This is the replacement checklist for animated and sprite-like visual assets cur
 | `scripts/generate_monitor_spy_frames.py` | Legacy deterministic compositor for the Scanner Monitor animation. The current active frames were generated as individual imagegen keyframes instead. |
 | `scripts/generate_spy_story_sprite.py` | Generates the legacy single-sheet Scanner Monitor animation. |
 | `scripts/generate_discord_blocked_sprite.py` | Regenerates `scanner-kabuki-discord-blocked-sheet.png`. |
+
+## Scanner Timing Defaults
+
+The Scanner Monitor now displays the active pace in its Pace card. With default environment values, Kabuki-Cord scans `1` channel per cycle, rests for `45s`, then checks the next due channel. The `12-35s` per-channel delay only becomes visible between channels when `NHI_ZUES_SCANNER_MAX_CHANNELS_PER_CYCLE` is raised above `1`.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `NHI_ZUES_SCANNER_MAX_CHANNELS_PER_CYCLE` | `1` | Number of enabled channels visited before the scanner rests. |
+| `NHI_ZUES_SCANNER_CYCLE_SLEEP_SECONDS` | `45` | Idle/rest period after a scan cycle. |
+| `NHI_ZUES_SCANNER_MIN_CHANNEL_DELAY_SECONDS` | `12` | Minimum human-paced delay between channels inside one cycle. |
+| `NHI_ZUES_SCANNER_MAX_CHANNEL_DELAY_SECONDS` | `35` | Maximum human-paced delay between channels inside one cycle. |
+
+## Upgrade Standard
+
+New action sprites should use the HD kabuki actor style from `web/assets/source/kabuki-actor-reference.png`: readable white/red mask, black hair mass, dark robe with red/purple trim, scarf/sleeve movement, and clear body-weight changes. Do not ship static-pose sprites with only an icon pasted over the actor.
+
+Recommended replacement order:
+
+1. `mode-kabuki-dry-sheet.png`, `mode-kabuki-full-auto-sheet.png`, `mode-kabuki-semi-auto-sheet.png`, `mode-kabuki-live-fire-sheet.png` because they render large in the mode transition overlay.
+2. `scanner-kabuki-sheet.png`, `scanner-kabuki-posting-sheet.png`, `scanner-kabuki-discord-blocked-sheet.png` because they are the most visible day-to-day runtime states.
+3. `scanner-kabuki-sync-sheet.png`, `scanner-kabuki-repair-sheet.png`, `scanner-kabuki-latest-sheet.png`, `scanner-kabuki-refresh-sheet.png`.
+4. `scanner-kabuki-backfill-sheet.png` is already upgraded as the first pass, but can be refined later with hand-painted in-betweens if needed.
+
+For upgraded topbar sheets, prefer 256px source frames and a CSS-specific frame count/duration rather than forcing every animation into the legacy 20-frame, 128px-source path. For the larger mode transition overlay, use at least 256px source frames and export at the display scale or higher.

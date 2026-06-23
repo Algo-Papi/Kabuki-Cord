@@ -86,7 +86,7 @@ function advanceSpyFrame() {
   setTimeout(() => {
     scene?.classList.remove("transitioning");
     transition?.classList.remove("active");
-  }, 760);
+  }, 1650);
 }
 
 function render(state) {
@@ -107,6 +107,7 @@ function render(state) {
   });
   renderCompleted(scan.last_completed);
   renderUpcoming(scan.upcoming || []);
+  renderPace(state);
   renderCountdowns();
 }
 
@@ -138,12 +139,14 @@ function renderCountdowns() {
     $("currentCountdown").textContent = formatCountdown(Number(scan.current_estimated_done_at || 0) - now);
   }
 
+  const nextAt = Number(scan.next_scan_at || 0);
+  renderIdleCountdown(running, scan, now, nextAt);
+
   if (!running) {
     $("nextCountdownLabel").textContent = "Next scan";
     $("nextCountdown").textContent = "--";
     return;
   }
-  const nextAt = Number(scan.next_scan_at || 0);
   if (!nextAt) {
     $("nextCountdownLabel").textContent = scan.status === "scanning" ? "Queued after" : "Next scan";
     $("nextCountdown").textContent = scan.next ? "soon" : "--";
@@ -151,6 +154,44 @@ function renderCountdowns() {
   }
   $("nextCountdownLabel").textContent = scan.next ? "Next channel" : "Next check";
   $("nextCountdown").textContent = formatCountdown(nextAt - now);
+}
+
+function renderIdleCountdown(running, scan, now, nextAt) {
+  const idleCountdown = $("idleCountdown");
+  const idleLabel = $("idleCountdownLabel");
+  if (!idleCountdown || !idleLabel) return;
+  if (!running) {
+    idleLabel.textContent = "Idle rest";
+    idleCountdown.textContent = "--";
+  } else if (scan.status === "scanning") {
+    idleLabel.textContent = "Rest after";
+    idleCountdown.textContent = formatSeconds(appConfigNumber("scanner_cycle_sleep_seconds"));
+  } else if (nextAt) {
+    idleLabel.textContent = scan.next ? "Until channel" : "Idle rest";
+    idleCountdown.textContent = formatCountdown(nextAt - now);
+  } else {
+    idleLabel.textContent = "Idle rest";
+    idleCountdown.textContent = "--";
+  }
+}
+
+function renderPace(state) {
+  const app = state.app || {};
+  const runtime = state.runtime || {};
+  const scan = runtime.scan || {};
+  const maxChannels = Number(app.scanner_max_channels_per_cycle || 1);
+  const cycleRest = Number(app.scanner_cycle_sleep_seconds || 45);
+  const minDelay = Number(app.scanner_min_channel_delay_seconds || 12);
+  const maxDelay = Number(app.scanner_max_channel_delay_seconds || 35);
+  const target = $("idleTarget");
+  const detail = $("idleDetail");
+  if (!target || !detail) return;
+  target.textContent = runtime.running
+    ? scan.status === "scanning"
+      ? "Scanning now"
+      : "Between channels"
+    : "Paused";
+  detail.textContent = `${maxChannels} channel${maxChannels === 1 ? "" : "s"}/cycle, ${formatSeconds(cycleRest)} rest, ${formatDelayRange(minDelay, maxDelay)} channel delay`;
 }
 
 function renderCompleted(target) {
@@ -247,6 +288,26 @@ function formatCountdown(seconds) {
   const remainder = rounded % 60;
   if (minutes <= 0) return `${remainder}s`;
   return `${minutes}m ${String(remainder).padStart(2, "0")}s`;
+}
+
+function formatSeconds(seconds) {
+  const value = Number(seconds);
+  if (!Number.isFinite(value)) return "--";
+  if (value < 60) return `${Math.round(value)}s`;
+  const minutes = Math.floor(value / 60);
+  const remainder = Math.round(value % 60);
+  return remainder ? `${minutes}m ${String(remainder).padStart(2, "0")}s` : `${minutes}m`;
+}
+
+function formatDelayRange(minDelay, maxDelay) {
+  if (!Number.isFinite(minDelay) || !Number.isFinite(maxDelay)) return "--";
+  if (Math.round(minDelay) === Math.round(maxDelay)) return `${Math.round(minDelay)}s`;
+  return `${Math.round(minDelay)}-${Math.round(maxDelay)}s`;
+}
+
+function appConfigNumber(key) {
+  const value = Number(latestState?.app?.[key]);
+  return Number.isFinite(value) ? value : 0;
 }
 
 function truncate(value, maxLength) {
