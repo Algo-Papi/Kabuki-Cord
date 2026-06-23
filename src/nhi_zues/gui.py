@@ -737,6 +737,7 @@ def app_state() -> dict:
             "writing_mistake_rate": config.writing_mistake_rate,
             "writing_quirk": config.writing_quirk,
             "writing_misspellings": config.writing_misspellings,
+            "reaction_max_per_channel": config.reaction_max_per_channel,
             "typing_indicator_enabled": config.typing_indicator_enabled,
             "typing_min_seconds": config.typing_min_seconds,
             "typing_max_seconds": config.typing_max_seconds,
@@ -789,6 +790,7 @@ def app_state() -> dict:
             "NHI_ZUES_SCANNER_CYCLE_SLEEP_SECONDS": env.get("NHI_ZUES_SCANNER_CYCLE_SLEEP_SECONDS", "45"),
             "NHI_ZUES_SCANNER_MIN_CHANNEL_DELAY_SECONDS": env.get("NHI_ZUES_SCANNER_MIN_CHANNEL_DELAY_SECONDS", "12"),
             "NHI_ZUES_SCANNER_MAX_CHANNEL_DELAY_SECONDS": env.get("NHI_ZUES_SCANNER_MAX_CHANNEL_DELAY_SECONDS", "35"),
+            "NHI_ZUES_REACTION_MAX_PER_CHANNEL": env.get("NHI_ZUES_REACTION_MAX_PER_CHANNEL", "2"),
         },
         "servers": _read_json(config.servers_file, default={"servers": []}),
         "characters": character_cards(config.character_dir),
@@ -2682,6 +2684,7 @@ def update_env(values: dict) -> None:
         "NHI_ZUES_SCANNER_CYCLE_SLEEP_SECONDS",
         "NHI_ZUES_SCANNER_MIN_CHANNEL_DELAY_SECONDS",
         "NHI_ZUES_SCANNER_MAX_CHANNEL_DELAY_SECONDS",
+        "NHI_ZUES_REACTION_MAX_PER_CHANNEL",
     }
     for key, value in values.items():
         if key not in allowed:

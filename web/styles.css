@@ -1019,6 +1019,12 @@ textarea:disabled {
   --mode-sheet: url("/assets/mode-kabuki-dry-sheet.png");
 }
 
+.mode-transition.mode-dry .mode-transition-sprite {
+  background-size: 2080px 208px;
+  image-rendering: auto;
+  animation: mode-dry-dust-run 2.15s steps(10, end) forwards;
+}
+
 .mode-transition.mode-dry::before {
   background:
     radial-gradient(circle at 52% 54%, rgba(233, 129, 52, 0.2), transparent 24%),
@@ -1170,6 +1176,12 @@ textarea:disabled {
 @keyframes mode-sprite-run {
   to {
     background-position: -4160px 0;
+  }
+}
+
+@keyframes mode-dry-dust-run {
+  to {
+    background-position: -2080px 0;
   }
 }
 

@@ -61,6 +61,17 @@ If Engage is off:
 - No approval is queued.
 - No autonomous post happens.
 
+### React
+
+React means observed messages can receive a capped lightweight emoji reaction when the text has a clear cue, such as an obvious joke, agreement, thanks, or a notably weird claim.
+
+If React is on and Observe is on:
+
+- The channel can receive reactions even when Engage is off.
+- Reactions are still blocked by Dry-run mode.
+- Each channel scan is capped by `NHI_ZUES_REACTION_MAX_PER_CHANNEL`, which defaults to `2`.
+- The reaction ledger prevents repeating the same emoji on the same Discord message.
+
 ### Auto
 
 Auto allows proactive, approval-required opportunities to be sent without manual approval when live sending is otherwise allowed.
@@ -144,7 +155,7 @@ If a budget blocks a draft:
 
 | Mode | Observe | Engage | Dry-run | Auto | What can happen |
 | --- | --- | --- | --- | --- | --- |
-| Passive memory | On | Off | Any | Off | Reads and remembers only. No drafts. No posts. |
+| Passive memory | On | Off | Any | Off | Reads and remembers only. No drafts. No posts. React can still run if enabled and dry-run is off. |
 | Safe drafting | On | On | On | Off | Reads, remembers, may draft if dry-run drafting is enabled. No posts. |
 | Approval-based live | On | On | Off | Off | Proactive drafts queue for approval. Approved drafts can post. Direct alias/name-cue replies may post live. |
 | Limited autonomous | On | On | Off | On | Proactive opportunities can post without approval in that channel. Direct alias/name-cue replies may also post. |

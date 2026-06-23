@@ -15,7 +15,7 @@ from .events import EventLog
 from .llm import ReplyPlanner
 from .memory import ConversationMemory
 from .reaction_ledger import ReactionLedger
-from .reactions import LAUGH_EMOJI, should_auto_laugh_react
+from .reactions import should_auto_react
 from .reply_ledger import ReplyLedger, duplicate_reply_message
 from .secrets import get_discord_credentials
 from .topics import TopicTracker
@@ -467,33 +467,38 @@ class NhiZuesRunner:
                 summary="React is enabled, but Dry Mode blocks Discord reactions.",
             )
             return set()
+        if self.config.reaction_max_per_channel <= 0:
+            return set()
 
+        reacted_message_ids: set[str] = set()
         for message in fresh:
+            if len(reacted_message_ids) >= self.config.reaction_max_per_channel:
+                break
+            should_react, emoji, reason = should_auto_react(message.text)
+            if not should_react:
+                continue
             if self.reaction_ledger.has_reacted(
                 channel_id=message.channel_id,
                 message_id=message.message_id,
-                emoji=LAUGH_EMOJI,
+                emoji=emoji,
             ):
                 continue
-            should_react, reason = should_auto_laugh_react(message.text)
-            if not should_react:
-                continue
             try:
-                result = await session.add_reaction(message.message_id, LAUGH_EMOJI)
+                result = await session.add_reaction(message.message_id, emoji)
             except Exception as exc:
                 self.events.add(
                     event_type="reaction_failed",
                     server_id=target.server_id,
                     channel_id=target.channel_id,
-                    summary=f"Could not add laugh reaction: {exc}",
+                    summary=f"Could not add {emoji} reaction: {exc}",
                     draft=message.text,
                 )
-                return set()
+                return reacted_message_ids
 
             self.reaction_ledger.record(
                 server_id=target.server_id,
                 message=message,
-                emoji=LAUGH_EMOJI,
+                emoji=emoji,
                 reason=reason,
             )
             self.events.add(
@@ -501,13 +506,13 @@ class NhiZuesRunner:
                 server_id=target.server_id,
                 channel_id=target.channel_id,
                 summary=(
-                    f"Added {LAUGH_EMOJI} reaction to {message.author}: "
+                    f"Added {emoji} reaction to {message.author}: "
                     f"{reason}; path={result.get('path') or 'existing'}."
                 ),
                 draft=message.text,
             )
-            return {message.message_id}
-        return set()
+            reacted_message_ids.add(message.message_id)
+        return reacted_message_ids
 
 
 def _without_own_messages(messages, *, character_names: tuple[str, ...]):

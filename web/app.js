@@ -201,7 +201,7 @@ function renderServerPanel() {
           <div class="channel-actions">
             <button class="icon-mini pin ${chan.pinned ? "on" : ""}" data-pin-channel="${index}" title="${chan.pinned ? "Unpin channel" : "Pin channel to top"}"><i class="bi bi-pin-angle${chan.pinned ? "-fill" : ""}"></i></button>
             <button class="pill-toggle observe ${chan.scan_enabled ? "on" : ""}" data-toggle="scan" data-channel="${index}">Observe</button>
-            <button class="pill-toggle react ${chan.react_enabled ? "on" : ""}" data-toggle="react" data-channel="${index}" title="Auto-add a laugh reaction to obvious jokes when not in Dry Mode. Works with Engage off as long as Observe is on.">React</button>
+            <button class="pill-toggle react ${chan.react_enabled ? "on" : ""}" data-toggle="react" data-channel="${index}" title="Auto-add capped lightweight reactions to clear jokes, agreement, thanks, or weird claims. Works with Engage off as long as Observe is on; Dry Mode blocks writes.">React</button>
             <button class="pill-toggle engage ${chan.engage_enabled ? "on" : ""}" data-toggle="engage" data-channel="${index}">Engage</button>
           </div>
         </div>
@@ -326,6 +326,7 @@ function renderSettings() {
   $("scannerCycleSleep").value = appState.env.NHI_ZUES_SCANNER_CYCLE_SLEEP_SECONDS || "45";
   $("scannerMinDelay").value = appState.env.NHI_ZUES_SCANNER_MIN_CHANNEL_DELAY_SECONDS || "12";
   $("scannerMaxDelay").value = appState.env.NHI_ZUES_SCANNER_MAX_CHANNEL_DELAY_SECONDS || "35";
+  $("reactionMaxPerChannel").value = appState.env.NHI_ZUES_REACTION_MAX_PER_CHANNEL || "2";
 }
 
 function renderModelOptions() {
@@ -421,7 +422,7 @@ function renderOnboardingSteps() {
       ready: engagedChannels > 0,
       body: engagedChannels
         ? `${engagedChannels} channel setting${engagedChannels === 1 ? "" : "s"} are enabled. Observe reads; Engage drafts. React is on for ${reactionChannels}.`
-        : "Turn on Observe for channels to track. React can laugh-react to obvious jokes; Engage allows draft decisions.",
+        : "Turn on Observe for channels to track. React can add capped light reactions; Engage allows draft decisions.",
     },
     {
       title: "6. Test safely",
@@ -1812,6 +1813,7 @@ async function saveAll() {
       NHI_ZUES_SCANNER_CYCLE_SLEEP_SECONDS: $("scannerCycleSleep").value,
       NHI_ZUES_SCANNER_MIN_CHANNEL_DELAY_SECONDS: $("scannerMinDelay").value,
       NHI_ZUES_SCANNER_MAX_CHANNEL_DELAY_SECONDS: $("scannerMaxDelay").value,
+      NHI_ZUES_REACTION_MAX_PER_CHANNEL: $("reactionMaxPerChannel").value,
     };
     if ($("apiKey").value.trim()) settings.OPENAI_API_KEY = $("apiKey").value.trim();
     await api("/api/servers", { method: "POST", body: JSON.stringify(appState.servers) });

@@ -6,26 +6,34 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from nhi_zues.reactions import should_auto_laugh_react, suggest_emoji_reaction
+from nhi_zues.reactions import (
+    APPRECIATION_EMOJI,
+    EYES_EMOJI,
+    LAUGH_EMOJI,
+    THUMBS_UP_EMOJI,
+    should_auto_laugh_react,
+    should_auto_react,
+    suggest_emoji_reaction,
+)
 
 
 class ReactionSuggestionTests(unittest.TestCase):
     def test_joke_gets_laugh_reaction(self) -> None:
         emoji, reason = suggest_emoji_reaction("that is such a dumb bit lmao")
 
-        self.assertEqual("😂", emoji)
+        self.assertEqual(LAUGH_EMOJI, emoji)
         self.assertIn("joke", reason)
 
     def test_agreement_gets_thumbs_up(self) -> None:
         emoji, reason = suggest_emoji_reaction("exactly, that is a fair point")
 
-        self.assertEqual("👍", emoji)
+        self.assertEqual(THUMBS_UP_EMOJI, emoji)
         self.assertIn("agreement", reason)
 
     def test_weird_claim_gets_eyes(self) -> None:
         emoji, reason = suggest_emoji_reaction("that is a bizarre detail and honestly wild")
 
-        self.assertEqual("👀", emoji)
+        self.assertEqual(EYES_EMOJI, emoji)
         self.assertIn("weird", reason)
 
     def test_auto_laugh_requires_strong_joke_marker(self) -> None:
@@ -35,6 +43,34 @@ class ReactionSuggestionTests(unittest.TestCase):
     def test_auto_laugh_ignores_plain_agreement(self) -> None:
         should_react, _reason = should_auto_laugh_react("exactly, that is a fair point")
         self.assertFalse(should_react)
+
+    def test_auto_react_handles_agreement(self) -> None:
+        should_react, emoji, reason = should_auto_react("exactly, that is a fair point")
+
+        self.assertTrue(should_react)
+        self.assertEqual(THUMBS_UP_EMOJI, emoji)
+        self.assertIn("agreement", reason)
+
+    def test_auto_react_handles_appreciation(self) -> None:
+        should_react, emoji, reason = should_auto_react("thanks, that was actually helpful")
+
+        self.assertTrue(should_react)
+        self.assertEqual(APPRECIATION_EMOJI, emoji)
+        self.assertIn("helpful", reason)
+
+    def test_auto_react_handles_weird_claim(self) -> None:
+        should_react, emoji, reason = should_auto_react("that whole account is bizarre and honestly wild")
+
+        self.assertTrue(should_react)
+        self.assertEqual(EYES_EMOJI, emoji)
+        self.assertIn("weird", reason)
+
+    def test_auto_react_ignores_low_signal_text(self) -> None:
+        should_react, emoji, reason = should_auto_react("ok")
+
+        self.assertFalse(should_react)
+        self.assertEqual("", emoji)
+        self.assertIn("low-signal", reason)
 
 
 if __name__ == "__main__":
