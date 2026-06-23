@@ -777,8 +777,8 @@ class DiscordWebSession:
         server_id: str,
         channel_id: str,
         *,
-        limit: int = 160,
-        scroll_rounds: int = 14,
+        limit: int = 320,
+        scroll_rounds: int = 30,
     ) -> list[MessageRecord]:
         await self.ensure_latest_messages_visible()
         seen: dict[str, MessageRecord] = {}
@@ -788,16 +788,34 @@ class DiscordWebSession:
         stable_rounds = 0
         last_count = len(seen)
         for _ in range(max(scroll_rounds, 1)):
+            oldest_before = await self._first_visible_message_id()
             at_top = await self._scroll_messages_up()
-            await self.page.wait_for_timeout(650)
+            if oldest_before:
+                try:
+                    await self.page.wait_for_function(
+                        """
+                        (oldest) => {
+                            const first = Array.from(document.querySelectorAll('[id^="chat-messages-"]'))
+                                .find((node) => /^chat-messages-\\d{5,}-\\d{5,}$/.test(node.id || ""));
+                            return first && first.id && first.id !== oldest;
+                        }
+                        """,
+                        oldest_before,
+                        timeout=1_400,
+                    )
+                except Exception:
+                    await self.page.wait_for_timeout(650)
+            else:
+                await self.page.wait_for_timeout(650)
             for message in await self._read_message_records_from_dom(server_id, channel_id):
                 seen[message.message_id] = message
-            if len(seen) == last_count:
+            oldest_after = await self._first_visible_message_id()
+            if len(seen) == last_count and oldest_after == oldest_before:
                 stable_rounds += 1
             else:
                 stable_rounds = 0
             last_count = len(seen)
-            if len(seen) >= limit or (at_top and stable_rounds >= 2):
+            if len(seen) >= limit or (at_top and stable_rounds >= 3) or stable_rounds >= 5:
                 break
 
         messages = sorted(seen.values(), key=_message_sort_value)
@@ -810,20 +828,43 @@ class DiscordWebSession:
                 const rows = [];
                 let lastAuthor = "";
                 let lastAuthorId = null;
-                for (const node of Array.from(document.querySelectorAll('[id^="chat-messages-"]'))) {
-                    const textNode = node.querySelector('[class*="messageContent"]');
-                    const header = node.querySelector('h3');
-                    const authorNode = header
-                        ? header.querySelector('[class*="username"], [class*="user-name"]')
-                        : null;
-                    const avatar = node.querySelector('img[class*="avatar_"][src*="/avatars/"]');
+                const ownMessageText = (node) => {
+                    const candidates = Array.from(node.querySelectorAll('[class*="messageContent"]'));
+                    return candidates.find((candidate) => {
+                        const quoted = candidate.closest(
+                            '[class*="repliedMessage"], [class*="repliedTextContent"], [class*="threadMessageAccessory"]'
+                        );
+                        return !quoted;
+                    }) || candidates.at(-1) || null;
+                };
+                const authorFrom = (node, header) => {
+                    const authorNode =
+                        node.querySelector('[id^="message-username-"]')
+                        || header?.querySelector('[class*="username"], [class*="user-name"], [data-text]')
+                        || null;
+                    return (authorNode?.getAttribute("data-text") || authorNode?.textContent || "").trim();
+                };
+                const avatarIdFrom = (node) => {
+                    const avatar = node.querySelector('img[src*="/avatars/"]');
                     const avatarMatch = avatar?.src?.match(/\\/avatars\\/(\\d+)\\//);
-                    const author = authorNode
-                        ? (authorNode.getAttribute("data-text") || authorNode.textContent || "").trim()
-                        : lastAuthor;
-                    const authorId = avatarMatch ? avatarMatch[1] : lastAuthorId;
-                    if (author) lastAuthor = author;
-                    if (authorId) lastAuthorId = authorId;
+                    return avatarMatch ? avatarMatch[1] : null;
+                };
+                for (const node of Array.from(document.querySelectorAll('[id^="chat-messages-"]'))) {
+                    if (!/^chat-messages-\\d{5,}-\\d{5,}$/.test(node.id || "")) continue;
+                    const textNode = ownMessageText(node);
+                    const header = node.querySelector('h3, [id^="message-username-"]');
+                    const authorNode = header
+                        ? header.querySelector('[class*="username"], [class*="user-name"], [data-text]')
+                        : null;
+                    const explicitAuthor = authorFrom(node, header);
+                    const explicitAuthorId = avatarIdFrom(node);
+                    const hasExplicitAuthor = Boolean(explicitAuthor || authorNode);
+                    const author = hasExplicitAuthor ? explicitAuthor : lastAuthor;
+                    const authorId = hasExplicitAuthor ? explicitAuthorId : lastAuthorId;
+                    if (hasExplicitAuthor && explicitAuthor) {
+                        lastAuthor = explicitAuthor;
+                        lastAuthorId = explicitAuthorId;
+                    }
                     rows.push({
                         id: node.id || "",
                         author,
@@ -852,16 +893,28 @@ class DiscordWebSession:
             await self.page.evaluate(
                 """
                 () => {
-                    const firstMessage = document.querySelector('[id^="chat-messages-"]');
-                    let scroller = firstMessage?.parentElement || null;
+                    const firstMessage = Array.from(document.querySelectorAll('[id^="chat-messages-"]'))
+                        .find((node) => /^chat-messages-\\d{5,}-\\d{5,}$/.test(node.id || ""));
+                    const isScrollable = (node) => {
+                        if (!node) return false;
+                        const style = window.getComputedStyle(node);
+                        return /(auto|scroll)/.test(style.overflowY || "")
+                            && node.scrollHeight > node.clientHeight + 20;
+                    };
+                    let scroller = firstMessage;
                     while (scroller && scroller !== document.body) {
-                        if (scroller.scrollHeight > scroller.clientHeight + 20) break;
+                        if (isScrollable(scroller)) break;
                         scroller = scroller.parentElement;
                     }
-                    if (!scroller || scroller === document.body) return true;
+                    if (!scroller || scroller === document.body) {
+                        const candidates = Array.from(document.querySelectorAll("main, section, div"))
+                            .filter((node) => isScrollable(node) && (!firstMessage || node.contains(firstMessage)));
+                        scroller = candidates.at(-1) || null;
+                    }
+                    if (!scroller) return true;
                     const before = scroller.scrollTop;
                     scroller.scrollTop = Math.max(
-                        scroller.scrollTop - Math.max(scroller.clientHeight * 0.85, 500),
+                        scroller.scrollTop - Math.max(scroller.clientHeight * 1.15, 800),
                         0
                     );
                     scroller.dispatchEvent(new Event("scroll", { bubbles: true }));
@@ -878,10 +931,17 @@ class DiscordWebSession:
             await self.page.evaluate(
                 """
                 () => {
-                    const firstMessage = document.querySelector('[id^="chat-messages-"]');
-                    let scroller = firstMessage?.parentElement || null;
+                    const firstMessage = Array.from(document.querySelectorAll('[id^="chat-messages-"]'))
+                        .find((node) => /^chat-messages-\\d{5,}-\\d{5,}$/.test(node.id || ""));
+                    const isScrollable = (node) => {
+                        if (!node) return false;
+                        const style = window.getComputedStyle(node);
+                        return /(auto|scroll)/.test(style.overflowY || "")
+                            && node.scrollHeight > node.clientHeight + 20;
+                    };
+                    let scroller = firstMessage;
                     while (scroller && scroller !== document.body) {
-                        if (scroller.scrollHeight > scroller.clientHeight + 20) {
+                        if (isScrollable(scroller)) {
                             scroller.scrollTop = scroller.scrollHeight;
                             break;
                         }
@@ -978,9 +1038,13 @@ class DiscordWebSession:
             """
             () => Array.from(document.querySelectorAll('[id^="chat-messages-"]'))
                 .map((node) => node.id || "")
-                .filter(Boolean)
+                .filter((id) => /^chat-messages-\\d{5,}-\\d{5,}$/.test(id))
             """
         )
+
+    async def _first_visible_message_id(self) -> str:
+        ids = await self._visible_message_ids()
+        return ids[0] if ids else ""
 
     async def _wait_for_sent_message(
         self,

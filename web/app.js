@@ -1230,7 +1230,7 @@ async function backfillChannelHistory() {
       body: JSON.stringify({
         server_id: currentServer.server_id,
         channel_id: currentChannel.channel_id,
-        limit: 160,
+        limit: 320,
       }),
     });
     appState = result.state;

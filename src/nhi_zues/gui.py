@@ -919,9 +919,9 @@ def backfill_channel_history(body: dict) -> dict:
     server_id = str(body.get("server_id") or "").strip()
     channel_id = str(body.get("channel_id") or "").strip()
     try:
-        limit = max(40, min(int(body.get("limit") or 160), 240))
+        limit = max(80, min(int(body.get("limit") or 320), 500))
     except (TypeError, ValueError):
-        limit = 160
+        limit = 320
     if not server_id or not channel_id:
         raise RuntimeError("Select a channel before backfilling history.")
 
@@ -939,7 +939,7 @@ def backfill_channel_history(body: dict) -> dict:
     finally:
         DISCORD_SESSION_LOCK.release()
 
-    memory = ConversationMemory(config.state_dir / "memory.json", max_messages_per_channel=max(limit, 160))
+    memory = ConversationMemory(config.state_dir / "memory.json", max_messages_per_channel=max(limit, 500))
     memory.load()
     fresh = memory.ingest(channel_id, messages)
     memory.save()

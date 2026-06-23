@@ -11,7 +11,7 @@ from .state_io import try_write_json_file
 
 
 class ConversationMemory:
-    def __init__(self, state_file: Path, *, max_messages_per_channel: int = 200) -> None:
+    def __init__(self, state_file: Path, *, max_messages_per_channel: int = 500) -> None:
         self.state_file = state_file
         self.max_messages_per_channel = max_messages_per_channel
         self._messages: dict[str, deque[MessageRecord]] = defaultdict(
@@ -77,16 +77,25 @@ class ConversationMemory:
 
     def ingest(self, channel_id: str, messages: list[MessageRecord]) -> list[MessageRecord]:
         fresh: list[MessageRecord] = []
+        touched_channels: set[str] = set()
         for message in messages:
             if message.message_id in self._seen_ids:
-                self._upgrade_seen_message(message)
+                if self._merge_seen_message(message):
+                    touched_channels.add(message.channel_id)
+                    continue
+                # A message can be present in seen_ids but missing from the retained
+                # channel bucket after older low-cap history runs. Rehydrate it so
+                # deeper backfills actually improve the visible conversation log.
+                self._messages[channel_id].append(message)
+                touched_channels.add(channel_id)
                 continue
             self._seen_ids.add(message.message_id)
             self._messages[channel_id].append(message)
             self._update_user_memory(message)
             fresh.append(message)
-        if messages:
-            self._sort_channel(channel_id)
+            touched_channels.add(channel_id)
+        for touched_channel in touched_channels:
+            self._sort_channel(touched_channel)
         return fresh
 
     def context(self, channel_id: str, *, limit: int = 20) -> list[MessageRecord]:
@@ -137,25 +146,20 @@ class ConversationMemory:
             summary=existing.summary,
         )
 
-    def _upgrade_seen_message(self, message: MessageRecord) -> None:
-        if not message.author_id:
-            return
-        for index, existing in enumerate(self._messages[message.channel_id]):
-            if existing.message_id != message.message_id or existing.author_id:
+    def _merge_seen_message(self, message: MessageRecord) -> bool:
+        bucket = self._messages.get(message.channel_id)
+        if not bucket:
+            return False
+
+        for index, existing in enumerate(bucket):
+            if existing.message_id != message.message_id:
                 continue
-            upgraded = MessageRecord(
-                server_id=message.server_id or existing.server_id,
-                channel_id=existing.channel_id,
-                message_id=existing.message_id,
-                author=message.author or existing.author,
-                author_id=message.author_id,
-                text=existing.text,
-                observed_at=existing.observed_at,
-            )
-            self._messages[message.channel_id][index] = upgraded
-            self._update_user_memory(upgraded)
-            self._sort_channel(message.channel_id)
-            return
+            merged = _best_message_record(existing, message)
+            if merged == existing:
+                return True
+            bucket[index] = merged
+            return True
+        return False
 
     def _sort_channel(self, channel_id: str) -> None:
         messages = self._messages.get(channel_id)
@@ -218,6 +222,40 @@ def _user_key(author: str, author_id: str | None = None) -> str:
 
 def _normalize_name(author: str) -> str:
     return " ".join(author.lower().strip().split())
+
+
+def _best_message_record(existing: MessageRecord, incoming: MessageRecord) -> MessageRecord:
+    server_id = incoming.server_id or existing.server_id
+    author = existing.author
+    author_id = existing.author_id
+    text = incoming.text or existing.text
+
+    incoming_author = str(incoming.author or "").strip()
+    existing_author = str(existing.author or "").strip()
+    incoming_author_known = bool(incoming_author) and incoming_author.lower() != "unknown"
+    existing_author_known = bool(existing_author) and existing_author.lower() != "unknown"
+
+    if incoming.author_id:
+        if incoming.author_id != existing.author_id:
+            author_id = incoming.author_id
+            if incoming_author_known:
+                author = incoming_author
+        elif incoming_author_known and (not existing_author_known or incoming_author != existing_author):
+            author = incoming_author
+    elif not existing.author_id and incoming_author_known and (
+        not existing_author_known or incoming_author != existing_author
+    ):
+        author = incoming_author
+
+    return MessageRecord(
+        server_id=server_id,
+        channel_id=existing.channel_id,
+        message_id=existing.message_id,
+        author=author,
+        author_id=author_id,
+        text=text,
+        observed_at=existing.observed_at,
+    )
 
 
 def _message_order_key(message: MessageRecord) -> tuple[int, str]:
