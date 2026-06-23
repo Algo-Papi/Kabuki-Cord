@@ -120,17 +120,13 @@ function renderRail() {
     .map((srv, index) => {
       const label = srv.label || `S${index + 1}`;
       const icon = srv.icon_path || srv.icon_url || "/assets/placeholders/server.svg";
-      const initials = label
-        .split(/\s+/)
-        .filter(Boolean)
-        .slice(0, 2)
-        .map((part) => part[0])
-        .join("")
-        .toUpperCase() || String(index + 1);
+      const railLabel = compactServerRailLabel(label, index);
       return `
         <button class="server-bubble ${index === selectedServer ? "active" : ""}" data-server="${index}" title="${escapeHtml(label)}">
-          <img src="${escapeAttr(icon)}" alt="" onerror="this.src='/assets/placeholders/server.svg'" />
-          <span>${escapeHtml(initials)}</span>
+          <span class="server-icon-frame">
+            <img src="${escapeAttr(icon)}" alt="" onerror="this.src='/assets/placeholders/server.svg'" />
+          </span>
+          <span class="server-bubble-label">${escapeHtml(railLabel)}</span>
         </button>
       `;
     })
@@ -142,6 +138,12 @@ function renderRail() {
       render();
     });
   });
+}
+
+function compactServerRailLabel(label, index) {
+  const cleaned = String(label || "").replace(/\s+/g, " ").trim();
+  if (!cleaned) return `Server ${index + 1}`.slice(0, 10);
+  return Array.from(cleaned).slice(0, 10).join("");
 }
 
 function renderServerPanel() {
@@ -1013,7 +1015,7 @@ async function saveAll() {
 
 async function syncDiscordServers() {
   const opId = "sync-discord";
-  startOperation(opId, "Syncing Discord", "Reading servers and channels", "discord", "bi-diagram-3");
+  startOperation(opId, "Syncing Discord", "Reading servers and channels", "sync", "bi-diagram-3");
   try {
     syncFormsToState();
     await api("/api/servers", { method: "POST", body: JSON.stringify(appState.servers) });
@@ -1041,7 +1043,7 @@ async function repairDiscordServer() {
   syncFormsToState();
   await api("/api/servers", { method: "POST", body: JSON.stringify(appState.servers) });
   const opId = `repair:${currentServer.server_id}`;
-  startOperation(opId, "Repairing channels", "Reading Discord channel list", "discord", "bi-wrench-adjustable");
+  startOperation(opId, "Repairing channels", "Reading Discord channel list", "repair", "bi-wrench-adjustable");
   toast("Repairing channel list...");
   try {
     const result = await api("/api/discord-repair-server", {
@@ -1141,7 +1143,7 @@ async function backfillChannelHistory() {
   const opId = `backfill:${currentChannel.channel_id}`;
   syncFormsToState();
   await api("/api/servers", { method: "POST", body: JSON.stringify(appState.servers) });
-  startOperation(opId, "Backfilling history", "Reading Discord channel history", "discord", "bi-clock-history");
+  startOperation(opId, "Backfilling history", "Reading Discord channel history", "backfill", "bi-clock-history");
   toast("Backfilling channel history...");
   try {
     const result = await api("/api/channel-backfill", {
@@ -1172,7 +1174,7 @@ async function refreshChannelLatest() {
   const opId = `latest:${currentChannel.channel_id}`;
   syncFormsToState();
   await api("/api/servers", { method: "POST", body: JSON.stringify(appState.servers) });
-  startOperation(opId, "Refreshing latest", "Reading visible Discord messages", "discord", "bi-arrow-clockwise");
+  startOperation(opId, "Refreshing latest", "Reading visible Discord messages", "latest", "bi-arrow-clockwise");
   toast("Refreshing latest messages...");
   try {
     const result = await api("/api/channel-refresh", {
@@ -1226,7 +1228,7 @@ async function refreshOpenAIModels() {
 
 async function refreshAppStateManual() {
   const opId = "state-refresh";
-  startOperation(opId, "Refreshing app state", "Reading local runtime files", "working", "bi-arrow-clockwise");
+  startOperation(opId, "Refreshing app state", "Reading local runtime files", "refresh", "bi-arrow-clockwise");
   try {
     await loadState();
     finishOperation(opId, "State refreshed", "done", "bi-check-circle");

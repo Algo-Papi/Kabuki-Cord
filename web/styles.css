@@ -70,7 +70,7 @@ button {
   flex-direction: column;
   align-items: center;
   gap: 14px;
-  padding: 14px 12px;
+  padding: 14px 9px;
   background: #0c1116;
 }
 
@@ -94,65 +94,94 @@ button {
 .server-list {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
   width: 100%;
   align-items: center;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 2px 0 6px;
+  scrollbar-width: none;
+}
+
+.server-list::-webkit-scrollbar {
+  display: none;
 }
 
 .server-bubble {
   position: relative;
-  display: grid;
-  place-items: center;
-  width: 52px;
-  height: 52px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 66px;
+  min-height: 76px;
   border: 1px solid transparent;
-  border-radius: 50%;
-  background: #242b34;
+  border-radius: 14px;
+  background: transparent;
   color: #e8edf2;
   cursor: pointer;
   font-weight: 800;
-  transition: border-color 160ms, border-radius 160ms, background 160ms;
-  overflow: hidden;
+  transition: border-color 160ms, background 160ms, transform 160ms;
+  overflow: visible;
+  padding: 2px 0 3px;
 }
 
 .server-bubble.active {
-  border-color: var(--purple);
-  border-radius: 18px;
-  background: #31264d;
+  border-color: rgba(143, 101, 255, 0.5);
+  background: rgba(143, 101, 255, 0.11);
+  transform: translateX(1px);
 }
 
 .server-bubble.active::before {
   content: "";
   position: absolute;
-  left: -13px;
+  left: 0;
+  top: 10px;
   width: 4px;
-  height: 32px;
+  height: 42px;
   border-radius: 0 4px 4px 0;
   background: var(--purple);
 }
 
-.server-bubble img {
-  position: absolute;
-  inset: 3px;
-  width: calc(100% - 6px);
-  height: calc(100% - 6px);
-  object-fit: contain;
-  opacity: 0.86;
-}
-
-.server-bubble span {
-  position: relative;
-  z-index: 1;
+.server-icon-frame {
   display: grid;
   place-items: center;
-  min-width: 25px;
-  min-height: 20px;
-  border-radius: 999px;
-  background: rgba(8, 12, 16, 0.62);
-  color: #fff;
-  font-size: 11px;
-  line-height: 1;
-  padding: 3px 5px;
+  width: 52px;
+  height: 52px;
+  border: 1px solid rgba(165, 184, 205, 0.16);
+  border-radius: 50%;
+  background: #242b34;
+  box-shadow: inset 0 0 0 3px rgba(8, 12, 16, 0.2);
+  overflow: hidden;
+}
+
+.server-bubble.active .server-icon-frame {
+  border-color: var(--purple);
+  border-radius: 18px;
+  background: #31264d;
+}
+
+.server-icon-frame img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  opacity: 0.95;
+}
+
+.server-bubble-label {
+  width: 62px;
+  color: #aebdcc;
+  font-size: 9px;
+  font-weight: 750;
+  line-height: 1.05;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: clip;
+}
+
+.server-bubble.active .server-bubble-label {
+  color: #f1edff;
 }
 
 .rail-add,
@@ -500,15 +529,36 @@ textarea:focus {
 }
 
 .scanner-sprite {
+  --scanner-sheet: url("/assets/scanner-kabuki-sheet.png");
   display: block;
   width: 60px;
   height: 60px;
   image-rendering: pixelated;
-  background-image: url("/assets/scanner-kabuki-sheet.png");
+  background-image: var(--scanner-sheet);
   background-repeat: no-repeat;
   background-position: 0 0;
   background-size: 960px 60px;
   filter: drop-shadow(0 2px 2px rgba(0, 0, 0, 0.44));
+}
+
+.scanner-sprite-sync {
+  --scanner-sheet: url("/assets/scanner-kabuki-sync-sheet.png");
+}
+
+.scanner-sprite-repair {
+  --scanner-sheet: url("/assets/scanner-kabuki-repair-sheet.png");
+}
+
+.scanner-sprite-backfill {
+  --scanner-sheet: url("/assets/scanner-kabuki-backfill-sheet.png");
+}
+
+.scanner-sprite-latest {
+  --scanner-sheet: url("/assets/scanner-kabuki-latest-sheet.png");
+}
+
+.scanner-sprite-refresh {
+  --scanner-sheet: url("/assets/scanner-kabuki-refresh-sheet.png");
 }
 
 .operation-status span,
@@ -530,7 +580,12 @@ textarea:focus {
 .operation-status.active,
 .operation-status.api,
 .operation-status.discord,
-.operation-status.working {
+.operation-status.working,
+.operation-status.sync,
+.operation-status.repair,
+.operation-status.backfill,
+.operation-status.latest,
+.operation-status.refresh {
   border-color: rgba(217, 185, 91, 0.35);
   background: rgba(217, 185, 91, 0.09);
   color: #f0dfa8;
@@ -539,7 +594,12 @@ textarea:focus {
 .operation-status.active i,
 .operation-status.api i,
 .operation-status.discord i,
-.operation-status.working i {
+.operation-status.working i,
+.operation-status.sync i,
+.operation-status.repair i,
+.operation-status.backfill i,
+.operation-status.latest i,
+.operation-status.refresh i {
   color: var(--yellow);
   animation: status-spin 1.2s linear infinite;
 }
@@ -547,8 +607,68 @@ textarea:focus {
 .operation-status.active .scanner-sprite,
 .operation-status.api .scanner-sprite,
 .operation-status.discord .scanner-sprite,
-.operation-status.working .scanner-sprite {
-  animation: scanner-dance 2.4s steps(16, end) infinite;
+.operation-status.working .scanner-sprite,
+.operation-status.sync .scanner-sprite,
+.operation-status.repair .scanner-sprite,
+.operation-status.backfill .scanner-sprite,
+.operation-status.latest .scanner-sprite,
+.operation-status.refresh .scanner-sprite {
+  animation: scanner-dance 4.2s steps(16, end) infinite;
+}
+
+.operation-status.sync {
+  border-color: rgba(89, 224, 239, 0.34);
+  background: rgba(89, 224, 239, 0.08);
+  color: #c6f7ff;
+}
+
+.operation-status.repair {
+  border-color: rgba(255, 181, 72, 0.38);
+  background: rgba(255, 181, 72, 0.1);
+  color: #ffe1a4;
+}
+
+.operation-status.backfill {
+  border-color: rgba(95, 166, 255, 0.36);
+  background: rgba(95, 166, 255, 0.08);
+  color: #d1e2ff;
+}
+
+.operation-status.latest {
+  border-color: rgba(255, 221, 100, 0.38);
+  background: rgba(255, 221, 100, 0.09);
+  color: #fff0ad;
+}
+
+.operation-status.refresh {
+  border-color: rgba(167, 116, 255, 0.36);
+  background: rgba(167, 116, 255, 0.1);
+  color: #dfd2ff;
+}
+
+.operation-status.sync .scanner-sprite {
+  animation-duration: 4.8s;
+  filter: drop-shadow(0 0 7px rgba(89, 224, 239, 0.28)) drop-shadow(0 2px 2px rgba(0, 0, 0, 0.44));
+}
+
+.operation-status.repair .scanner-sprite {
+  animation-duration: 4.4s;
+  filter: drop-shadow(0 0 7px rgba(255, 181, 72, 0.26)) drop-shadow(0 2px 2px rgba(0, 0, 0, 0.44));
+}
+
+.operation-status.backfill .scanner-sprite {
+  animation-duration: 4.9s;
+  filter: drop-shadow(0 0 7px rgba(95, 166, 255, 0.26)) drop-shadow(0 2px 2px rgba(0, 0, 0, 0.44));
+}
+
+.operation-status.latest .scanner-sprite {
+  animation-duration: 4.6s;
+  filter: drop-shadow(0 0 7px rgba(255, 221, 100, 0.24)) drop-shadow(0 2px 2px rgba(0, 0, 0, 0.44));
+}
+
+.operation-status.refresh .scanner-sprite {
+  animation-duration: 4.5s;
+  filter: drop-shadow(0 0 7px rgba(167, 116, 255, 0.28)) drop-shadow(0 2px 2px rgba(0, 0, 0, 0.44));
 }
 
 .operation-status.scanning {
@@ -562,7 +682,7 @@ textarea:focus {
 }
 
 .operation-status.scanning .scanner-sprite {
-  animation: scanner-dance 2.8s steps(16, end) infinite;
+  animation: scanner-dance 5.8s steps(16, end) infinite;
   filter: drop-shadow(0 0 8px rgba(95, 201, 120, 0.32)) drop-shadow(0 2px 2px rgba(0, 0, 0, 0.44));
 }
 
