@@ -21,6 +21,7 @@ let kabukiAudioUnlocked = false;
 
 const runtimeModeClassNames = ["runtime-mode-dry", "runtime-mode-full-auto", "runtime-mode-semi-auto", "runtime-mode-live-fire"];
 const kabukiBootThemeSrc = "/assets/kabuki-launch-theme.wav";
+const onboardingStorageKey = "kabukiCordOnboardingDismissed.v1";
 
 const $ = (id) => document.getElementById(id);
 
@@ -77,6 +78,7 @@ async function loadState(options = {}) {
       notify: Boolean(options.notify && hadState),
     });
     if (!hadState) queueBootSound();
+    if (!hadState) maybeShowOnboarding();
     startAutoRefresh();
   } finally {
     refreshInFlight = false;
@@ -337,10 +339,90 @@ function renderModelOptions() {
   const catalog = appState.model_catalog || {};
   if (catalog.live) {
     const fetched = catalog.fetched_at ? ` Last refreshed ${formatTime(catalog.fetched_at)}.` : "";
-    status.textContent = `${byId.size} model options loaded from ${catalog.source || "OpenAI"}.${fetched}`;
+    const returned = catalog.total_models && catalog.total_models !== byId.size
+      ? ` OpenAI returned ${catalog.total_models} total; ${byId.size} text/reasoning options are shown.`
+      : ` ${byId.size} model options are shown.`;
+    status.textContent = `${returned} Clear the field or click All to browse the full cached list; typing filters the dropdown.${fetched}`;
   } else {
     status.textContent = catalog.message || "Fallback model suggestions shown until models are refreshed.";
   }
+}
+
+function maybeShowOnboarding() {
+  if (localStorage.getItem(onboardingStorageKey)) return;
+  if (!needsOnboarding()) return;
+  showOnboarding();
+}
+
+function needsOnboarding() {
+  return !appState?.app?.api_key_set || !appState?.discord?.complete || !servers().length;
+}
+
+function showOnboarding() {
+  renderOnboardingSteps();
+  $("onboardingOverlay")?.classList.remove("hidden");
+}
+
+function closeOnboarding({ dismissed = false } = {}) {
+  if (dismissed) localStorage.setItem(onboardingStorageKey, "true");
+  $("onboardingOverlay")?.classList.add("hidden");
+}
+
+function renderOnboardingSteps() {
+  const apiReady = Boolean(appState?.app?.api_key_set);
+  const discordReady = Boolean(appState?.discord?.complete);
+  const serversReady = servers().length > 0;
+  const engagedChannels = servers().flatMap((srv) => srv.channels || []).filter((chan) => chan.scan_enabled || chan.engage_enabled).length;
+  const mode = runtimeModeLabel(currentRuntimeMode());
+  const steps = [
+    {
+      title: "1. Add OpenAI API access",
+      ready: apiReady,
+      body: apiReady
+        ? "API key is stored locally. Use Models to refresh the project model catalog."
+        : "Paste a Project API key in API & Runtime, save changes, then click Models. Keys stay in the ignored local .env.",
+    },
+    {
+      title: "2. Pick a model and budget",
+      ready: Boolean(appState?.env?.OPENAI_MODEL || appState?.app?.openai_model),
+      body: `Current mode is ${mode}. Set daily/session budgets before enabling Engage on active channels.`,
+    },
+    {
+      title: "3. Sign into Discord",
+      ready: discordReady,
+      body: discordReady
+        ? "Discord credentials are present. Sign In opens the persistent browser profile when verification is needed."
+        : "Save Discord credentials or click Sign In and complete any human verification in the visible browser window.",
+    },
+    {
+      title: "4. Sync servers and channels",
+      ready: serversReady,
+      body: serversReady
+        ? `${servers().length} server${servers().length === 1 ? "" : "s"} are configured. Use Repair if a server's channel list is stale.`
+        : "Click Sync Discord after sign-in. Then select each server and Repair if channels are missing.",
+    },
+    {
+      title: "5. Choose observed channels",
+      ready: engagedChannels > 0,
+      body: engagedChannels
+        ? `${engagedChannels} channel setting${engagedChannels === 1 ? "" : "s"} are enabled. Observe reads; Engage allows draft decisions.`
+        : "Turn on Observe for channels to track. Turn on Engage only where drafts should be considered.",
+    },
+    {
+      title: "6. Test safely",
+      ready: currentRuntimeMode() === "dry" || currentRuntimeMode() === "live_fire",
+      body: "Start in Dry Mode or Live Fire. Use Latest/Backfill to confirm memory before relying on generated drafts.",
+    },
+  ];
+
+  $("onboardingSteps").innerHTML = steps
+    .map((step) => `
+      <div class="onboarding-step ${step.ready ? "ready" : "pending"}">
+        <strong><i class="bi ${step.ready ? "bi-check-circle" : "bi-exclamation-circle"}"></i>${escapeHtml(step.title)}</strong>
+        <span>${escapeHtml(step.body)}</span>
+      </div>
+    `)
+    .join("");
 }
 
 function renderRuntime() {
@@ -853,6 +935,12 @@ function renderObserved() {
             ><i class="bi bi-box-arrow-up-right"></i> Open Latest Post</button>
             <button
               class="small-button"
+              data-reaction-message="${escapeAttr(latestMessageId)}"
+              title="Suggest a light emoji reaction for this remembered post."
+              ${latestMessageId ? "" : "disabled"}
+            ><i class="bi bi-emoji-smile"></i> React</button>
+            <button
+              class="small-button"
               data-suggest-user="${escapeAttr(poster.user_key)}"
               title="Draft a suggested reply to this user's recent point."
             ><i class="bi bi-chat-left-text"></i> Suggest Reply</button>
@@ -868,6 +956,9 @@ function renderObserved() {
       .join("") || `<div class="note-item">No recent unique posters recorded.</div>`;
   document.querySelectorAll("[data-open-observed-message]").forEach((button) => {
     button.addEventListener("click", () => openObservedPosterMessage(button.dataset.openObservedMessage).catch((error) => toast(error.message)));
+  });
+  $("observedConversation").querySelectorAll("[data-reaction-message]").forEach((button) => {
+    button.addEventListener("click", () => suggestReactionForMessage(button.dataset.reactionMessage).catch((error) => toast(error.message)));
   });
   document.querySelectorAll("[data-suggest-user]").forEach((button) => {
     button.addEventListener("click", () => createSuggestedApproval(button.dataset.suggestUser));
@@ -896,6 +987,45 @@ async function openObservedPosterMessage(messageId) {
   toast("Opened latest observed post");
 }
 
+async function suggestReactionForMessage(messageId) {
+  const currentServer = server();
+  const currentChannel = channel();
+  const message = rememberedMessageById(currentChannel?.channel_id, messageId);
+  if (!currentServer?.server_id || !currentChannel?.channel_id || !messageId) {
+    toast("Select a remembered message first");
+    return;
+  }
+  const opId = `reaction:${messageId}`;
+  startOperation(opId, "Suggesting reaction", "Checking message tone", "working", "bi-emoji-smile");
+  try {
+    const result = await api("/api/reaction-suggest", {
+      method: "POST",
+      body: JSON.stringify({
+        server_id: currentServer.server_id,
+        channel_id: currentChannel.channel_id,
+        message_id: messageId,
+        author: message?.author || "",
+        text: message?.text || "",
+      }),
+    });
+    appState = result.state || appState;
+    render();
+    await navigator.clipboard?.writeText(result.emoji).catch(() => {});
+    await openObservedPosterMessage(messageId).catch(() => {});
+    finishOperation(opId, `Suggested ${result.emoji}`, "done", "bi-check-circle");
+    toast(`${result.emoji} suggested and copied. Apply it in Discord if it fits.`);
+  } catch (error) {
+    finishOperation(opId, "Reaction suggestion failed", "failed", "bi-exclamation-triangle");
+    throw error;
+  }
+}
+
+function rememberedMessageById(channelId, messageId) {
+  if (!channelId || !messageId) return null;
+  const messages = appState.history?.[channelId]?.messages || [];
+  return messages.find((message) => message.message_id === messageId) || null;
+}
+
 function renderHistory() {
   const current = channel();
   const history = current ? appState.history?.[current.channel_id] : null;
@@ -915,15 +1045,21 @@ function renderHistory() {
               <strong>${escapeHtml(message.author)}</strong>
               <span>${escapeHtml(formatTime(message.observed_at))}</span>
             </div>
-            <button
-              class="small-button"
-              data-respond-message="${escapeAttr(message.message_id || "")}"
-              data-respond-user="${escapeAttr(message.user_key || "")}"
-            ><i class="bi bi-reply"></i> Respond</button>
-            <button
-              class="small-button"
-              data-history-guide-user="${escapeAttr(message.user_key || "")}"
-            ><i class="bi bi-person-gear"></i> Guide</button>
+            <div class="history-actions">
+              <button
+                class="small-button"
+                data-reaction-message="${escapeAttr(message.message_id || "")}"
+              ><i class="bi bi-emoji-smile"></i> React</button>
+              <button
+                class="small-button"
+                data-respond-message="${escapeAttr(message.message_id || "")}"
+                data-respond-user="${escapeAttr(message.user_key || "")}"
+              ><i class="bi bi-reply"></i> Respond</button>
+              <button
+                class="small-button"
+                data-history-guide-user="${escapeAttr(message.user_key || "")}"
+              ><i class="bi bi-person-gear"></i> Guide</button>
+            </div>
           </div>
           <p>${escapeHtml(message.text)}</p>
         </div>
@@ -934,6 +1070,9 @@ function renderHistory() {
       button.dataset.respondMessage,
       button.dataset.respondUser,
     ));
+  });
+  $("historyMessages").querySelectorAll("[data-reaction-message]").forEach((button) => {
+    button.addEventListener("click", () => suggestReactionForMessage(button.dataset.reactionMessage).catch((error) => toast(error.message)));
   });
   document.querySelectorAll("[data-history-guide-user]").forEach((button) => {
     button.addEventListener("click", () => openUserGuidance(button.dataset.historyGuideUser));
@@ -1045,7 +1184,7 @@ async function saveAll() {
     syncFormsToState();
     const runtimeMode = currentRuntimeMode();
     const settings = {
-      OPENAI_MODEL: $("openaiModel").value.trim(),
+      OPENAI_MODEL: $("openaiModel").value.trim() || appState.env.OPENAI_MODEL || appState.app.openai_model || "",
       NHI_ZUES_LLM_ENABLED: $("llmEnabled").checked,
       NHI_ZUES_RUNTIME_MODE: runtimeMode,
       NHI_ZUES_DRAFT_IN_DRY_RUN: $("draftDryRun").checked,
@@ -1295,6 +1434,7 @@ async function refreshOpenAIModels() {
       source: result.source || "",
       message: result.message || "",
       fetched_at: result.fetched_at || "",
+      total_models: result.total_models || 0,
     };
     renderModelOptions();
     finishOperation(opId, "Models refreshed", "done", "bi-check-circle");
@@ -1888,6 +2028,22 @@ $("repairDiscordServer").addEventListener("click", () => repairDiscordServer().c
 $("refreshChannelLatest").addEventListener("click", () => refreshChannelLatest().catch((error) => toast(error.message)));
 $("backfillChannel").addEventListener("click", () => backfillChannelHistory().catch((error) => toast(error.message)));
 $("refreshOpenAIModels").addEventListener("click", () => refreshOpenAIModels().catch((error) => toast(error.message)));
+$("clearModelFilter").addEventListener("click", () => {
+  $("openaiModel").value = "";
+  $("openaiModel").focus();
+  toast("Model field cleared. Open the dropdown to browse cached models.");
+});
+$("openOnboarding").addEventListener("click", showOnboarding);
+$("closeOnboarding").addEventListener("click", () => closeOnboarding());
+$("dismissOnboarding").addEventListener("click", () => closeOnboarding({ dismissed: true }));
+$("onboardingSettings").addEventListener("click", () => {
+  activateTab("settings");
+  closeOnboarding();
+});
+$("onboardingSync").addEventListener("click", () => {
+  closeOnboarding();
+  syncDiscordServers().catch((error) => toast(error.message));
+});
 $("clearApprovals").addEventListener("click", () => clearApprovals().catch((error) => toast(error.message)));
 $("checkUpdates").addEventListener("click", checkUpdates);
 $("applyUpdate").addEventListener("click", applyUpdate);

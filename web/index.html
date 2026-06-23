@@ -302,10 +302,20 @@
               <span>Model</span>
               <div class="inline-input model-picker">
                 <input id="openaiModel" type="text" list="openaiModelOptions" autocomplete="off" placeholder="gpt-5.4-nano" />
+                <button id="clearModelFilter" class="small-button" type="button" title="Clear the field so the browser can show all cached model options"><i class="bi bi-list-ul"></i> All</button>
                 <button id="refreshOpenAIModels" class="small-button" type="button" title="Fetch models available to this OpenAI API key"><i class="bi bi-cloud-arrow-down"></i> Models</button>
               </div>
               <datalist id="openaiModelOptions"></datalist>
               <small id="modelListStatus" class="field-hint"></small>
+            </div>
+            <div class="control-bank span-2">
+              <div class="control-row">
+                <div>
+                  <strong>Setup Guide</strong>
+                  <span>Open the first-run checklist for API keys, Discord sign-in, server sync, channel selection, response mode, and troubleshooting.</span>
+                </div>
+                <button id="openOnboarding" class="secondary-button" type="button"><i class="bi bi-map"></i> Open Guide</button>
+              </div>
             </div>
             <div class="control-bank span-2">
               <label class="field span-2">
@@ -414,6 +424,23 @@
     </div>
 
     <div id="toast" class="toast"></div>
+    <div id="onboardingOverlay" class="onboarding-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="onboardingTitle">
+      <div class="onboarding-card">
+        <div class="onboarding-header">
+          <div>
+            <div class="eyebrow">Kabuki-Cord Setup</div>
+            <h2 id="onboardingTitle">First-run checklist</h2>
+          </div>
+          <button id="closeOnboarding" class="icon-button" type="button" title="Close setup guide"><i class="bi bi-x-lg"></i></button>
+        </div>
+        <div id="onboardingSteps" class="onboarding-steps"></div>
+        <div class="onboarding-actions">
+          <button id="onboardingSettings" class="secondary-button" type="button"><i class="bi bi-sliders"></i> API & Runtime</button>
+          <button id="onboardingSync" class="secondary-button" type="button"><i class="bi bi-diagram-3"></i> Sync Discord</button>
+          <button id="dismissOnboarding" class="primary-button" type="button"><i class="bi bi-check2"></i> Done</button>
+        </div>
+      </div>
+    </div>
     <script src="/app.js"></script>
   </body>
 </html>

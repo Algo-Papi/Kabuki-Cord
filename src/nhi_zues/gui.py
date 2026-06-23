@@ -151,6 +151,12 @@ class GuiHandler(BaseHTTPRequestHandler):
             except RuntimeError as exc:
                 self._json({"ok": False, "error": str(exc)}, status=400)
             return
+        if parsed.path == "/api/reaction-suggest":
+            try:
+                self._json(suggest_reaction(body))
+            except RuntimeError as exc:
+                self._json({"ok": False, "error": str(exc)}, status=400)
+            return
         if parsed.path == "/api/settings":
             try:
                 update_env(body)
@@ -511,6 +517,7 @@ def app_state() -> dict:
             "source": model_catalog["source"],
             "message": model_catalog["message"],
             "fetched_at": model_catalog.get("fetched_at", ""),
+            "total_models": model_catalog.get("total_models", 0),
         },
         "model_options": model_catalog["models"],
         "env": {
@@ -592,6 +599,7 @@ def model_catalog_state(config: AppConfig) -> dict:
         "source": source,
         "message": message,
         "fetched_at": str(cache.get("fetched_at") or "") if isinstance(cache, dict) else "",
+        "total_models": int(cache.get("total_models") or len(models)) if isinstance(cache, dict) else len(models),
         "models": models,
     }
 
@@ -993,6 +1001,47 @@ def refresh_channel_latest(body: dict) -> dict:
         "ok": True,
         "messages": len(messages),
         "new": len(fresh),
+        "state": app_state(),
+    }
+
+
+def suggest_reaction(body: dict) -> dict:
+    server_id = str(body.get("server_id") or "").strip()
+    channel_id = str(body.get("channel_id") or "").strip()
+    message_id = str(body.get("message_id") or "").strip()
+    author = str(body.get("author") or "").strip()
+    text = str(body.get("text") or "").strip()
+    if not server_id or not channel_id or not message_id:
+        raise RuntimeError("Select a remembered message before asking for a reaction suggestion.")
+
+    config = load_config()
+    if not text:
+        memory = ConversationMemory(config.state_dir / "memory.json")
+        memory.load()
+        for message in memory.context(channel_id, limit=500):
+            if message.message_id == message_id:
+                author = author or message.author
+                text = message.text
+                break
+    if not text:
+        raise RuntimeError("Kabuki could not find the selected message text in local memory.")
+
+    emoji, reason = _suggest_emoji_reaction(text)
+    snippet = " ".join(text.split())
+    if len(snippet) > 140:
+        snippet = snippet[:137].rstrip() + "..."
+    EventLog(config.state_dir / "events.json").add(
+        event_type="reaction_suggested",
+        server_id=server_id,
+        channel_id=channel_id,
+        summary=f"Suggested {emoji} reaction for {author or 'selected message'}: {reason}",
+        draft=snippet,
+    )
+    return {
+        "ok": True,
+        "emoji": emoji,
+        "reason": reason,
+        "message_id": message_id,
         "state": app_state(),
     }
 
@@ -1841,6 +1890,51 @@ def _summarize_messages(texts: list[str]) -> str:
     if len(latest) > 130:
         latest = latest[:127].rstrip() + "..."
     return f"Talking about {topic_text}. Latest: {latest}"
+
+
+def _suggest_emoji_reaction(text: str) -> tuple[str, str]:
+    lowered = f" {str(text or '').lower()} "
+    joke_markers = (
+        " lol ",
+        " lmao ",
+        " haha",
+        " 😂",
+        " 🤣",
+        " joke",
+        " kidding",
+        " satire",
+        " parody",
+        " meme",
+        " shitpost",
+        " bit ",
+    )
+    if any(marker in lowered for marker in joke_markers) or re.search(r"\b(lol+|lmao+|haha+)\b", lowered):
+        return "😂", "message reads as a joke, bit, meme, or satire"
+
+    agreement_markers = (
+        " exactly",
+        " agreed",
+        " agree ",
+        " true ",
+        " facts",
+        " good point",
+        " makes sense",
+        " fair point",
+        " correct",
+        " this is it",
+    )
+    if any(marker in lowered for marker in agreement_markers):
+        return "👍", "message reads like a clear agreement or solid point"
+
+    appreciation_markers = (" thanks", " thank you", " appreciate", " helpful", " good info")
+    if any(marker in lowered for marker in appreciation_markers):
+        return "🙏", "message reads as helpful or appreciative"
+
+    surprise_markers = (" wild", " crazy", " insane", " wtf", " weird", " bizarre", " unreal")
+    if any(marker in lowered for marker in surprise_markers):
+        return "👀", "message has a surprising or unusually weird claim"
+
+    return "👍", "safe light acknowledgement; no strong joke or surprise cue found"
 
 
 def _memory_context(memory_path: Path, channel_id: str):
