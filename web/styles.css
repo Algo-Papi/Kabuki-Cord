@@ -753,8 +753,11 @@ textarea:disabled {
 
 .scanner-sprite-posting {
   --scanner-sheet: url("/assets/scanner-kabuki-posting-sheet.png");
-  --scanner-width: 1360px;
-  image-rendering: pixelated;
+  --scanner-width: 780px;
+  width: 78px;
+  height: 78px;
+  background-size: var(--scanner-width) 78px;
+  image-rendering: auto;
 }
 
 .scanner-sprite-discord-blocked {
@@ -862,6 +865,9 @@ textarea:disabled {
 }
 
 .operation-status.posting {
+  grid-template-columns: 78px minmax(122px, auto);
+  min-height: 86px;
+  max-width: 332px;
   border-color: rgba(98, 218, 130, 0.38);
   background: rgba(98, 218, 130, 0.1);
   color: #d7ffdf;
@@ -899,7 +905,7 @@ textarea:disabled {
 }
 
 .operation-status.posting .scanner-sprite {
-  animation-duration: 5.8s;
+  animation: scanner-posting-delivery 5.8s steps(10, end) infinite;
   filter: drop-shadow(0 0 7px rgba(98, 218, 130, 0.3)) drop-shadow(0 2px 2px rgba(0, 0, 0, 0.44));
 }
 
@@ -1191,6 +1197,12 @@ textarea:disabled {
 @keyframes scanner-backfill-archive {
   to {
     background-position: -768px 0;
+  }
+}
+
+@keyframes scanner-posting-delivery {
+  to {
+    background-position: -780px 0;
   }
 }
 

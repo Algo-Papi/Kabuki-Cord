@@ -217,11 +217,11 @@ Local state lives under `.state/`:
 
 - `.state/memory.json` stores remembered channel messages and per-user memory.
 - `.state/events.json` stores scan checks, approvals, sends, and failures.
-- `.state/approvals.json` stores pending approval drafts.
+- `.state/approvals.json` stores the five newest pending approval drafts.
 - `.state/sent_replies.json` stores successful send receipts keyed by source message IDs so stale approvals cannot double-reply to the same Discord message.
 - `.state/usage.json` stores estimated/recorded API usage.
 
-Use **Clear All** in Approvals before enabling live or Auto if there is any stale backlog.
+Use **Clear All** in Approvals before enabling live or Auto if there is any stale backlog. Semi-auto also prunes older drafts automatically once more than five are pending.
 
 When **Auto** is off for a channel, generated replies queue for approval even when the trigger was a direct name or alias cue. Auto must be enabled per channel before the scanner can send generated replies without approval.
 

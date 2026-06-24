@@ -24,9 +24,12 @@ class ApprovalItem:
 
 
 class ApprovalQueue:
-    def __init__(self, queue_file: Path) -> None:
+    def __init__(self, queue_file: Path, max_items: int = 5) -> None:
         self.queue_file = queue_file
+        self.max_items = max_items
         self._items = self._load()
+        if self._prune_oldest():
+            self._save()
 
     def add(
         self,
@@ -57,6 +60,7 @@ class ApprovalQueue:
             source_message_ids=source_ids,
         )
         self._items.append(item)
+        self._prune_oldest()
         self._save()
         return item
 
@@ -142,6 +146,12 @@ class ApprovalQueue:
         self.queue_file.parent.mkdir(parents=True, exist_ok=True)
         payload = {"items": [asdict(item) for item in self._items]}
         write_json_file(self.queue_file, payload)
+
+    def _prune_oldest(self) -> bool:
+        if self.max_items <= 0 or len(self._items) <= self.max_items:
+            return False
+        self._items = self._items[-self.max_items :]
+        return True
 
 
 def _approval_id(*, channel_id: str, draft: str, source_ids: tuple[str, ...]) -> str:

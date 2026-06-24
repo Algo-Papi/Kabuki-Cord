@@ -131,6 +131,8 @@ To inspect proactive drafts waiting for approval:
 .\.venv\Scripts\kabuki-cord --approvals
 ```
 
+Kabuki-Cord keeps only the five newest pending approval drafts. When semi-auto has been running unattended, older queued drafts are pruned so outdated responses do not pile up waiting for review.
+
 To add persistent character continuity without editing the base card:
 
 ```powershell
@@ -164,7 +166,7 @@ The top-bar **Start/Pause** control runs or pauses the local scanner loop. **Dry
 
 Scanner pacing is intentionally conservative. `NHI_ZUES_SCANNER_MAX_CHANNELS_PER_CYCLE=1` prevents back-to-back sweeps across every enabled channel, `NHI_ZUES_SCANNER_CYCLE_SLEEP_SECONDS` controls how long the runtime rests after a cycle, and `NHI_ZUES_SCANNER_MIN_CHANNEL_DELAY_SECONDS` / `NHI_ZUES_SCANNER_MAX_CHANNEL_DELAY_SECONDS` control the extra wait only when more than one channel is allowed per cycle.
 
-The right-side **Events** view shows the live activity trail: routine channel checks, queued approvals, delivery-started status, regenerated drafts, approved sends, autonomous sends, dry-run drafts, and send failures. The GUI auto-refreshes while you are not editing a form and raises an in-app toast for important new events.
+The right-side **Events** view shows the live activity trail: routine channel checks, queued approvals, delivery-started status, regenerated drafts, approved sends, autonomous sends, dry-run drafts, and send failures. The GUI auto-refreshes while you are not editing a form and raises an in-app toast for important new events. The Approvals panel intentionally shows the newest five pending drafts only.
 
 Successful sends are also recorded in `.state/sent_replies.json`. Before queuing or sending another response, Kabuki-Cord checks that ledger against the source Discord message IDs so stale approvals or repeated scans do not double-reply to the same message. The same ledger drives the auto-reply cooldown and rate-limit guard.
 
