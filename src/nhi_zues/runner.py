@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import random
 import time
 from datetime import datetime, timezone
@@ -681,13 +682,14 @@ class NhiZuesRunner:
                     "rolling reaction percentage cap reached for the recent non-own message window"
                 )
                 continue
+            force_window_fill = force_window_enabled and in_force_window and force_window_remaining > 0
             should_react, emoji, reason = should_auto_react(
                 message.text,
                 threshold=self.config.reaction_threshold,
                 sample_percent=self.config.reaction_sample_percent,
                 force_laugh_percent=(
-                    self.config.reaction_force_laugh_percent
-                    if in_force_window
+                    100.0
+                    if force_window_fill
                     else 0.0
                 ),
                 emoji_override=self.config.reaction_emoji_override,
@@ -696,6 +698,11 @@ class NhiZuesRunner:
                 ineligible += 1
                 last_reason = reason
                 continue
+            if force_window_fill:
+                reason = _force_window_fill_reason(
+                    reason,
+                    self.config.reaction_force_laugh_percent,
+                )
             try:
                 attempted += 1
                 result = await session.add_reaction(message.message_id, emoji)
@@ -885,7 +892,14 @@ def _recent_non_own_message_ids(
 def _reaction_window_cap(percent: float, window_size: int) -> int:
     percent = max(0.0, min(float(percent or 0.0), 100.0))
     window_size = max(0, int(window_size or 0))
-    return int(window_size * (percent / 100.0))
+    if percent <= 0.0 or window_size <= 0:
+        return 0
+    return min(window_size, max(1, math.ceil(window_size * (percent / 100.0))))
+
+
+def _force_window_fill_reason(reason: str, percent: float) -> str:
+    label = f"force reaction target fill ({float(percent or 0.0):g}% target)"
+    return str(reason or "").replace("force reaction sample accepted (100%)", label)
 
 
 def _auto_reply_guard_reason(

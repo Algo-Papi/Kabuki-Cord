@@ -11,6 +11,7 @@ from nhi_zues.runner import (
     NhiZuesRunner,
     _recent_non_own_message_ids,
     _recent_reaction_candidates,
+    _reaction_window_cap,
 )
 from nhi_zues.reactions import LAUGH_EMOJI, THUMBS_UP_EMOJI
 
@@ -254,6 +255,31 @@ class RunnerReactionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("force_window=2/2/5", app.events.items[-1]["summary"])
         self.assertIn("force_window_capped=1", app.events.items[-1]["summary"])
 
+    async def test_force_reaction_target_fills_until_window_cap(self) -> None:
+        app = runner(ledger=ReactionLedgerStub({"1"}))
+        app.config.reaction_force_laugh_percent = 40.0
+        app.config.reaction_max_per_channel = 10
+        session = SessionStub({"applied": True, "path": "quick"})
+        target = SimpleNamespace(server_id="server-1", channel_id="channel-1", react_enabled=True)
+
+        reacted = await app._process_reactions(
+            session,
+            target,
+            [
+                message("1", "already reacted old one"),
+                message("2", "plain update but still worth light acknowledgement"),
+                message("3", "plain update two"),
+                message("4", "plain update three"),
+                message("5", "plain update four"),
+            ],
+            fresh_count=0,
+            force_laugh_ids={"1", "2", "3", "4", "5"},
+        )
+
+        self.assertEqual({"2"}, reacted)
+        self.assertEqual([("2", THUMBS_UP_EMOJI)], session.calls)
+        self.assertIn("force reaction target fill (40% target)", app.reaction_ledger.records[0]["reason"])
+
     async def test_force_laugh_percentage_cap_limits_total_reactions_in_window(self) -> None:
         app = runner()
         app.config.reaction_force_laugh_percent = 40.0
@@ -356,6 +382,10 @@ class RunnerReactionTests(unittest.IsolatedAsyncioTestCase):
         ids = _recent_non_own_message_ids(visible, character_names=("NHI Zues",), limit=5)
 
         self.assertEqual({"3", "4", "5", "6", "7"}, ids)
+
+    def test_reaction_window_cap_uses_ceiling_for_small_active_windows(self) -> None:
+        self.assertEqual(1, _reaction_window_cap(40.0, 2))
+        self.assertEqual(0, _reaction_window_cap(0.0, 5))
 
     async def test_engage_disabled_channel_can_react_but_does_not_plan_reply(self) -> None:
         app = runner()
