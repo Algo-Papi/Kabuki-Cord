@@ -13,7 +13,10 @@
           <span class="eyebrow">Kabuki-Cord</span>
           <h1>Scanner Monitor</h1>
         </div>
-        <div id="monitorStatus" class="status-pill">Connecting</div>
+        <div class="monitor-actions">
+          <button id="soundToggle" class="sound-toggle" type="button" aria-pressed="true">Sound on</button>
+          <div id="monitorStatus" class="status-pill">Connecting</div>
+        </div>
       </header>
 
       <section class="story-panel">
@@ -62,6 +65,17 @@
       <section class="queue-panel">
         <div class="section-title">Upcoming Channels</div>
         <div id="upcomingList" class="upcoming-list"></div>
+      </section>
+
+      <section class="action-history-panel">
+        <div class="action-column">
+          <div class="section-title">Responses</div>
+          <div id="responseActions" class="action-list"></div>
+        </div>
+        <div class="action-column">
+          <div class="section-title">Reactions</div>
+          <div id="reactionActions" class="action-list"></div>
+        </div>
       </section>
     </main>
     <div id="monitorToasts" class="monitor-toasts" aria-live="polite"></div>

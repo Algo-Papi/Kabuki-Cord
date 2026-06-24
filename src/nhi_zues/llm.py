@@ -100,10 +100,11 @@ class ReplyPlanner:
                 requires_approval=requires_approval,
             )
 
-        transcript = _fit_text(_format_message_lines(context[-20:], max_chars=360), self.max_input_chars)
+        transcript = _fit_text(_format_message_lines(context[-32:], max_chars=320), self.max_input_chars)
         newest_messages = _format_message_lines(new_messages[-5:])
         topic_summary = ", ".join(topic for topic, _ in topics.top_topics) or "none"
         user_memory = _format_user_memories(user_memories, user_instructions)
+        user_arc = _fit_text(_format_user_recent_arcs(context, new_messages, character), 1600)
         seed = f"{channel_id}:{','.join(message.message_id for message in new_messages)}"
         recent_character_lines = _recent_character_lines(context, character)
         avoid_question = should_avoid_question(
@@ -120,6 +121,7 @@ class ReplyPlanner:
             f"Character: {character.name}\n"
             f"Tracked topics: {topic_summary}\n\n"
             f"Known user context:\n{user_memory}\n\n"
+            f"Recent user arc to use privately:\n{user_arc}\n\n"
             f"Recent conversation:\n{transcript}\n\n"
             f"Newest message(s) to react to:\n{newest_messages or '(none)'}\n\n"
             f"{conversation_intelligence_prompt(mode=engagement_type)}\n\n"
@@ -183,9 +185,11 @@ class ReplyPlanner:
         if self.client is None:
             return DraftDecision(True, "would regenerate; no OPENAI_API_KEY configured")
 
-        transcript = _fit_text(_format_message_lines(context[-24:], max_chars=360), self.max_input_chars)
+        transcript = _fit_text(_format_message_lines(context[-36:], max_chars=320), self.max_input_chars)
         target = _target_user_line(target_user_key, user_memories)
         user_memory = _format_user_memories(user_memories, user_instructions)
+        target_messages = [message for message in context if _message_user_key(message) == target_user_key]
+        user_arc = _fit_text(_format_user_recent_arcs(context, target_messages[-1:], character), 1600)
         seed = f"{channel_id}:{target_user_key}:{operator_instruction}"
         recent_character_lines = _recent_character_lines(context, character)
         avoid_question = should_avoid_question(
@@ -202,6 +206,7 @@ class ReplyPlanner:
             f"Character: {character.name}\n"
             f"Target user: {target}\n\n"
             f"Known user context:\n{user_memory}\n\n"
+            f"Recent user arc to use privately:\n{user_arc}\n\n"
             f"Recent conversation:\n{transcript}\n\n"
             f"Original queued draft:\n{sanitize_outgoing_draft(original_draft) or '(none)'}\n\n"
             f"Current editor draft:\n{sanitize_outgoing_draft(current_draft) or '(none)'}\n\n"
@@ -394,12 +399,74 @@ def _format_message_lines(messages: list[MessageRecord], *, max_chars: int = 260
     return "\n".join(lines)
 
 
+def _format_user_recent_arcs(
+    context: list[MessageRecord],
+    source_messages: list[MessageRecord],
+    character: CharacterCard,
+    *,
+    per_user_limit: int = 5,
+    user_limit: int = 5,
+) -> str:
+    wanted_keys: list[str] = []
+    seen: set[str] = set()
+    for message in reversed(source_messages):
+        if _is_character_message(message, character) or not str(message.text or "").strip():
+            continue
+        key = _message_user_key(message)
+        if not key or key in seen:
+            continue
+        wanted_keys.append(key)
+        seen.add(key)
+        if len(wanted_keys) >= user_limit:
+            break
+    if not wanted_keys:
+        for message in reversed(context):
+            if _is_character_message(message, character) or not str(message.text or "").strip():
+                continue
+            key = _message_user_key(message)
+            if not key or key in seen:
+                continue
+            wanted_keys.append(key)
+            seen.add(key)
+            if len(wanted_keys) >= user_limit:
+                break
+
+    if not wanted_keys:
+        return "No useful per-user arc."
+
+    sections: list[str] = []
+    for key in reversed(wanted_keys):
+        user_messages = [
+            message
+            for message in context
+            if _message_user_key(message) == key
+            and not _is_character_message(message, character)
+            and str(message.text or "").strip()
+        ][-per_user_limit:]
+        if not user_messages:
+            continue
+        display_name = clean_discord_display_name(user_messages[-1].author)
+        sections.append(f"{display_name}:")
+        for message in user_messages:
+            text = " ".join(sanitize_outgoing_draft(str(message.text or "")).split())
+            if len(text) > 180:
+                text = text[:177].rstrip() + "..."
+            sections.append(f"  - {text}")
+    return "\n".join(sections) if sections else "No useful per-user arc."
+
+
 def conversation_intelligence_prompt(*, mode: str) -> str:
     lines = [
         "Conversation intelligence:",
         "- Treat the transcript as context, not material to summarize.",
+        "- Use the per-user arc only as private continuity for tone and direction. Do not recap it or mention that you remember it.",
+        "- Do not revive an older point just because it appears in memory. If the room moved on, move with the newest live point.",
+        "- Before drafting, check what the character already said recently. Do not restate the same claim, metaphor, or angle.",
+        "- If the same topic continues, advance one step: narrow the claim, add a concrete objection, concede a small point, or pivot to a fresher implication.",
         "- Pick one live point, tension, or implied claim and answer that. Do not respond to every sentence.",
         "- Have an actual take: buy it, doubt it, split the difference, draw a line, or admit a rough bias.",
+        "- For UFO lore, use one rough mental lane at a time: sightings, coverup, consciousness, crash retrieval, experiencers, military sensors, or media disinfo. Do not list lore.",
+        "- It is okay to be imperfect or half-informed, but the reply still needs a direction and a reason someone could challenge.",
         "- Do not quote the user and then interpret the quote. React as if you already heard it in the room.",
         "- Prefer a specific opinion, correction, or side comment over a broad question.",
         "- Let memory show through only as a small concrete detail. Do not announce continuity or tracking.",
@@ -431,6 +498,18 @@ def _recent_character_lines(context: list[MessageRecord], character: CharacterCa
         for message in context
         if _normalize_author(clean_discord_display_name(message.author)) in names and message.text
     ][-8:]
+
+
+def _is_character_message(message: MessageRecord, character: CharacterCard) -> bool:
+    names = {_normalize_author(character.name)}
+    names.update(_normalize_author(alias) for alias in character.aliases)
+    return _normalize_author(clean_discord_display_name(message.author)) in names
+
+
+def _message_user_key(message: MessageRecord) -> str:
+    if message.author_id:
+        return f"discord:{message.author_id}"
+    return f"name:{_normalize_author(message.author)}"
 
 
 def _normalize_author(value: str) -> str:

@@ -328,8 +328,8 @@ class NhiZuesRunner:
                 if message.message_id not in reacted_message_ids
             ]
             snapshot = self.topics.update(target.channel_id, fresh)
-            context = self.memory.context(target.channel_id)
-            user_memories = self.memory.user_context_for(context)
+            context = self.memory.context(target.channel_id, limit=80)
+            user_memories = self.memory.user_context_for(context, limit=10)
             user_notes = self.user_instructions.for_users(
                 [user.user_key for user in user_memories],
                 server_id=target.server_id,
@@ -493,19 +493,23 @@ class NhiZuesRunner:
                         )
                         self.memory.save()
                         continue
-                    await session.send_message(
+                    delivery = await session.send_message(
                         decision.draft,
                         typing_enabled=self.config.typing_indicator_enabled,
                         typing_min_seconds=self.config.typing_min_seconds,
                         typing_max_seconds=self.config.typing_max_seconds,
                         typing_chars_per_second=self.config.typing_chars_per_second,
                     )
+                    target_message = reply_fresh[-1] if reply_fresh else None
                     self.events.add(
                         event_type="message_sent",
                         server_id=target.server_id,
                         channel_id=target.channel_id,
                         summary=decision.reason,
                         draft=decision.draft,
+                        message_id=str(delivery.get("message_id") or ""),
+                        target_message_id=str(source_ids[-1] if source_ids else ""),
+                        target_author=str(getattr(target_message, "author", "") or ""),
                     )
                     self.reply_ledger.record(
                         server_id=target.server_id,
@@ -683,6 +687,10 @@ class NhiZuesRunner:
                         f"{message.author}; path={result.get('path') or 'existing'}."
                     ),
                     draft=message.text,
+                    message_id=message.message_id,
+                    target_message_id=message.message_id,
+                    target_author=message.author,
+                    emoji=emoji,
                 )
                 continue
 
@@ -701,6 +709,10 @@ class NhiZuesRunner:
                     f"{reason}; path={result.get('path') or 'existing'}."
                 ),
                 draft=message.text,
+                message_id=message.message_id,
+                target_message_id=message.message_id,
+                target_author=message.author,
+                emoji=emoji,
             )
             reacted_message_ids.add(message.message_id)
             if force_window_enabled and in_force_window:

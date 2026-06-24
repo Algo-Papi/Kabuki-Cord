@@ -1194,7 +1194,7 @@ class DiscordWebSession:
         timeout_ms: int,
     ) -> dict[str, object]:
         try:
-            await self.page.wait_for_function(
+            sent_handle = await self.page.wait_for_function(
                 """
                 ({ expected, beforeIds }) => {
                     const normalize = (value) => String(value || "")
@@ -1221,7 +1221,7 @@ class DiscordWebSession:
                                 || (tail.length >= 24 && rendered.includes(tail));
                         });
                     };
-                    return messages.some((node) => {
+                    const match = messages.find((node) => {
                         if (before.has(node.id || "")) return false;
                         const renderedCandidates = Array.from(node.querySelectorAll('[class*="messageContent"]'))
                             .map((content) => normalize(content?.textContent || ""))
@@ -1229,18 +1229,26 @@ class DiscordWebSession:
                         renderedCandidates.push(normalize(node.textContent || ""));
                         return renderedCandidates.some(matchesRendered);
                     });
+                    return match ? (match.id || true) : false;
                 }
                 """,
                 {"expected": text, "beforeIds": before_message_ids},
                 timeout=timeout_ms,
             )
-            return {"confirmed": True, "assumed_sent": False, "confirmation_warning": ""}
+            sent_message_id = await sent_handle.json_value()
+            return {
+                "confirmed": True,
+                "assumed_sent": False,
+                "confirmation_warning": "",
+                "message_id": str(sent_message_id or ""),
+            }
         except Exception as exc:
             state = await self.writable_channel_state()
             composer_text = await self._composer_text()
             after_message_ids = await self._visible_message_ids()
             before = set(before_message_ids or [])
             new_message_count = len([message_id for message_id in after_message_ids if message_id not in before])
+            new_message_ids = [message_id for message_id in after_message_ids if message_id not in before]
             if _draft_still_in_composer(text, composer_text):
                 detail = "The draft still appears to be sitting in the composer, so Discord did not submit it."
             elif composer_text.strip():
@@ -1251,6 +1259,7 @@ class DiscordWebSession:
                     return {
                         "confirmed": False,
                         "assumed_sent": True,
+                        "message_id": str(new_message_ids[-1] if new_message_ids else ""),
                         "confirmation_warning": (
                             "Discord cleared the composer and rendered a new message, but Kabuki "
                             "could not text-match the new message. Treated as delivered to avoid a duplicate send."

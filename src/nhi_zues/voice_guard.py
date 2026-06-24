@@ -27,6 +27,11 @@ STOCK_PHRASES = (
     "what kind of",
     "if this is where",
     "the whole point",
+    "raw timing",
+    "raw log",
+    "edited narrative",
+    "control angle",
+    "spiritual angle",
 )
 
 ABSTRACT_TELLS = (
@@ -105,6 +110,7 @@ def voice_guard_prompt(
     lines = [
         "Voice repetition guard:",
         "- Do not use stock Discord filler: vibe, vibes, energy, so real, lol, lmao, ngl, lowkey, i need to know, yeah i get you, i get what you mean, yeah exactly.",
+        "- Do not keep returning to the same pet theory words, especially raw timing, raw log, edited narrative, clean debunk, control angle, or spiritual angle.",
         "- Do not start with a soft agreement unless the user's exact message needs it. Skip the throat clearing.",
         "- Prefer concrete nouns and details over abstract filler like consciousness, reality, energy, framing, or pattern unless the other person already used that frame.",
         "- Keep the reply uneven and local. A normal passing comment is better than a polished theory.",

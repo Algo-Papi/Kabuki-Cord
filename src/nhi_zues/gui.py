@@ -2018,6 +2018,7 @@ def _send_approval_locked(*, approval_id: str, draft: str, reply_to_message_id: 
                 draft=draft,
             )
             raise RuntimeError(duplicate_message)
+        source_preview = _last_approval_source_message(config, item)
         delivery = asyncio.run(
             _send_approval_message(
                 config,
@@ -2080,6 +2081,13 @@ def _send_approval_locked(*, approval_id: str, draft: str, reply_to_message_id: 
             channel_id=item.channel_id,
             summary=summary,
             draft=draft,
+            message_id=str(delivery.get("message_id") or ""),
+            target_message_id=(
+                reply_to_message_id
+                or str(source_preview.get("message_id") or "")
+                or str(item.source_message_ids[-1] if item.source_message_ids else "")
+            ),
+            target_author=str(source_preview.get("author") or ""),
         )
         start_runtime_after_send = True
     finally:
@@ -2087,6 +2095,26 @@ def _send_approval_locked(*, approval_id: str, draft: str, reply_to_message_id: 
             DISCORD_SESSION_LOCK.release()
         if resume_runtime or start_runtime_after_send:
             RUNTIME.start()
+
+
+def _last_approval_source_message(config: AppConfig, item) -> dict:
+    source_ids = {
+        str(value)
+        for value in getattr(item, "source_message_ids", ())
+        if str(value or "").strip()
+    }
+    if not source_ids:
+        return {}
+    payload = _read_json(config.state_dir / "memory.json", default={"channels": {}})
+    rows = payload.get("channels", {}).get(str(getattr(item, "channel_id", "") or ""), [])
+    matches = [
+        row
+        for row in _sorted_message_rows(rows)
+        if str(row.get("message_id") or "") in source_ids
+    ]
+    if not matches:
+        return {}
+    return _message_preview(matches[-1])
 
 
 def _friendly_discord_send_error(raw_error: str) -> str:

@@ -325,10 +325,10 @@ class MemoryStub:
     def ingest(self, channel_id, visible_messages):
         return list(visible_messages)
 
-    def context(self, channel_id):
+    def context(self, channel_id, *, limit=20):
         return []
 
-    def user_context_for(self, context):
+    def user_context_for(self, context, *, limit=8):
         return []
 
     def save(self):

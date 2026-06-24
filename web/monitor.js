@@ -11,10 +11,13 @@ let spyPaused = false;
 let latestState = null;
 let knownEventKeys = new Set();
 let eventNotificationsReady = false;
+let soundEnabled = true;
 
 const $ = (id) => document.getElementById(id);
 const pausedFrame = "/assets/monitor-paused-lounge.png";
 const deliveryEventTypes = new Set(["message_sent", "approval_sent"]);
+const responseEventTypes = new Set(["message_sent", "approval_sent"]);
+const reactionActionEventTypes = new Set(["reaction_added"]);
 const stageTransitionTypes = ["logo-swipe-left", "mask-zoom", "logo-swipe-right", "crest-iris"];
 
 async function loadSession() {
@@ -151,6 +154,7 @@ function render(state) {
   });
   renderCompleted(scan.last_completed);
   renderUpcoming(scan.upcoming || []);
+  renderActionHistory(state);
   renderPace(state);
   renderCountdowns();
 }
@@ -263,6 +267,158 @@ function renderUpcoming(items) {
     : `<div class="queue-empty">No upcoming due channels are queued right now.</div>`;
 }
 
+function renderActionHistory(state) {
+  renderActionColumn("responseActions", actionEvents(state, responseEventTypes), "response", state);
+  renderActionColumn("reactionActions", actionEvents(state, reactionActionEventTypes), "reaction", state);
+}
+
+function renderActionColumn(elementId, events, kind, state) {
+  const host = $(elementId);
+  if (!host) return;
+  const items = events.slice(0, 12);
+  host.innerHTML = items.length
+    ? items.map((event, index) => renderActionCard(event, kind, state, index)).join("")
+    : `<div class="action-empty">No ${kind === "reaction" ? "reactions" : "responses"} recorded yet.</div>`;
+  host.querySelectorAll("[data-action-open]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const url = button.getAttribute("data-action-open") || "";
+      if (url) window.open(url, "_blank", "noopener,noreferrer");
+    });
+  });
+  host.querySelectorAll("[data-action-copy]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const url = button.getAttribute("data-action-copy") || "";
+      if (!url) return;
+      try {
+        await navigator.clipboard.writeText(url);
+        showMonitorNote("Discord link copied");
+      } catch {
+        window.prompt("Copy Discord link", url);
+      }
+    });
+  });
+}
+
+function actionEvents(state, types) {
+  const events = Array.isArray(state.events?.items) ? state.events.items : [];
+  return events
+    .filter((event) => types.has(event.event_type))
+    .sort((left, right) => String(right.created_at || "").localeCompare(String(left.created_at || "")));
+}
+
+function renderActionCard(event, kind, state, index) {
+  const route = actionRoute(event, state);
+  const messageId = kind === "response"
+    ? (event.message_id || event.target_message_id || "")
+    : (event.target_message_id || event.message_id || "");
+  const url = discordUrl(event.server_id, event.channel_id, messageId);
+  const target = event.target_author || parseTargetAuthor(event) || "channel";
+  const body = kind === "reaction"
+    ? reactionActionBody(event)
+    : truncate(event.draft || event.summary || "", 260);
+  const meta = `${route.server} / ${route.channel}`;
+  const badge = kind === "reaction" ? reactionBadge(event) : responseBadge(event);
+  return `
+    <details class="action-item ${kind}" ${index < 2 ? "open" : ""}>
+      <summary>
+        <span class="action-badge">${escapeHtml(badge)}</span>
+        <span class="action-summary">
+          <strong>${escapeHtml(target)}</strong>
+          <small>${escapeHtml(meta)}</small>
+        </span>
+      </summary>
+      <div class="action-body">
+        <p>${escapeHtml(body || "No text captured for this action.")}</p>
+        <div class="action-buttons">
+          <button type="button" data-action-open="${escapeAttr(url)}">Open</button>
+          <button type="button" data-action-copy="${escapeAttr(url)}">Copy link</button>
+        </div>
+      </div>
+    </details>
+  `;
+}
+
+function actionRoute(event, state) {
+  const serverId = String(event.server_id || "");
+  const channelId = String(event.channel_id || "");
+  const server = serverLabel(state, serverId);
+  const channel = channelLabel(state, channelId);
+  return {
+    server: server || serverId || "Unknown server",
+    channel: channel || channelId || "Unknown channel",
+  };
+}
+
+function serverLabel(state, serverId) {
+  const servers = Array.isArray(state.servers?.servers) ? state.servers.servers : [];
+  const server = servers.find((item) => String(item.server_id || "") === String(serverId || ""));
+  return server?.label || "";
+}
+
+function channelLabel(state, channelId) {
+  const servers = Array.isArray(state.servers?.servers) ? state.servers.servers : [];
+  for (const server of servers) {
+    const channels = Array.isArray(server.channels) ? server.channels : [];
+    const channel = channels.find((item) => String(item.channel_id || "") === String(channelId || ""));
+    if (channel) return channel.label || channel.channel_id || "";
+  }
+  return "";
+}
+
+function discordUrl(serverId, channelId, messageId = "") {
+  const server = encodeURIComponent(String(serverId || ""));
+  const channel = encodeURIComponent(String(channelId || ""));
+  if (!server || !channel) return "";
+  const token = discordMessageToken(messageId);
+  return `https://discord.com/channels/${server}/${channel}${token ? `/${encodeURIComponent(token)}` : ""}`;
+}
+
+function discordMessageToken(messageId) {
+  const raw = String(messageId || "").trim();
+  if (!raw) return "";
+  const parts = raw.split("-");
+  return parts.length >= 2 ? parts[parts.length - 1] : raw;
+}
+
+function responseBadge(event) {
+  if (event.event_type === "approval_sent") return "approved";
+  if (event.event_type === "message_sent") return "auto";
+  return "sent";
+}
+
+function reactionActionBody(event) {
+  const emoji = reactionBadge(event);
+  const text = truncate(event.draft || "", 220);
+  const reason = truncate(event.summary || "", 180);
+  if (emoji && emoji !== "react" && text) return `${emoji} reacted to: ${text}`;
+  if (text) return `reacted to: ${text}`;
+  return reason;
+}
+
+function reactionBadge(event) {
+  const emoji = cleanEmoji(event.emoji) || cleanEmoji(parseEmoji(event.summary));
+  return emoji || "react";
+}
+
+function cleanEmoji(value) {
+  const text = String(value || "").trim();
+  if (!text || /^[?]+$/.test(text)) return "";
+  return text;
+}
+
+function parseTargetAuthor(event) {
+  const summary = String(event.summary || "");
+  const reactionMatch = summary.match(/reaction (?:was already present from this account on|to) ([^:;]+)(?::|;)/i);
+  if (reactionMatch) return reactionMatch[1].trim();
+  return "";
+}
+
+function parseEmoji(value) {
+  const text = String(value || "");
+  const match = text.match(/(?:Added|Could not add|Suggested)\s+(\S+)\s+reaction/i);
+  return match ? match[1] : "";
+}
+
 function syncDeliveryNotifications(state) {
   const events = Array.isArray(state.events?.items) ? state.events.items : [];
   const currentKeys = new Set(events.map(eventKey));
@@ -281,6 +437,8 @@ function syncDeliveryNotifications(state) {
 function showDeliveryToast(event) {
   const host = $("monitorToasts");
   if (!host) return;
+  playArigatoCue();
+  playDeliveryBurst(event);
   const toast = document.createElement("article");
   toast.className = "monitor-toast";
   toast.innerHTML = `
@@ -300,6 +458,77 @@ function showDeliveryToast(event) {
   toast.querySelector("button")?.addEventListener("click", dismiss);
   host.append(toast);
   setTimeout(dismiss, 5200);
+}
+
+function playDeliveryBurst(event) {
+  const scene = document.querySelector(".spy-scene");
+  if (!scene) return;
+  const burst = document.createElement("div");
+  burst.className = "delivery-burst";
+  burst.innerHTML = `
+    <div class="delivery-stars" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div>
+    <img src="/assets/monitor-arigato-sprite.png" alt="" />
+    <strong>Arigato!</strong>
+    <small>${escapeHtml(deliveryLabel(event))}</small>
+  `;
+  scene.append(burst);
+  setTimeout(() => burst.remove(), 2600);
+}
+
+function setupSoundToggle() {
+  const button = $("soundToggle");
+  if (!button) return;
+  button.addEventListener("click", () => {
+    if (button.classList.contains("needs-click") && soundEnabled) {
+      button.classList.remove("needs-click");
+      button.textContent = "Sound on";
+      playArigatoCue({ quietFailure: true });
+      return;
+    }
+    soundEnabled = !soundEnabled;
+    button.setAttribute("aria-pressed", soundEnabled ? "true" : "false");
+    button.textContent = soundEnabled ? "Sound on" : "Sound off";
+    if (soundEnabled) playArigatoCue({ quietFailure: true });
+  });
+}
+
+function playArigatoCue(options = {}) {
+  if (!soundEnabled) return;
+  const audio = new Audio("/assets/monitor-arigato.wav");
+  audio.volume = 0.72;
+  audio.play().then(() => {
+    const button = $("soundToggle");
+    if (button && soundEnabled) {
+      button.classList.remove("needs-click");
+      button.textContent = "Sound on";
+    }
+  }).catch(() => {
+    const button = $("soundToggle");
+    if (button && !options.quietFailure) {
+      button.textContent = "Click for sound";
+      button.classList.add("needs-click");
+    }
+  });
+}
+
+function showMonitorNote(message) {
+  const host = $("monitorToasts");
+  if (!host) return;
+  const toast = document.createElement("article");
+  toast.className = "monitor-toast compact";
+  toast.innerHTML = `
+    <div>
+      <strong>${escapeHtml(message)}</strong>
+    </div>
+    <button type="button" title="Dismiss notification">&times;</button>
+  `;
+  const dismiss = () => {
+    toast.classList.add("leaving");
+    setTimeout(() => toast.remove(), 220);
+  };
+  toast.querySelector("button")?.addEventListener("click", dismiss);
+  host.append(toast);
+  setTimeout(dismiss, 2200);
 }
 
 function eventKey(event) {
@@ -387,7 +616,12 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+function escapeAttr(value) {
+  return escapeHtml(value).replaceAll("`", "&#096;");
+}
+
 loadSpyAnimation();
+setupSoundToggle();
 refresh();
 refreshTimer = setInterval(refresh, 1800);
 countdownTimer = setInterval(renderCountdowns, 1000);
