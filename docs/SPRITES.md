@@ -35,6 +35,7 @@ This is the replacement checklist for animated and sprite-like visual assets cur
 | `web/assets/source/discord_blocked_keyframes/frame_000.png` through `frame_009.png` | Cleaned transparent keyframes used to assemble the upgraded Discord Blocked action sprite sheet. | Source/reference asset |
 | `web/assets/source/scanner_keyframes/frame_000.png` through `frame_015.png` | Cleaned transparent keyframes used to assemble the upgraded default Scanner topbar sprite sheet. | Source/reference asset |
 | `web/assets/runtime-mask-pixel.png` | Small pixel mask icon in the runtime footer. | `web/index.html` |
+| `web/assets/monitor-paused-lounge.png` | Scanner Monitor paused-state still: the upgraded actor rests on a beach lounger with a drink so pause/break is visually obvious. | `web/monitor.js`, `web/monitor.css` |
 | `web/assets/monitor-arigato-sprite.png` | Monitor-only success notification sprite for posted/delivered replies. | `web/monitor.js`, `web/monitor.css` |
 | `web/assets/app-icon-*.png`, `web/assets/app-icon.png` | Window/fav/taskbar app icons at multiple sizes. | `web/index.html`, packaging/runtime shell |
 | `web/assets/app-icon-badge-32.png` | Red-dot/badged favicon for activity attention. | `web/app.js` |

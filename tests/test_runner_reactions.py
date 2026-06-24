@@ -3,8 +3,13 @@ from __future__ import annotations
 import unittest
 from types import SimpleNamespace
 
+from nhi_zues.config import ChannelTarget
 from nhi_zues.models import MessageRecord
-from nhi_zues.runner import NhiZuesRunner, _recent_non_own_message_ids, _recent_reaction_candidates
+from nhi_zues.runner import (
+    NhiZuesRunner,
+    _recent_non_own_message_ids,
+    _recent_reaction_candidates,
+)
 from nhi_zues.reactions import LAUGH_EMOJI
 
 
@@ -39,13 +44,19 @@ class SessionStub:
         return self.result
 
 
-def message(message_id: str, text: str, author: str = "Rook") -> MessageRecord:
+def message(
+    message_id: str,
+    text: str,
+    author: str = "Rook",
+    *,
+    author_id: str | None = None,
+) -> MessageRecord:
     return MessageRecord(
         server_id="server-1",
         channel_id="channel-1",
         message_id=message_id,
         author=author,
-        author_id=None,
+        author_id=author_id,
         text=text,
     )
 
@@ -74,6 +85,21 @@ class RunnerReactionTests(unittest.IsolatedAsyncioTestCase):
         candidates = _recent_reaction_candidates(visible, [], character_names=("NHI Zues",))
 
         self.assertEqual(["2", "1"], [item.message_id for item in candidates])
+
+    def test_recent_reaction_candidates_skip_known_own_author_id(self) -> None:
+        visible = [
+            message("1", "own display drift", "different nickname", author_id="own-1"),
+            message("2", "that was wild", "Rook", author_id="user-1"),
+        ]
+
+        candidates = _recent_reaction_candidates(
+            visible,
+            [],
+            character_names=("NHI Zues",),
+            own_author_ids={"own-1"},
+        )
+
+        self.assertEqual(["2"], [item.message_id for item in candidates])
 
     async def test_no_eligible_reaction_emits_scan_event(self) -> None:
         app = runner()
@@ -124,6 +150,35 @@ class RunnerReactionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([("1", LAUGH_EMOJI)], session.calls)
         self.assertEqual(1, len(app.reaction_ledger.records))
         self.assertEqual("reaction_added", app.events.items[-1]["event_type"])
+
+    async def test_process_reactions_final_guard_blocks_own_author_id(self) -> None:
+        app = runner()
+        session = SessionStub({"applied": True, "path": "quick"})
+        target = SimpleNamespace(server_id="server-1", channel_id="channel-1", react_enabled=True)
+
+        reacted = await app._process_reactions(
+            session,
+            target,
+            [message("1", "that is such a cursed meme lmao", "renamed account", author_id="own-1")],
+            fresh_count=1,
+            character_names=("NHI Zues",),
+            own_author_ids={"own-1"},
+        )
+
+        self.assertEqual(set(), reacted)
+        self.assertEqual([], session.calls)
+        self.assertIn("own_skipped=1", app.events.items[-1]["summary"])
+
+    async def test_remember_current_account_id_seeds_own_author_guard(self) -> None:
+        app = NhiZuesRunner.__new__(NhiZuesRunner)
+
+        class CurrentUserSession:
+            async def current_user_id(self):
+                return "own-1"
+
+        await app._remember_current_account_id(CurrentUserSession())
+
+        self.assertEqual({"own-1"}, app._own_author_ids)
 
     async def test_force_laugh_recent_messages_can_react_to_plain_text(self) -> None:
         app = runner()
@@ -187,6 +242,35 @@ class RunnerReactionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(app.memory.saved)
         self.assertEqual("channel_checked", app.events.items[-1]["event_type"])
         self.assertIn("Engage is off", app.events.items[-1]["summary"])
+
+
+class RunnerTargetRotationTests(unittest.TestCase):
+    def test_limit_targets_rotates_through_due_channels(self) -> None:
+        first = ChannelTarget(server_id="s", channel_id="1")
+        second = ChannelTarget(server_id="s", channel_id="2")
+        third = ChannelTarget(server_id="s", channel_id="3")
+        app = NhiZuesRunner.__new__(NhiZuesRunner)
+        app.config = SimpleNamespace(
+            scanner_max_channels_per_cycle=1,
+            channels=(first, second, third),
+        )
+
+        self.assertEqual([first], app._limit_targets([first, second, third]))
+        self.assertEqual([second], app._limit_targets([first, second, third]))
+        self.assertEqual([third], app._limit_targets([first, second, third]))
+
+    def test_limit_targets_respects_due_subset_after_rotation(self) -> None:
+        first = ChannelTarget(server_id="s", channel_id="1")
+        second = ChannelTarget(server_id="s", channel_id="2")
+        third = ChannelTarget(server_id="s", channel_id="3")
+        app = NhiZuesRunner.__new__(NhiZuesRunner)
+        app.config = SimpleNamespace(
+            scanner_max_channels_per_cycle=1,
+            channels=(first, second, third),
+        )
+        app._target_cursor = 1
+
+        self.assertEqual([third], app._limit_targets([third]))
 
 
 class MemoryStub:

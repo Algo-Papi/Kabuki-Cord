@@ -76,6 +76,34 @@ class DiscordWebSession:
     async def is_logged_in(self) -> bool:
         return await self._is_logged_in()
 
+    async def current_user_id(self) -> str | None:
+        try:
+            value = await self.page.evaluate(
+                """
+                () => {
+                    const userSettings = document.querySelector('[aria-label="User Settings"]')
+                        || Array.from(document.querySelectorAll('[aria-label]'))
+                            .find((node) => /user settings/i.test(node.getAttribute("aria-label") || ""));
+                    const roots = [];
+                    let node = userSettings;
+                    for (let index = 0; node && index < 8; index += 1) {
+                        roots.push(node);
+                        node = node.parentElement;
+                    }
+                    roots.push(document.querySelector('[class*="panels"]'));
+                    for (const root of roots.filter(Boolean)) {
+                        const avatar = root.querySelector('img[src*="/avatars/"]');
+                        const match = avatar?.src?.match(/\\/avatars\\/(\\d+)\\//);
+                        if (match) return match[1];
+                    }
+                    return null;
+                }
+                """
+            )
+        except Exception:
+            return None
+        return str(value).strip() if value else None
+
     async def show_for_human(self) -> None:
         await self._set_window_bounds(left=80, top=80, width=1440, height=1000)
 

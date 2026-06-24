@@ -7,11 +7,13 @@ let spyFrames = ["/assets/monitor_spy_frames/frame_000.png"];
 let spyFrameMs = 180;
 let activeFrameLayer = "A";
 let transitionIndex = 0;
+let spyPaused = false;
 let latestState = null;
 let knownEventKeys = new Set();
 let eventNotificationsReady = false;
 
 const $ = (id) => document.getElementById(id);
+const pausedFrame = "/assets/monitor-paused-lounge.png";
 const deliveryEventTypes = new Set(["message_sent", "approval_sent"]);
 const stageTransitionTypes = ["logo-swipe-left", "mask-zoom", "logo-swipe-right", "crest-iris"];
 
@@ -65,11 +67,15 @@ async function loadSpyAnimation() {
     const image = new Image();
     image.src = src;
   });
+  const pausedImage = new Image();
+  pausedImage.src = pausedFrame;
   if (spyFrameTimer) clearInterval(spyFrameTimer);
-  spyFrameTimer = setInterval(advanceSpyFrame, spyFrameMs);
+  spyFrameTimer = null;
+  if (!spyPaused) spyFrameTimer = setInterval(advanceSpyFrame, spyFrameMs);
 }
 
 function advanceSpyFrame() {
+  if (spyPaused) return;
   const active = activeFrameLayer === "A" ? $("spySceneFrameA") : $("spySceneFrameB");
   const incoming = activeFrameLayer === "A" ? $("spySceneFrameB") : $("spySceneFrameA");
   if (!active || !incoming || !spyFrames.length) return;
@@ -95,11 +101,43 @@ function advanceSpyFrame() {
   }, 1900);
 }
 
+function setSpyPaused(paused) {
+  const scene = document.querySelector(".spy-scene");
+  const frameA = $("spySceneFrameA");
+  const frameB = $("spySceneFrameB");
+  const transition = $("stageTransition");
+  if (!scene || !frameA || !frameB) return;
+  if (spyPaused === paused) return;
+  spyPaused = paused;
+  scene.classList.toggle("paused", paused);
+  scene.classList.remove("transitioning");
+  if (transition) transition.className = "stage-transition";
+
+  if (paused) {
+    if (spyFrameTimer) clearInterval(spyFrameTimer);
+    spyFrameTimer = null;
+    frameA.src = pausedFrame;
+    frameB.src = pausedFrame;
+    frameA.classList.add("active");
+    frameB.classList.remove("active");
+    activeFrameLayer = "A";
+    return;
+  }
+
+  frameA.src = spyFrames[spyFrameIndex] || spyFrames[0] || "/assets/monitor_spy_frames/frame_000.png";
+  frameB.src = frameA.src;
+  frameA.classList.add("active");
+  frameB.classList.remove("active");
+  activeFrameLayer = "A";
+  if (!spyFrameTimer) spyFrameTimer = setInterval(advanceSpyFrame, spyFrameMs);
+}
+
 function render(state) {
   latestState = state;
   const runtime = state.runtime || {};
   const scan = runtime.scan || {};
   const status = scan.status || runtime.phase || "idle";
+  setSpyPaused(!runtime.running);
   $("monitorStatus").className = `status-pill ${runtime.running ? "running" : "paused"}`;
   $("monitorStatus").textContent = runtime.running ? statusLabel(status) : "Paused";
 
