@@ -30,6 +30,7 @@ from .budget import BudgetManager
 from .character import CharacterCardStore
 from .character_memory import CharacterMemoryStore
 from .config import AppConfig, load_config
+from .discarded_approvals import DiscardedApprovalStore, discarded_approval_message
 from .discord_text import clean_discord_display_name, sanitize_outgoing_draft
 from .events import EventLog
 from .llm import ReplyPlanner
@@ -1909,6 +1910,13 @@ def discard_approval(body: dict) -> None:
     queue = ApprovalQueue(config.state_dir / "approvals.json")
     item = queue.get(approval_id)
     if queue.remove(approval_id) and item:
+        DiscardedApprovalStore(config.state_dir / "discarded_approvals.json").record(
+            server_id=item.server_id,
+            channel_id=item.channel_id,
+            source_message_ids=item.source_message_ids,
+            draft=item.draft,
+            reason="discarded by operator",
+        )
         EventLog(config.state_dir / "events.json").add(
             event_type="approval_discarded",
             server_id=item.server_id,
@@ -1921,8 +1929,18 @@ def discard_approval(body: dict) -> None:
 def clear_approvals() -> int:
     config = load_config()
     queue = ApprovalQueue(config.state_dir / "approvals.json")
+    items = queue.list()
     count = queue.clear()
     if count:
+        discarded = DiscardedApprovalStore(config.state_dir / "discarded_approvals.json")
+        for item in items:
+            discarded.record(
+                server_id=item.server_id,
+                channel_id=item.channel_id,
+                source_message_ids=item.source_message_ids,
+                draft=item.draft,
+                reason="cleared from approval queue by operator",
+            )
         EventLog(config.state_dir / "events.json").add(
             event_type="approvals_cleared",
             server_id="",
@@ -2372,6 +2390,22 @@ def create_manual_approval(body: dict) -> None:
         )
         raise RuntimeError(own_source_message)
     source_ids = tuple(message.message_id for message in source_messages)
+    discarded_message = discarded_approval_message(
+        DiscardedApprovalStore(config.state_dir / "discarded_approvals.json").find_overlap(
+            channel_id=channel_id,
+            source_message_ids=source_ids,
+        )
+    )
+    if discarded_message:
+        EventLog(config.state_dir / "events.json").add(
+            event_type="discarded_approval_suppressed",
+            server_id=server_id,
+            channel_id=channel_id,
+            summary=discarded_message,
+            draft="",
+            user_key=target_user_key,
+        )
+        raise RuntimeError(discarded_message)
     ledger = ReplyLedger(config.state_dir / "sent_replies.json")
     duplicate_message = duplicate_reply_message(
         ledger.find_overlap(channel_id=channel_id, source_message_ids=source_ids)

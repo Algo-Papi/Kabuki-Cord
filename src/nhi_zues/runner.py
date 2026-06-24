@@ -12,6 +12,7 @@ from .budget import BudgetManager
 from .character import CharacterCardStore
 from .character_memory import CharacterMemoryStore
 from .config import AppConfig
+from .discarded_approvals import DiscardedApprovalStore, discarded_approval_message
 from .events import EventLog
 from .llm import ReplyPlanner
 from .memory import ConversationMemory
@@ -56,6 +57,7 @@ class NhiZuesRunner:
         self.characters = CharacterCardStore(config.character_dir, config.character_card)
         self.character_memory = CharacterMemoryStore(config.state_dir / "character_memory")
         self.approvals = ApprovalQueue(config.state_dir / "approvals.json")
+        self.discarded_approvals = DiscardedApprovalStore(config.state_dir / "discarded_approvals.json")
         self.reply_ledger = ReplyLedger(config.state_dir / "sent_replies.json")
         self.reaction_ledger = ReactionLedger(config.state_dir / "reactions.json")
         self.user_instructions = UserInstructionStore(config.state_dir / "user_instructions.json")
@@ -407,6 +409,23 @@ class NhiZuesRunner:
             )
             if decision.should_reply and decision.draft:
                 source_ids = tuple(message.message_id for message in reply_fresh)
+                discarded_message = discarded_approval_message(
+                    self.discarded_approvals.find_overlap(
+                        channel_id=target.channel_id,
+                        source_message_ids=source_ids,
+                    )
+                )
+                if discarded_message:
+                    log.info("discarded approval suppressed channel=%s", target.channel_id)
+                    self.events.add(
+                        event_type="discarded_approval_suppressed",
+                        server_id=target.server_id,
+                        channel_id=target.channel_id,
+                        summary=discarded_message,
+                        draft=decision.draft,
+                    )
+                    self.memory.save()
+                    continue
                 duplicate_message = duplicate_reply_message(
                     self.reply_ledger.find_overlap(
                         channel_id=target.channel_id,

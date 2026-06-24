@@ -220,6 +220,7 @@ Local state lives under `.state/`:
 - `.state/memory.json` stores remembered channel messages and per-user memory.
 - `.state/events.json` stores scan checks, approvals, sends, and failures.
 - `.state/approvals.json` stores the five newest pending approval drafts.
+- `.state/discarded_approvals.json` stores source message IDs for approvals you discarded or cleared so repeated scanner loops do not recreate the same stale drafts.
 - `.state/sent_replies.json` stores successful send receipts keyed by source message IDs, posted message IDs, and sanitized draft text so stale approvals cannot double-reply to the same Discord message or treat the account's own prior posts as new external prompts.
 - `.state/usage.json` stores estimated/recorded API usage.
 
@@ -307,6 +308,8 @@ Use this sequence before allowing live sends:
 9. Confirm a draft queues only when expected.
 10. Review the draft text and character behavior.
 11. Clear stale approvals.
+
+Discard and Clear All are persistent local decisions for the source messages behind those drafts. If the scanner returns to the same channel, it should log `discarded_approval_suppressed` instead of recreating the same approval.
 12. Turn dry-run off.
 13. Send one approved draft manually.
 14. Confirm Events shows `Approved response sent`.

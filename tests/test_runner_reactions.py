@@ -4,7 +4,9 @@ import unittest
 from types import SimpleNamespace
 
 from nhi_zues.config import ChannelTarget
+from nhi_zues.discarded_approvals import DiscardedApproval
 from nhi_zues.models import MessageRecord
+from nhi_zues.models import DraftDecision
 from nhi_zues.runner import (
     NhiZuesRunner,
     _recent_non_own_message_ids,
@@ -40,6 +42,25 @@ class ReplyLedgerStateStub:
 
     def own_texts_for_channel(self, *, channel_id: str) -> set[str]:
         return set()
+
+    def find_overlap(self, *, channel_id: str, source_message_ids):
+        return []
+
+
+class DiscardedApprovalStub:
+    def __init__(self, overlaps=None):
+        self.overlaps = list(overlaps or [])
+
+    def find_overlap(self, *, channel_id: str, source_message_ids):
+        return self.overlaps
+
+
+class ApprovalsShouldNotQueue:
+    def find_source_overlap(self, *, channel_id: str, source_message_ids):
+        raise AssertionError("approval duplicate check should not run after discard suppression")
+
+    def add(self, **kwargs):
+        raise AssertionError("discarded source should not queue another approval")
 
 
 class SessionStub:
@@ -84,6 +105,7 @@ def runner(*, runtime_mode: str = "live_fire", ledger: ReactionLedgerStub | None
     instance.events = EventSink()
     instance.reaction_ledger = ledger or ReactionLedgerStub()
     instance.reply_ledger = ReplyLedgerStateStub()
+    instance.discarded_approvals = DiscardedApprovalStub()
     return instance
 
 
@@ -371,6 +393,55 @@ class RunnerReactionTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(RuntimeError, "planner failed"):
             await app._process_channels(session, [target])
 
+        self.assertTrue(app.memory.saved)
+
+    async def test_discarded_source_suppresses_requeued_approval(self) -> None:
+        class PlannerAlwaysReplies:
+            async def plan(self, **kwargs):
+                return DraftDecision(
+                    True,
+                    "direct cue",
+                    draft="i would normally answer this",
+                    engagement_type="direct",
+                )
+
+        app = runner(runtime_mode="live_fire")
+        app.memory = MemoryStub([message("1", "hey NHI Zues what do you think", "Rook")])
+        app.characters = SimpleNamespace(
+            for_server=lambda server_id, card: SimpleNamespace(name="NHI Zues", aliases=())
+        )
+        app.topics = SimpleNamespace(
+            update=lambda channel_id, messages: SimpleNamespace(top_topics=())
+        )
+        app.user_instructions = SimpleNamespace(for_users=lambda user_keys, server_id, channel_id: [])
+        app.character_memory = SimpleNamespace(load=lambda card_id: SimpleNamespace())
+        app.planner = PlannerAlwaysReplies()
+        app.approvals = ApprovalsShouldNotQueue()
+        app.discarded_approvals = DiscardedApprovalStub(
+            [
+                DiscardedApproval(
+                    discard_id="discard-1",
+                    created_at="2026-06-24T12:00:00+00:00",
+                    server_id="server-1",
+                    channel_id="channel-1",
+                    source_message_ids=("1",),
+                    reason="discarded by operator",
+                )
+            ]
+        )
+        session = ChannelSessionStub()
+        target = SimpleNamespace(
+            server_id="server-1",
+            channel_id="channel-1",
+            character_card=None,
+            react_enabled=False,
+            engage_enabled=True,
+            auto_respond_enabled=True,
+        )
+
+        await app._process_channels(session, [target])
+
+        self.assertEqual("discarded_approval_suppressed", app.events.items[-1]["event_type"])
         self.assertTrue(app.memory.saved)
 
 

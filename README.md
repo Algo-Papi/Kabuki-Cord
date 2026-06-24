@@ -135,7 +135,7 @@ To inspect proactive drafts waiting for approval:
 .\.venv\Scripts\kabuki-cord --approvals
 ```
 
-Kabuki-Cord keeps only the five newest pending approval drafts. When semi-auto has been running unattended, older queued drafts are pruned so outdated responses do not pile up waiting for review.
+Kabuki-Cord keeps only the five newest pending approval drafts. When semi-auto has been running unattended, older queued drafts are pruned so outdated responses do not pile up waiting for review. Discarding an approval, or using Clear All, also records the source Discord message IDs in local discard state so the scanner does not bring the same stale draft back on the next loop.
 
 To add persistent character continuity without editing the base card:
 
@@ -172,7 +172,7 @@ Scanner pacing is intentionally conservative. `NHI_ZUES_SCANNER_MAX_CHANNELS_PER
 
 The right-side **Events** view shows the live activity trail: routine channel checks, queued approvals, delivery-started status, regenerated drafts, approved sends, autonomous sends, dry-run drafts, and send failures. The GUI auto-refreshes while you are not editing a form and raises an in-app toast for important new events. The Approvals panel intentionally shows the newest five pending drafts only.
 
-Successful sends are also recorded in `.state/sent_replies.json`. Before queuing or sending another response, Kabuki-Cord checks that ledger against the source Discord message IDs so stale approvals or repeated scans do not double-reply to the same message. The same ledger drives the auto-reply cooldown and rate-limit guard.
+Successful sends are also recorded in `.state/sent_replies.json`. Before queuing or sending another response, Kabuki-Cord checks that ledger against the source Discord message IDs so stale approvals or repeated scans do not double-reply to the same message. Discarded or cleared approvals are recorded in `.state/discarded_approvals.json` for the same reason. The same send ledger drives the auto-reply cooldown and rate-limit guard.
 
 The **Behavior** tab includes writing-imperfection controls. `NHI_ZUES_WRITING_MISTAKE_RATE` sets typo intensity, `NHI_ZUES_WRITING_QUIRK` controls the consistent style quirk, and `NHI_ZUES_WRITING_MISSPELLINGS` stores repeatable replacements such as `definitely:definately`.
 
