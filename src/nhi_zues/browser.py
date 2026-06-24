@@ -1142,7 +1142,7 @@ class DiscordWebSession:
             await self._wait_for_sent_message(
                 text,
                 before_message_ids=before_message_ids,
-                timeout_ms=15_000,
+                timeout_ms=25_000,
             )
         )
         return delivery
@@ -1254,6 +1254,21 @@ class DiscordWebSession:
             elif composer_text.strip():
                 detail = "The composer still contains text after Enter, so Discord likely blocked or redirected the send."
             else:
+                await self.page.wait_for_timeout(4_000)
+                late_message_ids = await self._visible_message_ids()
+                late_new_message_ids = [
+                    message_id for message_id in late_message_ids if message_id not in before
+                ]
+                if late_new_message_ids:
+                    return {
+                        "confirmed": False,
+                        "assumed_sent": True,
+                        "message_id": str(late_new_message_ids[-1]),
+                        "confirmation_warning": (
+                            "Discord cleared the composer and rendered a new message after the "
+                            "normal confirmation window. Treated as delivered to avoid a duplicate send."
+                        ),
+                    }
                 detail = "The composer cleared, but Kabuki could not match a newly rendered Discord message."
                 if new_message_count > 0:
                     return {
