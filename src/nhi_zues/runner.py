@@ -289,6 +289,7 @@ class NhiZuesRunner:
                 return
             visible_messages = await session.read_visible_messages(target.server_id, target.channel_id)
             fresh = self.memory.ingest(target.channel_id, visible_messages)
+            self.memory.save()
             character = self.characters.for_server(target.server_id, target.character_card)
             character_names = (character.name, *character.aliases)
             own_author_ids = set(getattr(self, "_own_author_ids", set()))
@@ -728,7 +729,7 @@ class NhiZuesRunner:
                     f"ineligible={ineligible}, attempted={attempted}, already_present={already_present}, "
                     f"failed={failed}, own_skipped={own_skipped}, cap_reached={str(cap_reached).lower()}, "
                     f"threshold={self.config.reaction_threshold}, sample={self.config.reaction_sample_percent:g}%"
-                    f", force_laugh={self.config.reaction_force_laugh_percent:g}%"
+                    f", force_recent={self.config.reaction_force_laugh_percent:g}%"
                     f", force_window={force_window_used}/{force_window_cap}/{len(force_laugh_ids)}"
                     f", force_window_capped={force_window_capped}"
                     + (f", last_skip={last_reason}" if last_reason else "")
@@ -943,13 +944,14 @@ def _is_character_author(author: str, character_names: tuple[str, ...]) -> bool:
     cleaned_author = _normalize_author(author)
     if not cleaned_author:
         return False
-    names = {_normalize_author(name) for name in character_names if name}
-    if cleaned_author in names:
+    exact_names = {_normalize_author(name) for name in character_names if name}
+    if cleaned_author in exact_names:
         return True
-    if any(cleaned_author.startswith(f"{name} ") for name in names if name):
+    prefix_names = {name for name in exact_names if len(name.replace(" ", "")) >= 5}
+    if any(cleaned_author.startswith(f"{name} ") for name in prefix_names if name):
         return True
     compact_author = cleaned_author.replace(" ", "")
-    compact_names = {name.replace(" ", "") for name in names if len(name.replace(" ", "")) >= 5}
+    compact_names = {name.replace(" ", "") for name in prefix_names}
     return bool(
         compact_author
         and (

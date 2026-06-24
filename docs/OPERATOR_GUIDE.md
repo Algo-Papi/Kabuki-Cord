@@ -72,12 +72,14 @@ If React is on and Observe is on:
 - Each channel scan is capped by `NHI_ZUES_REACTION_MAX_PER_CHANNEL`, which defaults to `2`.
 - The reaction ledger prevents repeating any app-made reaction on the same Discord message.
 
-Reaction behavior has three app-level controls:
+Reaction behavior has four app-level controls:
 
 - **Reaction threshold**: `strict`, `normal`, or `loose`. Loose accepts lower-confidence acknowledgement-style messages.
 - **Random reaction percent**: optional percentage of otherwise eligible fresh messages to react to. Keep this low.
-- **Force laugh recent**: optional rolling cap for laugh-react sampling across the latest five visible non-character messages. Repeated scans do not keep adding reactions after the cap is full. For example, `40%` means at most 2 of those latest 5 non-character messages can be reacted to until new messages move the window. It still obeys Dry-run mode, per-channel React, the per-scan cap, and the reaction ledger.
-- **Reaction emoji override**: optional emoji that replaces the smart choice. When random sampling is enabled and this is blank, sampled reactions use the laugh emoji.
+- **Force recent reaction**: optional rolling cap for reacting across the latest five visible non-character messages. Repeated scans do not keep adding reactions after the cap is full. For example, `40%` means at most 2 of those latest 5 non-character messages can be reacted to until new messages move the window. It still obeys Dry-run mode, per-channel React, the per-scan cap, and the reaction ledger.
+- **Reaction emoji override**: optional emoji that replaces the smart choice.
+
+Smart reaction selection is conservative: obvious jokes can get `😂`, clear agreement can get `👍`, thanks/help/support can get `🙏`, questions can get `🤔`, and serious or notably weird claims usually get `👀`. The forced-reaction percentage controls frequency, not a forced laugh emoji.
 
 Suggested testing baseline: `normal` threshold, `0%` random sample, cap `1-2` per channel scan.
 
@@ -286,7 +288,7 @@ Kabuki-Cord should not attempt to bypass Discord account security systems. If ch
 
 ### Scanner Monitor and Replies
 
-Click **Monitor** in the top bar to open a separate scanner-status window. It reports the live scanner phase, current channel, next due channel, the next five due channels, and the last completed scan counts. Normal scanner passes update remembered conversation history from the visible messages in each enabled channel; use **Backfill** when you need deeper scrollback.
+Click **Monitor** in the top bar to open a separate scanner-status window. It reports the live scanner phase, current channel, next due channel, the next five due channels, scanner pacing, and the last completed scan counts. Normal scanner passes update remembered conversation history from the visible messages in each enabled channel as soon as the channel is read; use **Backfill** when you need deeper scrollback beyond what Discord currently renders.
 
 The **Replies** tab lists remembered messages that appear to need attention after the character's last post. It flags explicit mentions/tags plus immediate adjacent replies in a short window, then shows red dots on the matching server icons. These indicators are based on local scan memory, so they clear after a later character response is scanned back into memory.
 

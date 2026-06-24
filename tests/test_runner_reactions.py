@@ -115,6 +115,22 @@ class RunnerReactionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(["2"], [item.message_id for item in candidates])
 
+    def test_recent_reaction_candidates_skip_scraped_character_status_suffixes(self) -> None:
+        visible = [
+            message("1", "own display drift", "NHI ZuesOnline"),
+            message("2", "own display drift", "NHI Zues Invisible"),
+            message("3", "not own", "ZuesFan", author_id="user-3"),
+            message("4", "that was wild", "Rook", author_id="user-4"),
+        ]
+
+        candidates = _recent_reaction_candidates(
+            visible,
+            [],
+            character_names=("NHI Zues", "zues"),
+        )
+
+        self.assertEqual(["4", "3"], [item.message_id for item in candidates])
+
     async def test_no_eligible_reaction_emits_scan_event(self) -> None:
         app = runner()
         session = SessionStub({"applied": True, "path": "quick"})
@@ -300,6 +316,38 @@ class RunnerReactionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(app.memory.saved)
         self.assertEqual("channel_checked", app.events.items[-1]["event_type"])
         self.assertIn("Engage is off", app.events.items[-1]["summary"])
+
+    async def test_scanned_messages_are_saved_before_planner_runs(self) -> None:
+        class PlannerRaises:
+            async def plan(self, **kwargs):
+                raise RuntimeError("planner failed after scan")
+
+        app = runner()
+        app.config.runtime_mode = "semi_auto"
+        app.memory = MemoryStub([message("1", "that made me laugh lmao", "Rook")])
+        app.characters = SimpleNamespace(
+            for_server=lambda server_id, card: SimpleNamespace(name="NHI Zues", aliases=())
+        )
+        app.topics = SimpleNamespace(
+            update=lambda channel_id, messages: SimpleNamespace(top_topics=())
+        )
+        app.user_instructions = SimpleNamespace(for_users=lambda user_keys, server_id, channel_id: [])
+        app.character_memory = SimpleNamespace(load=lambda card_id: SimpleNamespace())
+        app.planner = PlannerRaises()
+        session = ChannelSessionStub()
+        target = SimpleNamespace(
+            server_id="server-1",
+            channel_id="channel-1",
+            character_card=None,
+            react_enabled=False,
+            engage_enabled=True,
+            auto_respond_enabled=True,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "planner failed"):
+            await app._process_channels(session, [target])
+
+        self.assertTrue(app.memory.saved)
 
 
 class RunnerTargetRotationTests(unittest.TestCase):

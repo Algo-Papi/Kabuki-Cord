@@ -18,7 +18,7 @@ This is the replacement checklist for animated and sprite-like visual assets cur
 | `web/assets/mode-kabuki-dry-sheet.png` | Upgraded 10-frame, 256px-source response mode transition for Dry Mode: the actor reaches forward, dries out, cracks into dust, and leaves a dust pile. | `web/styles.css`, `web/app.js` |
 | `web/assets/mode-kabuki-full-auto-sheet.png` | Upgraded 12-frame, 256px-source response mode transition for Full Auto: the actor opens the robe, pulls out an oversized comedic M60-style prop, charges it, and finishes with a barrel-glint hero pose. | `web/styles.css`, `web/app.js` |
 | `web/assets/mode-kabuki-semi-auto-sheet.png` | Upgraded 12-frame, 256px-source response mode transition for Semi Auto: the actor reveals a small theatrical prop pistol, checks it without firing, signals restraint, and tucks it back into the robe. | `web/styles.css`, `web/app.js` |
-| `web/assets/mode-kabuki-live-fire-sheet.png` | Response mode transition animation for Live Fire. | `web/styles.css`, `web/app.js` |
+| `web/assets/mode-kabuki-live-fire-sheet.png` | Upgraded 12-frame, 256px-source response mode transition for Live Fire: the actor ignites, floats, throws a sweeping flame arc, lands, and settles into a controlled fire stance. | `web/styles.css`, `web/app.js` |
 
 ## Static Sprite-Like Assets
 
@@ -31,6 +31,7 @@ This is the replacement checklist for animated and sprite-like visual assets cur
 | `web/assets/source/dry_mode_keyframes/frame_000.png` through `frame_009.png` | Cleaned transparent keyframes used to assemble the upgraded Dry Mode transition sprite sheet. | Source/reference asset |
 | `web/assets/source/full_auto_keyframes/frame_000.png` through `frame_011.png` | Cleaned transparent keyframes used to assemble the upgraded Full Auto transition sprite sheet. | Source/reference asset |
 | `web/assets/source/semi_auto_keyframes/frame_000.png` through `frame_011.png` | Cleaned transparent keyframes used to assemble the upgraded Semi Auto transition sprite sheet. | Source/reference asset |
+| `web/assets/source/live_fire_keyframes/frame_000.png` through `frame_011.png` | Cleaned transparent keyframes used to assemble the upgraded Live Fire transition sprite sheet. | Source/reference asset |
 | `web/assets/source/sync_keyframes/frame_000.png` through `frame_010.png` | Cleaned transparent keyframes used to assemble the upgraded Sync Discord action sprite sheet. | Source/reference asset |
 | `web/assets/source/posting_keyframes/frame_000.png` through `frame_009.png` | Cleaned transparent keyframes used to assemble the upgraded Posting action sprite sheet. | Source/reference asset |
 | `web/assets/source/discord_blocked_keyframes/frame_000.png` through `frame_009.png` | Cleaned transparent keyframes used to assemble the upgraded Discord Blocked action sprite sheet. | Source/reference asset |
@@ -62,6 +63,7 @@ This is the replacement checklist for animated and sprite-like visual assets cur
 | `scripts/generate_discord_blocked_sprite.py` | Reassembles `scanner-kabuki-discord-blocked-sheet.png` from cleaned source keyframes. |
 | `scripts/generate_sync_sprite.py` | Reassembles `scanner-kabuki-sync-sheet.png` from cleaned source keyframes. |
 | `scripts/generate_semi_auto_sprite.py` | Reassembles `mode-kabuki-semi-auto-sheet.png` from cleaned source keyframes. |
+| `scripts/generate_live_fire_sprite.py` | Reassembles `mode-kabuki-live-fire-sheet.png` from cleaned source keyframes. |
 
 ## Scanner Timing Defaults
 
@@ -81,8 +83,7 @@ New action sprites should use the HD kabuki actor style from `web/assets/source/
 
 Recommended replacement order:
 
-1. `mode-kabuki-live-fire-sheet.png` because it renders large in the mode transition overlay.
-2. `scanner-kabuki-sync-sheet.png`, `scanner-kabuki-repair-sheet.png`, `scanner-kabuki-latest-sheet.png`, `scanner-kabuki-refresh-sheet.png`.
-3. `scanner-kabuki-sheet.png`, `scanner-kabuki-backfill-sheet.png`, `scanner-kabuki-posting-sheet.png`, `scanner-kabuki-discord-blocked-sheet.png`, `mode-kabuki-dry-sheet.png`, `mode-kabuki-full-auto-sheet.png`, and `mode-kabuki-semi-auto-sheet.png` are already upgraded as the first pass, but can be refined later with hand-painted in-betweens if needed.
+1. `scanner-kabuki-repair-sheet.png`, `scanner-kabuki-latest-sheet.png`, and `scanner-kabuki-refresh-sheet.png`.
+2. `scanner-kabuki-sheet.png`, `scanner-kabuki-backfill-sheet.png`, `scanner-kabuki-sync-sheet.png`, `scanner-kabuki-posting-sheet.png`, `scanner-kabuki-discord-blocked-sheet.png`, `mode-kabuki-dry-sheet.png`, `mode-kabuki-full-auto-sheet.png`, `mode-kabuki-semi-auto-sheet.png`, and `mode-kabuki-live-fire-sheet.png` are already upgraded as the first pass, but can be refined later with hand-painted in-betweens if needed.
 
 For upgraded topbar sheets, prefer 256px source frames and a CSS-specific frame count/duration rather than forcing every animation into the legacy 20-frame, 128px-source path. For the larger mode transition overlay, use at least 256px source frames and export at the display scale or higher.

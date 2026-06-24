@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import mimetypes
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
@@ -7,6 +9,7 @@ from playwright.sync_api import sync_playwright
 
 ROOT = Path(__file__).resolve().parents[1]
 STYLE_PATH = ROOT / "web" / "styles.css"
+MONITOR_STYLE_PATH = ROOT / "web" / "monitor.css"
 ASSET_DIR = ROOT / "web" / "assets"
 OUTPUT_DIR = ROOT / "docs" / "screenshots"
 VIEWPORT = {"width": 1440, "height": 900}
@@ -15,6 +18,17 @@ VIEWPORT = {"width": 1440, "height": 900}
 def app_styles() -> str:
     css = STYLE_PATH.read_text(encoding="utf-8")
     return css.replace('url("/assets/', f'url("{ASSET_DIR.as_uri()}/')
+
+
+def monitor_styles() -> str:
+    css = MONITOR_STYLE_PATH.read_text(encoding="utf-8")
+    return css.replace('url("/assets/', f'url("{ASSET_DIR.as_uri()}/')
+
+
+def image_data_uri(path: Path) -> str:
+    content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+    return f"data:{content_type};base64,{encoded}"
 
 
 FIXTURE_STYLES = """
@@ -138,6 +152,48 @@ body {
 """
 
 
+MONITOR_FIXTURE_STYLES = """
+body {
+  width: 1440px;
+  height: 900px;
+  overflow: hidden;
+}
+
+.monitor-shell {
+  width: min(1180px, calc(100vw - 36px));
+  min-height: 0;
+  margin: 0 auto;
+  padding-bottom: 18px;
+}
+
+.spy-scene {
+  aspect-ratio: auto;
+  height: 270px;
+  min-height: 0;
+}
+
+.action-history-panel {
+  margin-bottom: 88px;
+}
+
+.spy-frame {
+  opacity: 1 !important;
+}
+
+.spy-frame:not(.active),
+.stage-transition,
+.stage-glints,
+.delivery-burst,
+.monitor-toast {
+  animation: none !important;
+}
+
+.monitor-toast {
+  opacity: 1;
+}
+"""
+
+
 def document(body: str, *, mode: str = "runtime-mode-semi-auto") -> str:
     return f"""<!doctype html>
 <html lang="en">
@@ -149,6 +205,22 @@ def document(body: str, *, mode: str = "runtime-mode-semi-auto") -> str:
     <style>{FIXTURE_STYLES}</style>
   </head>
   <body class="{mode}">
+    {body}
+  </body>
+</html>"""
+
+
+def monitor_document(body: str) -> str:
+    return f"""<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Kabuki-Cord Scanner Monitor Fixture</title>
+    <style>{monitor_styles()}</style>
+    <style>{MONITOR_FIXTURE_STYLES}</style>
+  </head>
+  <body>
     {body}
   </body>
 </html>"""
@@ -314,6 +386,7 @@ def preview_panel() -> str:
         <div class="preview-tabs">
           <button class="preview-tab active">Preview</button>
           <button class="preview-tab">Events</button>
+          <button class="preview-tab">Replies <span class="event-badge">2</span></button>
           <span class="api-spend-pill"><span>$0.01842</span><small>42 calls</small></span>
         </div>
         <section class="preview-mode active">
@@ -447,6 +520,130 @@ def approvals_body() -> str:
     """
 
 
+def monitor_body() -> str:
+    spy_frame = image_data_uri(ASSET_DIR / "monitor_spy_frames" / "frame_003.png")
+    arigato = image_data_uri(ASSET_DIR / "monitor-arigato-sprite.png")
+    return f"""
+    <main class="monitor-shell">
+      <header class="monitor-header">
+        <div>
+          <span class="eyebrow">Kabuki-Cord</span>
+          <h1>Scanner Monitor</h1>
+        </div>
+        <div class="monitor-actions">
+          <button class="sound-toggle" type="button" aria-pressed="true">Sound on</button>
+          <div class="status-pill running">scanning</div>
+        </div>
+      </header>
+
+      <section class="story-panel">
+        <div class="spy-scene" aria-hidden="true">
+          <img class="spy-frame active" src="{spy_frame}" alt="" />
+          <img class="spy-frame" src="{spy_frame}" alt="" />
+          <div class="stage-transition"></div>
+          <div class="stage-glints"></div>
+        </div>
+        <div class="scan-board">
+          <div class="scan-card current">
+            <span>Current</span>
+            <strong>Signal Lab</strong>
+            <small>#general - 100000000000000001</small>
+            <div class="countdown-line"><span>Est. done</span><strong>00:08</strong></div>
+          </div>
+          <div class="scan-card">
+            <span>Next</span>
+            <strong>Arcade Ops</strong>
+            <small>#odd-links - 100000000000000002</small>
+            <div class="countdown-line"><span>Next channel</span><strong>00:45</strong></div>
+          </div>
+          <div class="scan-card pace">
+            <span>Pace</span>
+            <strong>1 channel / cycle</strong>
+            <small>12s settle, 45s rest, 12-35s channel pacing</small>
+            <div class="countdown-line"><span>Rest after</span><strong>00:45</strong></div>
+          </div>
+          <div class="scan-card completed">
+            <span>Last Completed</span>
+            <strong>Field Notes</strong>
+            <small>Reviewed 12 visible messages, 3 new remembered.</small>
+          </div>
+        </div>
+      </section>
+
+      <section class="queue-panel">
+        <div class="section-title">Upcoming Channels</div>
+        <div class="upcoming-list">
+          <article class="queue-item"><strong>Arcade Ops</strong><span>#odd-links</span><small>due in 45s</small></article>
+          <article class="queue-item"><strong>Sky Lantern</strong><span>#night-shift</span><small>due in 2m</small></article>
+          <article class="queue-item"><strong>Signal Lab</strong><span>#field-notes</span><small>due in 3m</small></article>
+          <article class="queue-item"><strong>Field Notes</strong><span>#archive-desk</span><small>due in 5m</small></article>
+        </div>
+      </section>
+
+      <section class="action-history-panel">
+        <div class="action-column">
+          <div class="section-title">Responses</div>
+          <div class="action-list">
+            <details class="action-item response" open>
+              <summary>
+                <span class="action-badge">sent</span>
+                <span class="action-summary"><strong>Rin Vale</strong><small>Signal Lab / #general</small></span>
+              </summary>
+              <div class="action-body">
+                <p>yeah i would slow down on that one until someone posts the archive link</p>
+                <div class="action-buttons"><button>Open</button><button>Copy link</button></div>
+              </div>
+            </details>
+            <details class="action-item response" open>
+              <summary>
+                <span class="action-badge">queued</span>
+                <span class="action-summary"><strong>Maple Desk</strong><small>Field Notes / #archive-desk</small></span>
+              </summary>
+              <div class="action-body">
+                <p>interesting but not proven yet, the source chain is doing a lot of work</p>
+                <div class="action-buttons"><button>Open</button><button>Copy link</button></div>
+              </div>
+            </details>
+          </div>
+        </div>
+        <div class="action-column">
+          <div class="section-title">Reactions</div>
+          <div class="action-list">
+            <details class="action-item reaction" open>
+              <summary>
+                <span class="action-badge">😂</span>
+                <span class="action-summary"><strong>Byte Lantern</strong><small>Arcade Ops / #odd-links</small></span>
+              </summary>
+              <div class="action-body">
+                <p>obvious joke cue in the latest thread</p>
+                <div class="action-buttons"><button>Open</button><button>Copy link</button></div>
+              </div>
+            </details>
+            <details class="action-item reaction" open>
+              <summary>
+                <span class="action-badge">👀</span>
+                <span class="action-summary"><strong>Maple Desk</strong><small>Signal Lab / #general</small></span>
+              </summary>
+              <div class="action-body">
+                <p>weird claim, low-commitment reaction selected</p>
+                <div class="action-buttons"><button>Open</button><button>Copy link</button></div>
+              </div>
+            </details>
+          </div>
+        </div>
+      </section>
+    </main>
+    <div class="monitor-toasts">
+      <article class="monitor-toast">
+        <div class="toast-stars"><span></span><span></span></div>
+        <img src="{arigato}" alt="" />
+        <div><strong>Arigato</strong><span>Reply delivered in Signal Lab / #general</span><small>Just now</small></div>
+        <button>×</button>
+      </article>
+    </div>
+    """
+
+
 def capture(name: str, body: str, *, mode: str = "runtime-mode-semi-auto") -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     output = OUTPUT_DIR / name
@@ -459,9 +656,22 @@ def capture(name: str, body: str, *, mode: str = "runtime-mode-semi-auto") -> No
     print(f"wrote {output}")
 
 
+def capture_monitor(name: str, body: str) -> None:
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    output = OUTPUT_DIR / name
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page(viewport=VIEWPORT, device_scale_factor=1)
+        page.set_content(monitor_document(body), wait_until="networkidle")
+        page.screenshot(path=str(output), full_page=False)
+        browser.close()
+    print(f"wrote {output}")
+
+
 def main() -> None:
     capture("kabuki-cord-dashboard.png", dashboard_body())
     capture("kabuki-cord-approvals.png", approvals_body(), mode="runtime-mode-live-fire")
+    capture_monitor("kabuki-cord-monitor.png", monitor_body())
 
 
 if __name__ == "__main__":
