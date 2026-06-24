@@ -266,11 +266,17 @@ class NhiZuesRunner:
                 fresh,
                 character_names=(character.name, *character.aliases),
             )
+            force_laugh_ids = _recent_non_own_message_ids(
+                visible_messages,
+                character_names=(character.name, *character.aliases),
+                limit=5,
+            )
             reacted_message_ids = await self._process_reactions(
                 session,
                 target,
                 reaction_candidates,
                 fresh_count=len(fresh),
+                force_laugh_ids=force_laugh_ids,
             )
             reply_fresh = [
                 message
@@ -498,6 +504,7 @@ class NhiZuesRunner:
         candidates,
         *,
         fresh_count: int,
+        force_laugh_ids: set[str] | None = None,
     ) -> set[str]:
         if not getattr(target, "react_enabled", False):
             return set()
@@ -532,6 +539,7 @@ class NhiZuesRunner:
         failed = 0
         cap_reached = False
         last_reason = ""
+        force_laugh_ids = force_laugh_ids or set()
         for message in candidates:
             if len(reacted_message_ids) >= self.config.reaction_max_per_channel:
                 cap_reached = True
@@ -546,6 +554,11 @@ class NhiZuesRunner:
                 message.text,
                 threshold=self.config.reaction_threshold,
                 sample_percent=self.config.reaction_sample_percent,
+                force_laugh_percent=(
+                    self.config.reaction_force_laugh_percent
+                    if message.message_id in force_laugh_ids
+                    else 0.0
+                ),
                 emoji_override=self.config.reaction_emoji_override,
             )
             if not should_react:
@@ -607,6 +620,7 @@ class NhiZuesRunner:
                     f"ineligible={ineligible}, attempted={attempted}, already_present={already_present}, "
                     f"failed={failed}, cap_reached={str(cap_reached).lower()}, "
                     f"threshold={self.config.reaction_threshold}, sample={self.config.reaction_sample_percent:g}%"
+                    f", force_laugh={self.config.reaction_force_laugh_percent:g}%"
                     + (f", last_skip={last_reason}" if last_reason else "")
                     + "."
                 ),
@@ -643,6 +657,23 @@ def _recent_reaction_candidates(
         candidates.append(message)
         seen_ids.add(message.message_id)
     return candidates
+
+
+def _recent_non_own_message_ids(
+    visible_messages,
+    *,
+    character_names: tuple[str, ...],
+    limit: int,
+) -> set[str]:
+    message_ids: list[str] = []
+    for message in reversed(_without_own_messages(visible_messages, character_names=character_names)):
+        message_id = str(getattr(message, "message_id", "") or "")
+        if not message_id or message_id in message_ids:
+            continue
+        message_ids.append(message_id)
+        if len(message_ids) >= limit:
+            break
+    return set(message_ids)
 
 
 def _auto_reply_guard_reason(

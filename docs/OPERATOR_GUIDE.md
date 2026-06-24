@@ -76,6 +76,7 @@ Reaction behavior has three app-level controls:
 
 - **Reaction threshold**: `strict`, `normal`, or `loose`. Loose accepts lower-confidence acknowledgement-style messages.
 - **Random reaction percent**: optional percentage of otherwise eligible fresh messages to react to. Keep this low.
+- **Force laugh recent**: optional percentage for laugh-react sampling across the latest five visible non-character messages. It still obeys Dry-run mode, per-channel React, the per-scan cap, and the reaction ledger.
 - **Reaction emoji override**: optional emoji that replaces the smart choice. When random sampling is enabled and this is blank, sampled reactions use the laugh emoji.
 
 Suggested testing baseline: `normal` threshold, `0%` random sample, cap `1-2` per channel scan.

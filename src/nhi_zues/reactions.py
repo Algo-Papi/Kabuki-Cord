@@ -73,10 +73,18 @@ def should_auto_react(
     *,
     threshold: str = "normal",
     sample_percent: float = 0.0,
+    force_laugh_percent: float = 0.0,
     emoji_override: str = "",
     sample_roll: float | None = None,
+    force_laugh_roll: float | None = None,
 ) -> tuple[bool, str, str]:
     cleaned = " ".join(str(text or "").split())
+    force_laugh_percent = max(0.0, min(float(force_laugh_percent or 0.0), 100.0))
+    if force_laugh_percent > 0 and _has_minimum_force_laugh_signal(cleaned):
+        roll = force_laugh_roll if force_laugh_roll is not None else random.random()
+        if roll <= force_laugh_percent / 100.0:
+            return True, LAUGH_EMOJI, f"force laugh sample accepted ({force_laugh_percent:g}%)"
+
     if not _has_enough_reaction_signal(cleaned):
         return False, "", "message is too short or low-signal for an automatic reaction"
 
@@ -128,6 +136,16 @@ def _has_enough_reaction_signal(text: str) -> bool:
     if lowered.startswith(("http://", "https://", "www.")):
         return False
     return True
+
+
+def _has_minimum_force_laugh_signal(text: str) -> bool:
+    cleaned = str(text or "").strip()
+    if len(cleaned) < 4:
+        return False
+    lowered = cleaned.lower()
+    if lowered.startswith(("http://", "https://", "www.")):
+        return False
+    return bool(re.search(r"[a-zA-Z0-9]", cleaned))
 
 
 def _normalize_threshold(value: str) -> str:

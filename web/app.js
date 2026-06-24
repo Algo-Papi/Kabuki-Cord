@@ -337,6 +337,8 @@ function renderSettings() {
   $("reactionMaxPerChannel").value = appState.env.NHI_ZUES_REACTION_MAX_PER_CHANNEL || "2";
   $("reactionThreshold").value = appState.env.NHI_ZUES_REACTION_THRESHOLD || "normal";
   $("reactionSamplePercent").value = appState.env.NHI_ZUES_REACTION_SAMPLE_PERCENT || "0";
+  $("reactionForceLaughPercent").value = appState.env.NHI_ZUES_REACTION_FORCE_LAUGH_PERCENT || "0";
+  updateReactionForceLaughLabel();
   $("reactionEmojiOverride").value = appState.env.NHI_ZUES_REACTION_EMOJI_OVERRIDE || "";
 }
 
@@ -1843,6 +1845,7 @@ async function saveAll() {
       NHI_ZUES_REACTION_MAX_PER_CHANNEL: $("reactionMaxPerChannel").value,
       NHI_ZUES_REACTION_THRESHOLD: $("reactionThreshold").value,
       NHI_ZUES_REACTION_SAMPLE_PERCENT: $("reactionSamplePercent").value,
+      NHI_ZUES_REACTION_FORCE_LAUGH_PERCENT: $("reactionForceLaughPercent").value,
       NHI_ZUES_REACTION_EMOJI_OVERRIDE: $("reactionEmojiOverride").value.trim(),
     };
     if ($("apiKey").value.trim()) settings.OPENAI_API_KEY = $("apiKey").value.trim();
@@ -2226,6 +2229,14 @@ function runtimeModeLabel(mode) {
     semi_auto: "semi auto",
     live_fire: "live fire",
   }[mode] || "dry mode";
+}
+
+function updateReactionForceLaughLabel() {
+  const input = $("reactionForceLaughPercent");
+  const label = $("reactionForceLaughPercentValue");
+  if (!input || !label) return;
+  const value = Math.max(0, Math.min(Number(input.value || 0), 100));
+  label.textContent = `${Math.round(value)}%`;
 }
 
 function runtimeModeCssClass(mode) {
@@ -2845,6 +2856,7 @@ $("runtimeMode").addEventListener("change", () => {
   renderApprovalReview();
   renderRuntime();
 });
+$("reactionForceLaughPercent").addEventListener("input", updateReactionForceLaughLabel);
 
 $("addChannel").addEventListener("click", () => {
   const id = prompt("Discord channel ID");

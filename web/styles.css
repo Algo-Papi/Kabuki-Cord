@@ -1050,6 +1050,12 @@ textarea:disabled {
   --mode-sheet: url("/assets/mode-kabuki-full-auto-sheet.png");
 }
 
+.mode-transition.mode-full-auto .mode-transition-sprite {
+  background-size: 2496px 208px;
+  image-rendering: auto;
+  animation: mode-full-auto-run 2.25s steps(12, end) forwards;
+}
+
 .mode-transition.mode-full-auto::before {
   background:
     radial-gradient(circle at 50% 50%, rgba(239, 107, 120, 0.2), transparent 24%),
@@ -1203,6 +1209,12 @@ textarea:disabled {
 @keyframes mode-dry-dust-run {
   to {
     background-position: -2080px 0;
+  }
+}
+
+@keyframes mode-full-auto-run {
+  to {
+    background-position: -2496px 0;
   }
 }
 

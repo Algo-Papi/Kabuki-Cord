@@ -4,7 +4,7 @@ import unittest
 from types import SimpleNamespace
 
 from nhi_zues.models import MessageRecord
-from nhi_zues.runner import NhiZuesRunner, _recent_reaction_candidates
+from nhi_zues.runner import NhiZuesRunner, _recent_non_own_message_ids, _recent_reaction_candidates
 from nhi_zues.reactions import LAUGH_EMOJI
 
 
@@ -57,7 +57,10 @@ def runner(*, runtime_mode: str = "live_fire", ledger: ReactionLedgerStub | None
         reaction_max_per_channel=2,
         reaction_threshold="normal",
         reaction_sample_percent=0.0,
+        reaction_force_laugh_percent=0.0,
         reaction_emoji_override="",
+        scanner_channel_settle_seconds=0.0,
+        character_card="default.json",
     )
     instance.events = EventSink()
     instance.reaction_ledger = ledger or ReactionLedgerStub()
@@ -121,6 +124,106 @@ class RunnerReactionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([("1", LAUGH_EMOJI)], session.calls)
         self.assertEqual(1, len(app.reaction_ledger.records))
         self.assertEqual("reaction_added", app.events.items[-1]["event_type"])
+
+    async def test_force_laugh_recent_messages_can_react_to_plain_text(self) -> None:
+        app = runner()
+        app.config.reaction_force_laugh_percent = 100.0
+        session = SessionStub({"applied": True, "path": "quick"})
+        target = SimpleNamespace(server_id="server-1", channel_id="channel-1", react_enabled=True)
+
+        reacted = await app._process_reactions(
+            session,
+            target,
+            [message("1", "plain update with no normal cue")],
+            fresh_count=1,
+            force_laugh_ids={"1"},
+        )
+
+        self.assertEqual({"1"}, reacted)
+        self.assertEqual([("1", LAUGH_EMOJI)], session.calls)
+        self.assertIn("force laugh", app.events.items[-1]["summary"])
+
+    def test_force_laugh_recent_ids_are_last_five_non_character_messages(self) -> None:
+        visible = [
+            message("1", "old one", "A"),
+            message("2", "own", "NHI Zues"),
+            message("3", "two", "B"),
+            message("4", "three", "C"),
+            message("5", "four", "D"),
+            message("6", "five", "E"),
+            message("7", "six", "F"),
+        ]
+
+        ids = _recent_non_own_message_ids(visible, character_names=("NHI Zues",), limit=5)
+
+        self.assertEqual({"3", "4", "5", "6", "7"}, ids)
+
+    async def test_engage_disabled_channel_can_react_but_does_not_plan_reply(self) -> None:
+        app = runner()
+        app.config.runtime_mode = "semi_auto"
+        app.memory = MemoryStub([message("1", "that made me laugh lmao", "Rook")])
+        app.characters = SimpleNamespace(
+            for_server=lambda server_id, card: SimpleNamespace(name="NHI Zues", aliases=())
+        )
+        app.topics = SimpleNamespace(
+            update=lambda channel_id, messages: SimpleNamespace(top_topics=())
+        )
+        app.user_instructions = SimpleNamespace(for_users=lambda user_keys, server_id, channel_id: [])
+        app.character_memory = SimpleNamespace(load=lambda card_id: SimpleNamespace())
+        app.planner = PlannerShouldNotRun()
+        session = ChannelSessionStub()
+        target = SimpleNamespace(
+            server_id="server-1",
+            channel_id="channel-1",
+            character_card=None,
+            react_enabled=True,
+            engage_enabled=False,
+            auto_respond_enabled=True,
+        )
+
+        await app._process_channels(session, [target])
+
+        self.assertEqual([("1", LAUGH_EMOJI)], session.calls)
+        self.assertTrue(app.memory.saved)
+        self.assertEqual("channel_checked", app.events.items[-1]["event_type"])
+        self.assertIn("Engage is off", app.events.items[-1]["summary"])
+
+
+class MemoryStub:
+    def __init__(self, messages):
+        self.messages = messages
+        self.saved = False
+
+    def ingest(self, channel_id, visible_messages):
+        return list(visible_messages)
+
+    def context(self, channel_id):
+        return []
+
+    def user_context_for(self, context):
+        return []
+
+    def save(self):
+        self.saved = True
+
+
+class PlannerShouldNotRun:
+    async def plan(self, **kwargs):
+        raise AssertionError("planner should not run when Engage is disabled")
+
+
+class ChannelSessionStub(SessionStub):
+    def __init__(self) -> None:
+        super().__init__({"applied": True, "path": "quick"})
+
+    async def account_blocker_state(self) -> dict[str, object]:
+        return {"blocked": False}
+
+    async def navigate_channel(self, server_id: str, channel_id: str) -> str:
+        return f"https://discord.com/channels/{server_id}/{channel_id}"
+
+    async def read_visible_messages(self, server_id: str, channel_id: str):
+        return [message("1", "that made me laugh lmao", "Rook")]
 
 
 if __name__ == "__main__":

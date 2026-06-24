@@ -187,6 +187,77 @@ h1 {
   animation: ninja-trail 1650ms cubic-bezier(0.16, 0.78, 0.17, 1) forwards;
 }
 
+.stage-transition {
+  --kabuki-logo: url("/assets/app-icon.png");
+  background:
+    radial-gradient(circle at 50% 50%, rgba(9, 13, 18, 0.18), transparent 36%),
+    linear-gradient(90deg, transparent, rgba(10, 12, 18, 0.34), transparent);
+}
+
+.stage-transition::before {
+  left: 50%;
+  top: 50%;
+  width: min(52vh, 48%);
+  height: auto;
+  aspect-ratio: 1;
+  background: var(--kabuki-logo) center / contain no-repeat;
+  clip-path: none;
+  opacity: 0;
+  filter:
+    drop-shadow(0 0 18px rgba(126, 216, 255, 0.42))
+    drop-shadow(0 18px 26px rgba(0, 0, 0, 0.52));
+  transform: translate(-50%, -50%) scale(1);
+}
+
+.stage-transition::after {
+  inset: 0;
+  left: 0;
+  top: 0;
+  width: auto;
+  height: auto;
+  background:
+    linear-gradient(90deg, transparent, rgba(126, 216, 255, 0.18), rgba(149, 101, 255, 0.2), transparent),
+    radial-gradient(circle at 50% 50%, rgba(244, 221, 150, 0.18), transparent 42%);
+  clip-path: none;
+  opacity: 0;
+  transform: none;
+}
+
+.stage-transition.active {
+  animation: logo-transition-field 1900ms ease both;
+}
+
+.stage-transition.active.logo-swipe-left::before {
+  animation: logo-swipe-left 1900ms cubic-bezier(0.18, 0.82, 0.2, 1) both;
+}
+
+.stage-transition.active.logo-swipe-right::before {
+  animation: logo-swipe-right 1900ms cubic-bezier(0.18, 0.82, 0.2, 1) both;
+}
+
+.stage-transition.active.mask-zoom::before {
+  width: min(46vh, 44%);
+  animation: mask-zoom-through 1900ms cubic-bezier(0.19, 0.72, 0.18, 1) both;
+}
+
+.stage-transition.active.crest-iris::before {
+  width: min(58vh, 54%);
+  animation: crest-iris-logo 1900ms cubic-bezier(0.17, 0.82, 0.2, 1) both;
+}
+
+.stage-transition.active.logo-swipe-left::after,
+.stage-transition.active.logo-swipe-right::after {
+  animation: logo-light-wipe 1900ms ease both;
+}
+
+.stage-transition.active.mask-zoom::after {
+  animation: mask-zoom-field 1900ms ease both;
+}
+
+.stage-transition.active.crest-iris::after {
+  animation: crest-iris-field 1900ms ease both;
+}
+
 .stage-glints {
   z-index: 5;
   opacity: 0;
@@ -465,6 +536,150 @@ h1 {
   42% {
     opacity: 1;
     transform: scale(1.02);
+  }
+}
+
+@keyframes logo-transition-field {
+  0%,
+  100% {
+    opacity: 0;
+  }
+  18%,
+  76% {
+    opacity: 1;
+  }
+}
+
+@keyframes logo-swipe-left {
+  0% {
+    opacity: 0;
+    transform: translate(-195%, -50%) scale(0.82) rotate(-8deg);
+  }
+  18% {
+    opacity: 1;
+  }
+  44% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1.08) rotate(0deg);
+  }
+  72% {
+    opacity: 1;
+    transform: translate(82%, -50%) scale(0.94) rotate(5deg);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(195%, -50%) scale(0.82) rotate(9deg);
+  }
+}
+
+@keyframes logo-swipe-right {
+  0% {
+    opacity: 0;
+    transform: translate(195%, -50%) scale(0.82) rotate(8deg);
+  }
+  18% {
+    opacity: 1;
+  }
+  44% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1.08) rotate(0deg);
+  }
+  72% {
+    opacity: 1;
+    transform: translate(-182%, -50%) scale(0.94) rotate(-5deg);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-295%, -50%) scale(0.82) rotate(-9deg);
+  }
+}
+
+@keyframes logo-light-wipe {
+  0% {
+    opacity: 0;
+    transform: translateX(-36%) skewX(-12deg);
+  }
+  22%,
+  70% {
+    opacity: 0.9;
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(36%) skewX(-12deg);
+  }
+}
+
+@keyframes mask-zoom-through {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.12);
+  }
+  18% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(0.7);
+  }
+  48% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(4.9);
+  }
+  68% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(5.4);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.28);
+  }
+}
+
+@keyframes mask-zoom-field {
+  0%,
+  100% {
+    opacity: 0;
+  }
+  36%,
+  68% {
+    opacity: 1;
+    background:
+      radial-gradient(circle at 50% 50%, rgba(9, 13, 18, 0.72), rgba(9, 13, 18, 0.96) 62%, rgba(9, 13, 18, 0.72));
+  }
+}
+
+@keyframes crest-iris-logo {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.18) rotate(-16deg);
+  }
+  24% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(0.82) rotate(0deg);
+  }
+  54% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1.22) rotate(0deg);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(2.9) rotate(10deg);
+  }
+}
+
+@keyframes crest-iris-field {
+  0% {
+    opacity: 0;
+    clip-path: circle(0% at 50% 50%);
+  }
+  28% {
+    opacity: 0.95;
+    clip-path: circle(28% at 50% 50%);
+  }
+  62% {
+    opacity: 0.85;
+    clip-path: circle(76% at 50% 50%);
+  }
+  100% {
+    opacity: 0;
+    clip-path: circle(112% at 50% 50%);
   }
 }
 

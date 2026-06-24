@@ -6,12 +6,14 @@ let spyFrameIndex = 0;
 let spyFrames = ["/assets/monitor_spy_frames/frame_000.png"];
 let spyFrameMs = 180;
 let activeFrameLayer = "A";
+let transitionIndex = 0;
 let latestState = null;
 let knownEventKeys = new Set();
 let eventNotificationsReady = false;
 
 const $ = (id) => document.getElementById(id);
 const deliveryEventTypes = new Set(["message_sent", "approval_sent"]);
+const stageTransitionTypes = ["logo-swipe-left", "mask-zoom", "logo-swipe-right", "crest-iris"];
 
 async function loadSession() {
   const response = await fetch("/api/session");
@@ -76,17 +78,21 @@ function advanceSpyFrame() {
   const scene = document.querySelector(".spy-scene");
   const transition = $("stageTransition");
   scene?.classList.remove("transitioning");
-  transition?.classList.remove("active");
+  if (transition) transition.className = "stage-transition";
   void scene?.offsetWidth;
   incoming.classList.add("active");
   active.classList.remove("active");
   scene?.classList.add("transitioning");
-  transition?.classList.add("active");
+  if (transition) {
+    const transitionType = stageTransitionTypes[transitionIndex % stageTransitionTypes.length];
+    transitionIndex += 1;
+    transition.classList.add("active", transitionType);
+  }
   activeFrameLayer = activeFrameLayer === "A" ? "B" : "A";
   setTimeout(() => {
     scene?.classList.remove("transitioning");
-    transition?.classList.remove("active");
-  }, 1650);
+    if (transition) transition.className = "stage-transition";
+  }, 1900);
 }
 
 function render(state) {
