@@ -18,6 +18,7 @@ class ReactionRecord:
     emoji: str
     reason: str
     author: str
+    verified: bool = True
 
 
 class ReactionLedger:
@@ -30,6 +31,7 @@ class ReactionLedger:
             record.channel_id == channel_id
             and record.message_id == message_id
             and record.emoji == emoji
+            and record.verified
             for record in self._records
         )
 
@@ -37,21 +39,45 @@ class ReactionLedger:
         return any(
             record.channel_id == channel_id
             and record.message_id == message_id
+            and record.verified
             for record in self._records
         )
 
-    def record(self, *, server_id: str, message: MessageRecord, emoji: str, reason: str) -> ReactionRecord:
-        existing = next(
+    def record(
+        self,
+        *,
+        server_id: str,
+        message: MessageRecord,
+        emoji: str,
+        reason: str,
+        verified: bool = True,
+    ) -> ReactionRecord:
+        existing_index = next(
             (
-                record
-                for record in self._records
+                index
+                for index, record in enumerate(self._records)
                 if record.channel_id == message.channel_id
                 and record.message_id == message.message_id
                 and record.emoji == emoji
             ),
             None,
         )
-        if existing:
+        if existing_index is not None:
+            existing = self._records[existing_index]
+            if verified and not existing.verified:
+                updated = ReactionRecord(
+                    created_at=existing.created_at,
+                    server_id=server_id,
+                    channel_id=existing.channel_id,
+                    message_id=existing.message_id,
+                    emoji=existing.emoji,
+                    reason=reason,
+                    author=message.author,
+                    verified=True,
+                )
+                self._records[existing_index] = updated
+                self._save()
+                return updated
             return existing
         record = ReactionRecord(
             created_at=datetime.now(timezone.utc).isoformat(),
@@ -61,6 +87,7 @@ class ReactionLedger:
             emoji=emoji,
             reason=reason,
             author=message.author,
+            verified=verified,
         )
         self._records.append(record)
         self._records = self._records[-1000:]
@@ -80,6 +107,7 @@ class ReactionLedger:
                 emoji=str(row["emoji"]),
                 reason=str(row.get("reason") or ""),
                 author=str(row.get("author") or ""),
+                verified=bool(row.get("verified", False)),
             )
             for row in payload.get("items", [])
         ]

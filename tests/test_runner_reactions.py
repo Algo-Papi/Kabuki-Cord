@@ -210,6 +210,30 @@ class RunnerReactionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("reaction_already_present", app.events.items[0]["event_type"])
         self.assertEqual(1, len(app.reaction_ledger.records))
 
+    async def test_unverified_reaction_does_not_write_ledger(self) -> None:
+        app = runner()
+        session = SessionStub(
+            {
+                "applied": False,
+                "already_present": False,
+                "verification_failed": True,
+                "path": "quick-unverified",
+            }
+        )
+        target = SimpleNamespace(server_id="server-1", channel_id="channel-1", react_enabled=True)
+
+        reacted = await app._process_reactions(
+            session,
+            target,
+            [message("1", "that is such a cursed meme lmao")],
+            fresh_count=1,
+        )
+
+        self.assertEqual(set(), reacted)
+        self.assertEqual([], app.reaction_ledger.records)
+        self.assertEqual("reaction_failed", app.events.items[0]["event_type"])
+        self.assertNotIn("reaction_added", [item["event_type"] for item in app.events.items])
+
     async def test_force_laugh_percentage_cap_blocks_repeated_scans(self) -> None:
         app = runner(ledger=ReactionLedgerStub({"1", "2"}))
         app.config.reaction_force_laugh_percent = 40.0

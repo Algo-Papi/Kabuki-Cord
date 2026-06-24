@@ -709,7 +709,7 @@ class NhiZuesRunner:
                     draft=message.text,
                 )
                 return reacted_message_ids
-            if not result.get("applied"):
+            if result.get("already_present"):
                 already_present += 1
                 self.reaction_ledger.record(
                     server_id=target.server_id,
@@ -726,6 +726,23 @@ class NhiZuesRunner:
                     summary=(
                         f"{emoji} reaction was already present from this account on "
                         f"{message.author}; path={result.get('path') or 'existing'}."
+                    ),
+                    draft=message.text,
+                    message_id=message.message_id,
+                    target_message_id=message.message_id,
+                    target_author=message.author,
+                    emoji=emoji,
+                )
+                continue
+            if not result.get("applied"):
+                failed += 1
+                self.events.add(
+                    event_type="reaction_failed",
+                    server_id=target.server_id,
+                    channel_id=target.channel_id,
+                    summary=(
+                        f"Could not verify {emoji} reaction on {message.author}; "
+                        f"path={result.get('path') or 'unverified'}."
                     ),
                     draft=message.text,
                     message_id=message.message_id,

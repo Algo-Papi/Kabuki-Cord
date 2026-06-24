@@ -1336,32 +1336,75 @@ class DiscordWebSession:
 
         if await self._message_has_own_reaction(message, emoji):
             return {"applied": False, "already_present": True, "emoji": emoji, "path": "own-existing"}
+        unverified_paths: list[str] = []
         if await self._click_quick_reaction(message, emoji):
-            await self.page.wait_for_timeout(500)
-            return {"applied": True, "already_present": False, "emoji": emoji, "path": "quick"}
+            if await self._wait_for_own_reaction(message, emoji, timeout_ms=3_000):
+                return {"applied": True, "already_present": False, "emoji": emoji, "path": "quick"}
+            unverified_paths.append("quick")
+            try:
+                await message.hover(timeout=2_000)
+                await self.page.wait_for_timeout(250)
+            except Exception:
+                pass
         if await self._click_add_reaction_action(message):
             await self.page.wait_for_timeout(450)
             if await self._select_emoji_from_picker(emoji):
-                await self.page.wait_for_timeout(700)
-                return {"applied": True, "already_present": False, "emoji": emoji, "path": "picker"}
+                if await self._wait_for_own_reaction(message, emoji, timeout_ms=4_000):
+                    return {"applied": True, "already_present": False, "emoji": emoji, "path": "picker"}
+                unverified_paths.append("picker")
+
+        if unverified_paths:
+            return {
+                "applied": False,
+                "already_present": False,
+                "verification_failed": True,
+                "emoji": emoji,
+                "path": "+".join(unverified_paths) + "-unverified",
+            }
 
         raise RuntimeError("Discord did not expose a usable Add Reaction control for the selected message.")
 
+    async def _wait_for_own_reaction(self, message, emoji: str, *, timeout_ms: int) -> bool:
+        deadline = max(int(timeout_ms), 0)
+        elapsed = 0
+        step = 250
+        while elapsed <= deadline:
+            if await self._message_has_own_reaction(message, emoji):
+                return True
+            await self.page.wait_for_timeout(step)
+            elapsed += step
+        return False
+
     async def _message_has_own_reaction(self, message, emoji: str) -> bool:
+        emoji_query = _emoji_search_query(emoji)
         try:
             return bool(
                 await message.evaluate(
                     """
-                    (messageNode, emoji) => {
+                    (messageNode, args) => {
+                        const emoji = args.emoji || "";
+                        const query = args.query || "";
+                        const emojiPattern = (() => {
+                            if (query === "joy") return /joy|laugh|face with tears/i;
+                            if (query === "rofl") return /rofl|rolling on the floor/i;
+                            if (query === "thumbsup") return /thumbs?\\s*up|thumbsup/i;
+                            if (query === "pray") return /pray|folded hands|please/i;
+                            if (query === "eyes") return /eyes/i;
+                            if (query === "heart") return /heart/i;
+                            return null;
+                        })();
+                        const queryMatch = (label) => (
+                            query && label.toLowerCase().includes(String(query).toLowerCase())
+                        );
                         const labels = Array.from(messageNode.querySelectorAll('[aria-label], [title], button, [role="button"]'))
                             .map((node) => `${node.getAttribute("aria-label") || ""} ${node.getAttribute("title") || ""} ${node.textContent || ""}`);
                         return labels.some((label) => {
-                            if (!label.includes(emoji)) return false;
+                            if (!label.includes(emoji) && !(emojiPattern && emojiPattern.test(label)) && !queryMatch(label)) return false;
                             return /you reacted|your reaction|remove reaction|unreact|click to remove|press to remove|already reacted/i.test(label);
                         });
                     }
                     """,
-                    emoji,
+                    {"emoji": emoji, "query": emoji_query},
                 )
             )
         except Exception:
