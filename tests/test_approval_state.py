@@ -11,7 +11,7 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from nhi_zues.approvals import ApprovalQueue
-from nhi_zues.gui import approval_items_state
+from nhi_zues.gui import _own_source_block_message, approval_items_state
 from nhi_zues.memory import ConversationMemory
 from nhi_zues.models import MessageRecord
 
@@ -114,6 +114,51 @@ class ApprovalStateTests(unittest.TestCase):
                 ["draft 1", "draft 2", "draft 3", "draft 4", "draft 5"],
                 [item.draft for item in reloaded.list()],
             )
+
+    def test_own_source_block_message_blocks_character_source(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state_dir = root / ".state"
+            card_dir = root / "character_cards"
+            card_dir.mkdir()
+            (card_dir / "default.json").write_text(
+                json.dumps(
+                    {
+                        "name": "NHI Zues",
+                        "system_prompt": "",
+                        "style_rules": [],
+                        "engagement_rules": [],
+                        "aliases": ["nhi zues", "zues"],
+                        "trigger_keywords": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            servers_file = root / "servers.json"
+            servers_file.write_text(json.dumps({"servers": []}), encoding="utf-8")
+            source = MessageRecord(
+                server_id="server-1",
+                channel_id="channel-1",
+                message_id="chat-messages-1-200",
+                author="NHI ZuesOnline",
+                author_id="self",
+                text="i already said the archive chain is the weak part",
+                observed_at=datetime(2026, 6, 23, tzinfo=timezone.utc),
+            )
+
+            message = _own_source_block_message(
+                SimpleNamespace(
+                    state_dir=state_dir,
+                    character_dir=card_dir,
+                    character_card="default.json",
+                    servers_file=servers_file,
+                ),
+                server_id="server-1",
+                channel_id="channel-1",
+                source_messages=[source],
+            )
+
+            self.assertIn("Reply blocked", message)
 
 
 if __name__ == "__main__":

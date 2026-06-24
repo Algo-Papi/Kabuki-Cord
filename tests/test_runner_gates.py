@@ -131,6 +131,29 @@ class RunnerGateTests(unittest.TestCase):
 
         self.assertIn("last visible message", reason)
 
+    def test_auto_reply_guard_blocks_when_last_visible_text_matches_own_ledger(self):
+        reason = _auto_reply_guard_reason(
+            guard_config(reply_cooldown_seconds=0, reply_max_per_window=0),
+            ReplyLedgerStub(),
+            channel_id="channel-1",
+            visible_messages=[
+                MessageRecord(
+                    server_id="server-1",
+                    channel_id="channel-1",
+                    message_id="1",
+                    author="Rook",
+                    author_id="user-1",
+                    text="i already said the archive chain is the weak part",
+                    observed_at=datetime.now(timezone.utc),
+                )
+            ],
+            character_names=("NHI Zues",),
+            own_texts={"i already said the archive chain is the weak part"},
+            now=datetime(2026, 6, 23, 12, 0, tzinfo=timezone.utc),
+        )
+
+        self.assertIn("last visible message", reason)
+
     def test_auto_reply_guard_allows_when_another_user_spoke_after_character(self):
         reason = _auto_reply_guard_reason(
             guard_config(reply_cooldown_seconds=0, reply_max_per_window=0),

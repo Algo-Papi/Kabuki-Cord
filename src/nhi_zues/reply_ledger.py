@@ -6,6 +6,8 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .discord_text import sanitize_outgoing_draft
+from .own_identity import normalize_message_text
 from .state_io import write_json_file
 
 
@@ -18,6 +20,8 @@ class SentReply:
     mode: str
     draft_hash: str
     source_message_ids: tuple[str, ...]
+    message_id: str = ""
+    draft_text: str = ""
 
 
 class ReplyLedger:
@@ -34,6 +38,7 @@ class ReplyLedger:
         mode: str,
         draft: str,
         source_message_ids: tuple[str, ...] | list[str],
+        message_id: str = "",
     ) -> SentReply:
         source_ids = _clean_source_ids(source_message_ids)
         draft_hash = _draft_hash(draft)
@@ -50,6 +55,8 @@ class ReplyLedger:
             mode=mode,
             draft_hash=draft_hash,
             source_message_ids=source_ids,
+            message_id=str(message_id or "").strip(),
+            draft_text=sanitize_outgoing_draft(draft),
         )
         self._items.append(item)
         self._items = self._items[-self.limit :]
@@ -101,6 +108,20 @@ class ReplyLedger:
     def list(self) -> list[SentReply]:
         return list(self._items)
 
+    def own_message_ids_for_channel(self, *, channel_id: str, limit: int = 100) -> set[str]:
+        return {
+            item.message_id
+            for item in self._items[-limit:]
+            if item.channel_id == channel_id and item.message_id
+        }
+
+    def own_texts_for_channel(self, *, channel_id: str, limit: int = 100) -> set[str]:
+        return {
+            normalize_message_text(item.draft_text)
+            for item in self._items[-limit:]
+            if item.channel_id == channel_id and normalize_message_text(item.draft_text)
+        }
+
     def _load(self) -> list[SentReply]:
         if not self.ledger_file.exists():
             return []
@@ -114,6 +135,8 @@ class ReplyLedger:
                 mode=str(row.get("mode") or "unknown"),
                 draft_hash=str(row["draft_hash"]),
                 source_message_ids=tuple(str(value) for value in row.get("source_message_ids", [])),
+                message_id=str(row.get("message_id") or ""),
+                draft_text=str(row.get("draft_text") or ""),
             )
             for row in payload.get("items", [])
         ]

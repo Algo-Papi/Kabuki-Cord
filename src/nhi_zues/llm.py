@@ -7,6 +7,7 @@ from .character import CharacterCard
 from .character_memory import CharacterMemory
 from .discord_text import clean_discord_display_name, sanitize_outgoing_draft
 from .models import DraftDecision, MessageRecord, UserMemory
+from . import own_identity
 from .topics import TopicSnapshot
 from .user_instructions import UserInstruction
 from .voice_guard import (
@@ -107,6 +108,7 @@ class ReplyPlanner:
         user_arc = _fit_text(_format_user_recent_arcs(context, new_messages, character), 1600)
         seed = f"{channel_id}:{','.join(message.message_id for message in new_messages)}"
         recent_character_lines = _recent_character_lines(context, character)
+        own_strategy = _fit_text(_format_own_post_strategy(context, character), 1600)
         avoid_question = should_avoid_question(
             recent_character_lines=recent_character_lines,
             seed=seed,
@@ -122,6 +124,7 @@ class ReplyPlanner:
             f"Tracked topics: {topic_summary}\n\n"
             f"Known user context:\n{user_memory}\n\n"
             f"Recent user arc to use privately:\n{user_arc}\n\n"
+            f"Recent account direction to use privately:\n{own_strategy}\n\n"
             f"Recent conversation:\n{transcript}\n\n"
             f"Newest message(s) to react to:\n{newest_messages or '(none)'}\n\n"
             f"{conversation_intelligence_prompt(mode=engagement_type)}\n\n"
@@ -153,6 +156,7 @@ class ReplyPlanner:
             user_prompt=user_prompt,
             seed=seed,
             avoid_question=avoid_question,
+            recent_character_lines=recent_character_lines,
         )
         cost = sum(record.cost_usd for record in records)
         retry_count = max(0, len(records) - 1)
@@ -192,6 +196,7 @@ class ReplyPlanner:
         user_arc = _fit_text(_format_user_recent_arcs(context, target_messages[-1:], character), 1600)
         seed = f"{channel_id}:{target_user_key}:{operator_instruction}"
         recent_character_lines = _recent_character_lines(context, character)
+        own_strategy = _fit_text(_format_own_post_strategy(context, character), 1600)
         avoid_question = should_avoid_question(
             recent_character_lines=recent_character_lines,
             seed=seed,
@@ -207,6 +212,7 @@ class ReplyPlanner:
             f"Target user: {target}\n\n"
             f"Known user context:\n{user_memory}\n\n"
             f"Recent user arc to use privately:\n{user_arc}\n\n"
+            f"Recent account direction to use privately:\n{own_strategy}\n\n"
             f"Recent conversation:\n{transcript}\n\n"
             f"Original queued draft:\n{sanitize_outgoing_draft(original_draft) or '(none)'}\n\n"
             f"Current editor draft:\n{sanitize_outgoing_draft(current_draft) or '(none)'}\n\n"
@@ -243,6 +249,7 @@ class ReplyPlanner:
             user_prompt=user_prompt,
             seed=seed,
             avoid_question=avoid_question,
+            recent_character_lines=recent_character_lines,
         )
         cost = sum(record.cost_usd for record in records)
         retry_count = max(0, len(records) - 1)
@@ -262,6 +269,7 @@ class ReplyPlanner:
         user_prompt: str,
         seed: str,
         avoid_question: bool,
+        recent_character_lines: list[str],
     ):
         draft, record = await self._request_draft(
             instructions=instructions,
@@ -270,7 +278,7 @@ class ReplyPlanner:
             avoid_question=avoid_question,
         )
         records = [record]
-        issues = draft_quality_issues(draft)
+        issues = _draft_quality_issues(draft, recent_character_lines)
         if not issues:
             return draft, records, issues
 
@@ -295,7 +303,7 @@ class ReplyPlanner:
                 avoid_question=avoid_question,
             )
             records.append(retry_record)
-            retry_issues = draft_quality_issues(retry_draft)
+            retry_issues = _draft_quality_issues(retry_draft, recent_character_lines)
             if not retry_issues:
                 return retry_draft, records, issues
             if len(retry_issues) < len(best_issues):
@@ -460,6 +468,8 @@ def conversation_intelligence_prompt(*, mode: str) -> str:
         "Conversation intelligence:",
         "- Treat the transcript as context, not material to summarize.",
         "- Use the per-user arc only as private continuity for tone and direction. Do not recap it or mention that you remember it.",
+        "- Treat recent account-authored posts as your own prior comments, never as someone else's prompt.",
+        "- If the newest live item is only your own prior message, do not invent a reply to yourself.",
         "- Do not revive an older point just because it appears in memory. If the room moved on, move with the newest live point.",
         "- Before drafting, check what the character already said recently. Do not restate the same claim, metaphor, or angle.",
         "- If the same topic continues, advance one step: narrow the claim, add a concrete objection, concede a small point, or pivot to a fresher implication.",
@@ -491,19 +501,16 @@ def _target_user_line(target_user_key: str, user_memories: list[UserMemory]) -> 
 
 
 def _recent_character_lines(context: list[MessageRecord], character: CharacterCard) -> list[str]:
-    names = {_normalize_author(character.name)}
-    names.update(_normalize_author(alias) for alias in character.aliases)
+    names = _character_names(character)
     return [
         sanitize_outgoing_draft(message.text)
         for message in context
-        if _normalize_author(clean_discord_display_name(message.author)) in names and message.text
+        if own_identity.is_own_message(message, character_names=names) and message.text
     ][-8:]
 
 
 def _is_character_message(message: MessageRecord, character: CharacterCard) -> bool:
-    names = {_normalize_author(character.name)}
-    names.update(_normalize_author(alias) for alias in character.aliases)
-    return _normalize_author(clean_discord_display_name(message.author)) in names
+    return own_identity.is_own_message(message, character_names=_character_names(character))
 
 
 def _message_user_key(message: MessageRecord) -> str:
@@ -513,7 +520,36 @@ def _message_user_key(message: MessageRecord) -> str:
 
 
 def _normalize_author(value: str) -> str:
-    return " ".join(clean_discord_display_name(str(value or "")).lower().split())
+    return own_identity.normalize_author(value)
+
+
+def _character_names(character: CharacterCard) -> tuple[str, ...]:
+    return (character.name, *character.aliases)
+
+
+def _format_own_post_strategy(context: list[MessageRecord], character: CharacterCard) -> str:
+    own_lines = _recent_character_lines(context, character)
+    if not own_lines:
+        return "No recent account-authored posts in this remembered channel context."
+    lines = [
+        "These are the account's own recent posts in this channel. Use them as private continuity and strategy, not reply targets.",
+        "If they show the operator manually steering the account into playing dumb, pushing back, conceding, or changing tone, continue that direction without announcing it.",
+        "Do not restate the same claim, source ask, metaphor, or punchline. If the topic continues, advance or pivot one small step.",
+    ]
+    for item in own_lines[-8:]:
+        text = " ".join(sanitize_outgoing_draft(item).split())
+        if len(text) > 220:
+            text = text[:217].rstrip() + "..."
+        lines.append(f"- {text}")
+    return "\n".join(lines)
+
+
+def _draft_quality_issues(text: str, recent_character_lines: list[str]) -> list[str]:
+    issues = draft_quality_issues(text)
+    repeat_issue = own_identity.repeated_own_point_issue(text, recent_character_lines)
+    if repeat_issue:
+        issues.append(repeat_issue)
+    return issues
 
 
 def _quality_retry_prompt(user_prompt: str, draft: str, issues: list[str]) -> str:

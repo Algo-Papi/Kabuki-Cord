@@ -12,10 +12,10 @@ from .budget import BudgetManager
 from .character import CharacterCardStore
 from .character_memory import CharacterMemoryStore
 from .config import AppConfig
-from .discord_text import clean_discord_display_name
 from .events import EventLog
 from .llm import ReplyPlanner
 from .memory import ConversationMemory
+from . import own_identity
 from .reaction_ledger import ReactionLedger
 from .reactions import should_auto_react
 from .reply_ledger import ReplyLedger, duplicate_reply_message
@@ -292,26 +292,38 @@ class NhiZuesRunner:
             self.memory.save()
             character = self.characters.for_server(target.server_id, target.character_card)
             character_names = (character.name, *character.aliases)
+            own_message_ids = self.reply_ledger.own_message_ids_for_channel(channel_id=target.channel_id)
+            own_texts = self.reply_ledger.own_texts_for_channel(channel_id=target.channel_id)
             own_author_ids = set(getattr(self, "_own_author_ids", set()))
             own_author_ids.update(
-                _own_author_ids_from_messages(visible_messages, character_names=character_names)
+                _own_author_ids_from_messages(
+                    visible_messages,
+                    character_names=character_names,
+                    own_texts=own_texts,
+                )
             )
             self._own_author_ids = own_author_ids
             fresh = _without_own_messages(
                 fresh,
                 character_names=character_names,
                 own_author_ids=own_author_ids,
+                own_message_ids=own_message_ids,
+                own_texts=own_texts,
             )
             reaction_candidates = _recent_reaction_candidates(
                 visible_messages,
                 fresh,
                 character_names=character_names,
                 own_author_ids=own_author_ids,
+                own_message_ids=own_message_ids,
+                own_texts=own_texts,
             )
             force_laugh_ids = _recent_non_own_message_ids(
                 visible_messages,
                 character_names=character_names,
                 own_author_ids=own_author_ids,
+                own_message_ids=own_message_ids,
+                own_texts=own_texts,
                 limit=5,
             )
             reacted_message_ids = await self._process_reactions(
@@ -322,6 +334,8 @@ class NhiZuesRunner:
                 force_laugh_ids=force_laugh_ids,
                 character_names=character_names,
                 own_author_ids=own_author_ids,
+                own_message_ids=own_message_ids,
+                own_texts=own_texts,
             )
             reply_fresh = [
                 message
@@ -477,6 +491,8 @@ class NhiZuesRunner:
                         visible_messages=visible_messages,
                         character_names=character_names,
                         own_author_ids=own_author_ids,
+                        own_message_ids=own_message_ids,
+                        own_texts=own_texts,
                     )
                     if guard_reason:
                         log.info(
@@ -518,6 +534,7 @@ class NhiZuesRunner:
                         mode="auto",
                         draft=decision.draft,
                         source_message_ids=source_ids,
+                        message_id=str(delivery.get("message_id") or ""),
                     )
 
             self.memory.save()
@@ -557,6 +574,8 @@ class NhiZuesRunner:
         force_laugh_ids: set[str] | None = None,
         character_names: tuple[str, ...] = (),
         own_author_ids: set[str] | None = None,
+        own_message_ids: set[str] | None = None,
+        own_texts: set[str] | None = None,
     ) -> set[str]:
         if not getattr(target, "react_enabled", False):
             return set()
@@ -625,6 +644,8 @@ class NhiZuesRunner:
                 message,
                 character_names=character_names,
                 own_author_ids=own_author_ids,
+                own_message_ids=own_message_ids,
+                own_texts=own_texts,
             ):
                 own_skipped += 1
                 last_reason = "message is from the configured character/account"
@@ -744,19 +765,16 @@ def _without_own_messages(
     *,
     character_names: tuple[str, ...],
     own_author_ids: set[str] | None = None,
+    own_message_ids: set[str] | None = None,
+    own_texts: set[str] | None = None,
 ):
-    own_author_ids = own_author_ids or set()
-    if not character_names and not own_author_ids:
-        return list(messages)
-    return [
-        message
-        for message in messages
-        if not _is_own_message(
-            message,
-            character_names=character_names,
-            own_author_ids=own_author_ids,
-        )
-    ]
+    return own_identity.without_own_messages(
+        messages,
+        character_names=character_names,
+        own_author_ids=own_author_ids,
+        own_message_ids=own_message_ids,
+        own_texts=own_texts,
+    )
 
 
 def _recent_reaction_candidates(
@@ -765,6 +783,8 @@ def _recent_reaction_candidates(
     *,
     character_names: tuple[str, ...],
     own_author_ids: set[str] | None = None,
+    own_message_ids: set[str] | None = None,
+    own_texts: set[str] | None = None,
     max_visible: int = 12,
 ):
     candidates = []
@@ -773,6 +793,8 @@ def _recent_reaction_candidates(
         fresh_messages,
         character_names=character_names,
         own_author_ids=own_author_ids,
+        own_message_ids=own_message_ids,
+        own_texts=own_texts,
     ):
         if message.message_id in seen_ids:
             continue
@@ -783,6 +805,8 @@ def _recent_reaction_candidates(
             visible_messages,
             character_names=character_names,
             own_author_ids=own_author_ids,
+            own_message_ids=own_message_ids,
+            own_texts=own_texts,
         )
     ):
         if len(candidates) >= max_visible:
@@ -799,6 +823,8 @@ def _recent_non_own_message_ids(
     *,
     character_names: tuple[str, ...],
     own_author_ids: set[str] | None = None,
+    own_message_ids: set[str] | None = None,
+    own_texts: set[str] | None = None,
     limit: int,
 ) -> set[str]:
     message_ids: list[str] = []
@@ -807,6 +833,8 @@ def _recent_non_own_message_ids(
             visible_messages,
             character_names=character_names,
             own_author_ids=own_author_ids,
+            own_message_ids=own_message_ids,
+            own_texts=own_texts,
         )
     ):
         message_id = str(getattr(message, "message_id", "") or "")
@@ -832,6 +860,8 @@ def _auto_reply_guard_reason(
     visible_messages,
     character_names: tuple[str, ...],
     own_author_ids: set[str] | None = None,
+    own_message_ids: set[str] | None = None,
+    own_texts: set[str] | None = None,
     now: datetime | None = None,
 ) -> str:
     now = now or datetime.now(timezone.utc)
@@ -868,6 +898,8 @@ def _auto_reply_guard_reason(
             visible_messages,
             character_names=character_names,
             own_author_ids=own_author_ids,
+            own_message_ids=own_message_ids,
+            own_texts=own_texts,
         )
         if streak_reason:
             return streak_reason
@@ -880,6 +912,8 @@ def _own_message_streak_guard_reason(
     *,
     character_names: tuple[str, ...],
     own_author_ids: set[str] | None = None,
+    own_message_ids: set[str] | None = None,
+    own_texts: set[str] | None = None,
 ) -> str:
     visible = list(messages or [])
     last_own_index = -1
@@ -888,6 +922,8 @@ def _own_message_streak_guard_reason(
             message,
             character_names=character_names,
             own_author_ids=own_author_ids,
+            own_message_ids=own_message_ids,
+            own_texts=own_texts,
         ):
             last_own_index = index
     if last_own_index < 0:
@@ -897,6 +933,8 @@ def _own_message_streak_guard_reason(
             message,
             character_names=character_names,
             own_author_ids=own_author_ids,
+            own_message_ids=own_message_ids,
+            own_texts=own_texts,
         ):
             return ""
     return (
@@ -917,15 +955,17 @@ def _reply_created_at(reply) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
-def _own_author_ids_from_messages(messages, *, character_names: tuple[str, ...]) -> set[str]:
-    own_ids: set[str] = set()
-    for message in messages or []:
-        if not _is_character_author(getattr(message, "author", ""), character_names):
-            continue
-        author_id = str(getattr(message, "author_id", "") or "").strip()
-        if author_id:
-            own_ids.add(author_id)
-    return own_ids
+def _own_author_ids_from_messages(
+    messages,
+    *,
+    character_names: tuple[str, ...],
+    own_texts: set[str] | None = None,
+) -> set[str]:
+    return own_identity.own_author_ids_from_messages(
+        messages,
+        character_names=character_names,
+        own_texts=own_texts,
+    )
 
 
 def _is_own_message(
@@ -933,36 +973,24 @@ def _is_own_message(
     *,
     character_names: tuple[str, ...],
     own_author_ids: set[str] | None = None,
+    own_message_ids: set[str] | None = None,
+    own_texts: set[str] | None = None,
 ) -> bool:
-    author_id = str(getattr(message, "author_id", "") or "").strip()
-    if author_id and author_id in (own_author_ids or set()):
-        return True
-    return _is_character_author(getattr(message, "author", ""), character_names)
-
-
-def _is_character_author(author: str, character_names: tuple[str, ...]) -> bool:
-    cleaned_author = _normalize_author(author)
-    if not cleaned_author:
-        return False
-    exact_names = {_normalize_author(name) for name in character_names if name}
-    if cleaned_author in exact_names:
-        return True
-    prefix_names = {name for name in exact_names if len(name.replace(" ", "")) >= 5}
-    if any(cleaned_author.startswith(f"{name} ") for name in prefix_names if name):
-        return True
-    compact_author = cleaned_author.replace(" ", "")
-    compact_names = {name.replace(" ", "") for name in prefix_names}
-    return bool(
-        compact_author
-        and (
-            compact_author in compact_names
-            or any(compact_author.startswith(name) for name in compact_names)
-        )
+    return own_identity.is_own_message(
+        message,
+        character_names=character_names,
+        own_author_ids=own_author_ids,
+        own_message_ids=own_message_ids,
+        own_texts=own_texts,
     )
 
 
+def _is_character_author(author: str, character_names: tuple[str, ...]) -> bool:
+    return own_identity.is_character_author(author, character_names)
+
+
 def _normalize_author(value: str) -> str:
-    return " ".join(clean_discord_display_name(str(value or "")).lower().split())
+    return own_identity.normalize_author(value)
 
 
 def _format_seconds(seconds: float) -> str:

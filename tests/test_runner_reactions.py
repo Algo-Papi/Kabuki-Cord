@@ -34,6 +34,14 @@ class ReactionLedgerStub:
         self.reacted_ids.add(kwargs["message"].message_id)
 
 
+class ReplyLedgerStateStub:
+    def own_message_ids_for_channel(self, *, channel_id: str) -> set[str]:
+        return set()
+
+    def own_texts_for_channel(self, *, channel_id: str) -> set[str]:
+        return set()
+
+
 class SessionStub:
     def __init__(self, result: dict[str, object]) -> None:
         self.result = result
@@ -75,6 +83,7 @@ def runner(*, runtime_mode: str = "live_fire", ledger: ReactionLedgerStub | None
     )
     instance.events = EventSink()
     instance.reaction_ledger = ledger or ReactionLedgerStub()
+    instance.reply_ledger = ReplyLedgerStateStub()
     return instance
 
 
@@ -130,6 +139,21 @@ class RunnerReactionTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(["4", "3"], [item.message_id for item in candidates])
+
+    def test_recent_reaction_candidates_skip_known_own_text_from_ledger(self) -> None:
+        visible = [
+            message("1", "i already said the archive chain is the weak part", "Rook", author_id="user-1"),
+            message("2", "that was wild", "Rook", author_id="user-2"),
+        ]
+
+        candidates = _recent_reaction_candidates(
+            visible,
+            [],
+            character_names=("NHI Zues",),
+            own_texts={"i already said the archive chain is the weak part"},
+        )
+
+        self.assertEqual(["2"], [item.message_id for item in candidates])
 
     async def test_no_eligible_reaction_emits_scan_event(self) -> None:
         app = runner()

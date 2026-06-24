@@ -220,14 +220,14 @@ Local state lives under `.state/`:
 - `.state/memory.json` stores remembered channel messages and per-user memory.
 - `.state/events.json` stores scan checks, approvals, sends, and failures.
 - `.state/approvals.json` stores the five newest pending approval drafts.
-- `.state/sent_replies.json` stores successful send receipts keyed by source message IDs so stale approvals cannot double-reply to the same Discord message.
+- `.state/sent_replies.json` stores successful send receipts keyed by source message IDs, posted message IDs, and sanitized draft text so stale approvals cannot double-reply to the same Discord message or treat the account's own prior posts as new external prompts.
 - `.state/usage.json` stores estimated/recorded API usage.
 
 Use **Clear All** in Approvals before enabling live or Auto if there is any stale backlog. Semi-auto also prunes older drafts automatically once more than five are pending.
 
 When **Auto** is off for a channel, generated replies queue for approval even when the trigger was a direct name or alias cue. Auto must be enabled per channel before the scanner can send generated replies without approval.
 
-Auto replies have a second safety guard even when **Auto** is enabled. The default settings block unreviewed auto sends for a channel when the app has already posted there in the last 15 minutes, when it has sent 3 auto replies in the last hour, or when the last visible channel message is already from the character. When this happens the Events feed records `reply_guard_blocked` with the specific reason. Tune this under **API & Runtime -> Account safety pacing**.
+Auto replies have a second safety guard even when **Auto** is enabled. The default settings block unreviewed auto sends for a channel when the app has already posted there in the last 15 minutes, when it has sent 3 auto replies in the last hour, or when the last visible channel message is already from the character. The own-message guard uses display-name matching, known account IDs, posted Discord message IDs, and sanitized sent-text matching to avoid replying to the account's own prior posts. When this happens the Events feed records `reply_guard_blocked` or `own_reply_blocked` with the specific reason. Tune pacing under **API & Runtime -> Account safety pacing**.
 
 ## Character Cards
 

@@ -35,6 +35,7 @@ from .events import EventLog
 from .llm import ReplyPlanner
 from .memory import ConversationMemory
 from .models import MessageRecord
+from . import own_identity
 from .reactions import suggest_emoji_reaction
 from .reply_ledger import ReplyLedger, duplicate_reply_message
 from .runner import NhiZuesRunner
@@ -1973,6 +1974,23 @@ def _send_approval_locked(*, approval_id: str, draft: str, reply_to_message_id: 
     except KeyError as exc:
         raise RuntimeError("That approval was already cleared. Refresh the app before sending.") from exc
 
+    source_messages = _approval_source_messages(config, item)
+    own_source_message = _own_source_block_message(
+        config,
+        server_id=item.server_id,
+        channel_id=item.channel_id,
+        source_messages=source_messages,
+    )
+    if own_source_message:
+        EventLog(config.state_dir / "events.json").add(
+            event_type="own_reply_blocked",
+            server_id=item.server_id,
+            channel_id=item.channel_id,
+            summary=own_source_message,
+            draft=draft,
+        )
+        raise RuntimeError(own_source_message)
+
     ledger = ReplyLedger(config.state_dir / "sent_replies.json")
     duplicate_message = duplicate_reply_message(
         ledger.find_overlap(channel_id=item.channel_id, source_message_ids=item.source_message_ids)
@@ -2062,6 +2080,7 @@ def _send_approval_locked(*, approval_id: str, draft: str, reply_to_message_id: 
             mode=item.engagement_type,
             draft=draft,
             source_message_ids=item.source_message_ids,
+            message_id=str(delivery.get("message_id") or ""),
         )
         queue.remove(approval_id)
         summary = "Approved draft posted successfully to Discord."
@@ -2115,6 +2134,63 @@ def _last_approval_source_message(config: AppConfig, item) -> dict:
     if not matches:
         return {}
     return _message_preview(matches[-1])
+
+
+def _approval_source_messages(config: AppConfig, item) -> list[MessageRecord]:
+    source_ids = {
+        str(value)
+        for value in getattr(item, "source_message_ids", ())
+        if str(value or "").strip()
+    }
+    if not source_ids:
+        return []
+    return [
+        message
+        for message in _memory_context(
+            config.state_dir / "memory.json",
+            str(getattr(item, "channel_id", "") or ""),
+        )
+        if message.message_id in source_ids
+    ]
+
+
+def _own_source_block_message(
+    config: AppConfig,
+    *,
+    server_id: str,
+    channel_id: str,
+    source_messages: list[MessageRecord],
+    context: list[MessageRecord] | None = None,
+) -> str:
+    if not source_messages:
+        return ""
+    character = CharacterCardStore(config.character_dir, config.character_card).for_server(
+        server_id,
+        _server_character_card(config, server_id),
+    )
+    character_names = (character.name, *character.aliases)
+    ledger = ReplyLedger(config.state_dir / "sent_replies.json")
+    own_texts = ledger.own_texts_for_channel(channel_id=channel_id)
+    own_message_ids = ledger.own_message_ids_for_channel(channel_id=channel_id)
+    own_author_ids = own_identity.own_author_ids_from_messages(
+        context or source_messages,
+        character_names=character_names,
+        own_texts=own_texts,
+    )
+    for message in source_messages:
+        if own_identity.is_own_message(
+            message,
+            character_names=character_names,
+            own_author_ids=own_author_ids,
+            own_message_ids=own_message_ids,
+            own_texts=own_texts,
+        ):
+            return (
+                "Reply blocked: the selected/source message appears to be from this "
+                "Discord account or character. Discard the stale approval or select a "
+                "message from another user."
+            )
+    return ""
 
 
 def _friendly_discord_send_error(raw_error: str) -> str:
@@ -2227,6 +2303,14 @@ def _regenerate_approval_locked(
         for message in _memory_context(config.state_dir / "memory.json", item.channel_id)
         if message.message_id in source_ids
     ]
+    own_source_message = _own_source_block_message(
+        config,
+        server_id=item.server_id,
+        channel_id=item.channel_id,
+        source_messages=source_messages,
+    )
+    if own_source_message:
+        raise RuntimeError(own_source_message)
     effective_target_user_key = target_user_key or _source_user_key(source_messages)
     decision = asyncio.run(
         _generate_manual_decision(
@@ -2270,6 +2354,23 @@ def create_manual_approval(body: dict) -> None:
             "That selected message is no longer in remembered channel history. "
             "Run the scanner or reopen the channel, then try again."
         )
+    own_source_message = _own_source_block_message(
+        config,
+        server_id=server_id,
+        channel_id=channel_id,
+        source_messages=source_messages,
+        context=context,
+    )
+    if own_source_message:
+        EventLog(config.state_dir / "events.json").add(
+            event_type="own_reply_blocked",
+            server_id=server_id,
+            channel_id=channel_id,
+            summary=own_source_message,
+            draft="",
+            user_key=target_user_key,
+        )
+        raise RuntimeError(own_source_message)
     source_ids = tuple(message.message_id for message in source_messages)
     ledger = ReplyLedger(config.state_dir / "sent_replies.json")
     duplicate_message = duplicate_reply_message(
