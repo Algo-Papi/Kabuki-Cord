@@ -10,7 +10,7 @@ from nhi_zues.runner import (
     _recent_non_own_message_ids,
     _recent_reaction_candidates,
 )
-from nhi_zues.reactions import LAUGH_EMOJI
+from nhi_zues.reactions import LAUGH_EMOJI, THUMBS_UP_EMOJI
 
 
 class EventSink:
@@ -97,6 +97,20 @@ class RunnerReactionTests(unittest.IsolatedAsyncioTestCase):
             [],
             character_names=("NHI Zues",),
             own_author_ids={"own-1"},
+        )
+
+        self.assertEqual(["2"], [item.message_id for item in candidates])
+
+    def test_recent_reaction_candidates_skip_scraped_character_prefix(self) -> None:
+        visible = [
+            message("1", "own display drift", "NHI ZuesI'm new here say hi"),
+            message("2", "that was wild", "Rook", author_id="user-1"),
+        ]
+
+        candidates = _recent_reaction_candidates(
+            visible,
+            [],
+            character_names=("NHI Zues",),
         )
 
         self.assertEqual(["2"], [item.message_id for item in candidates])
@@ -224,7 +238,7 @@ class RunnerReactionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual({"own-1"}, app._own_author_ids)
 
-    async def test_force_laugh_recent_messages_can_react_to_plain_text(self) -> None:
+    async def test_force_reaction_recent_messages_can_react_to_plain_text_without_laughing(self) -> None:
         app = runner()
         app.config.reaction_force_laugh_percent = 100.0
         session = SessionStub({"applied": True, "path": "quick"})
@@ -239,8 +253,8 @@ class RunnerReactionTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual({"1"}, reacted)
-        self.assertEqual([("1", LAUGH_EMOJI)], session.calls)
-        self.assertIn("force laugh", app.events.items[-1]["summary"])
+        self.assertEqual([("1", THUMBS_UP_EMOJI)], session.calls)
+        self.assertIn("force reaction", app.events.items[-1]["summary"])
 
     def test_force_laugh_recent_ids_are_last_five_non_character_messages(self) -> None:
         visible = [

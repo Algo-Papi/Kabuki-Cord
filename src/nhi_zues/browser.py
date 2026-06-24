@@ -1388,7 +1388,8 @@ class DiscordWebSession:
                         )).filter((node) => {
                             if (!visible(node)) return false;
                             const label = `${node.getAttribute("aria-label") || ""} ${node.getAttribute("title") || ""} ${node.textContent || ""}`;
-                            if (!label.includes(emoji) && !/joy|laugh|face with tears/i.test(label)) return false;
+                            const wantsLaugh = emoji === "😂";
+                            if (!label.includes(emoji) && !(wantsLaugh && /joy|laugh|face with tears/i.test(label))) return false;
                             const rect = node.getBoundingClientRect();
                             const nearVertically = rect.bottom >= msgRect.top - 90 && rect.top <= msgRect.bottom + 130;
                             const toTheRight = rect.left >= msgRect.left;

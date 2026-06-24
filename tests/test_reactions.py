@@ -10,6 +10,7 @@ from nhi_zues.reactions import (
     APPRECIATION_EMOJI,
     EYES_EMOJI,
     LAUGH_EMOJI,
+    THINKING_EMOJI,
     THUMBS_UP_EMOJI,
     should_auto_laugh_react,
     should_auto_react,
@@ -35,6 +36,12 @@ class ReactionSuggestionTests(unittest.TestCase):
 
         self.assertEqual(EYES_EMOJI, emoji)
         self.assertIn("weird", reason)
+
+    def test_question_gets_thinking_reaction(self) -> None:
+        emoji, reason = suggest_emoji_reaction("Anyone following the World Cup?")
+
+        self.assertEqual(THINKING_EMOJI, emoji)
+        self.assertIn("question", reason)
 
     def test_auto_laugh_requires_strong_joke_marker(self) -> None:
         should_react, _reason = should_auto_laugh_react("this is such a cursed meme lmao")
@@ -100,6 +107,28 @@ class ReactionSuggestionTests(unittest.TestCase):
         self.assertTrue(should_react)
         self.assertEqual(LAUGH_EMOJI, emoji)
         self.assertIn("10%", reason)
+
+    def test_force_reaction_does_not_laugh_at_plain_text(self) -> None:
+        should_react, emoji, reason = should_auto_react(
+            "I saw the update from earlier and will check it later",
+            force_laugh_percent=100,
+            force_laugh_roll=0.0,
+        )
+
+        self.assertTrue(should_react)
+        self.assertEqual(THUMBS_UP_EMOJI, emoji)
+        self.assertIn("force reaction", reason)
+
+    def test_force_reaction_keeps_laugh_for_obvious_joke(self) -> None:
+        should_react, emoji, reason = should_auto_react(
+            "that is such a dumb bit lmao",
+            force_laugh_percent=100,
+            force_laugh_roll=0.0,
+        )
+
+        self.assertTrue(should_react)
+        self.assertEqual(LAUGH_EMOJI, emoji)
+        self.assertIn("joke", reason)
 
     def test_auto_react_sample_respects_roll(self) -> None:
         should_react, emoji, reason = should_auto_react(

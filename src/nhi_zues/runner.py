@@ -946,8 +946,17 @@ def _is_character_author(author: str, character_names: tuple[str, ...]) -> bool:
     names = {_normalize_author(name) for name in character_names if name}
     if cleaned_author in names:
         return True
+    if any(cleaned_author.startswith(f"{name} ") for name in names if name):
+        return True
     compact_author = cleaned_author.replace(" ", "")
-    return bool(compact_author and compact_author in {name.replace(" ", "") for name in names})
+    compact_names = {name.replace(" ", "") for name in names if len(name.replace(" ", "")) >= 5}
+    return bool(
+        compact_author
+        and (
+            compact_author in compact_names
+            or any(compact_author.startswith(name) for name in compact_names)
+        )
+    )
 
 
 def _normalize_author(value: str) -> str:
