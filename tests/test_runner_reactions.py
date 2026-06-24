@@ -132,7 +132,51 @@ class RunnerReactionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(set(), reacted)
         self.assertEqual("reaction_already_present", app.events.items[0]["event_type"])
-        self.assertEqual([], app.reaction_ledger.records)
+        self.assertEqual(1, len(app.reaction_ledger.records))
+
+    async def test_force_laugh_percentage_cap_blocks_repeated_scans(self) -> None:
+        app = runner(ledger=ReactionLedgerStub({"1", "2"}))
+        app.config.reaction_force_laugh_percent = 40.0
+        app.config.reaction_max_per_channel = 10
+        session = SessionStub({"applied": True, "path": "quick"})
+        target = SimpleNamespace(server_id="server-1", channel_id="channel-1", react_enabled=True)
+
+        reacted = await app._process_reactions(
+            session,
+            target,
+            [message("3", "that is such a cursed meme lmao")],
+            fresh_count=0,
+            force_laugh_ids={"1", "2", "3", "4", "5"},
+        )
+
+        self.assertEqual(set(), reacted)
+        self.assertEqual([], session.calls)
+        self.assertIn("force_window=2/2/5", app.events.items[-1]["summary"])
+        self.assertIn("force_window_capped=1", app.events.items[-1]["summary"])
+
+    async def test_force_laugh_percentage_cap_limits_total_reactions_in_window(self) -> None:
+        app = runner()
+        app.config.reaction_force_laugh_percent = 40.0
+        app.config.reaction_max_per_channel = 10
+        session = SessionStub({"applied": True, "path": "quick"})
+        target = SimpleNamespace(server_id="server-1", channel_id="channel-1", react_enabled=True)
+
+        reacted = await app._process_reactions(
+            session,
+            target,
+            [
+                message("1", "that is such a cursed meme lmao"),
+                message("2", "that is such a cursed meme lmao"),
+                message("3", "that is such a cursed meme lmao"),
+                message("4", "that is such a cursed meme lmao"),
+                message("5", "that is such a cursed meme lmao"),
+            ],
+            fresh_count=5,
+            force_laugh_ids={"1", "2", "3", "4", "5"},
+        )
+
+        self.assertEqual({"1", "2"}, reacted)
+        self.assertEqual([("1", LAUGH_EMOJI), ("2", LAUGH_EMOJI)], session.calls)
 
     async def test_successful_reaction_logs_event_and_ledger(self) -> None:
         app = runner()

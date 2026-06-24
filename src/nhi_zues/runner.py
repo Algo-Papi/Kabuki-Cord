@@ -589,10 +589,33 @@ class NhiZuesRunner:
         last_reason = ""
         force_laugh_ids = force_laugh_ids or set()
         own_author_ids = own_author_ids or set()
+        force_window_enabled = (
+            bool(force_laugh_ids)
+            and float(getattr(self.config, "reaction_force_laugh_percent", 0.0) or 0.0) > 0
+        )
+        force_window_cap = _reaction_window_cap(
+            self.config.reaction_force_laugh_percent,
+            len(force_laugh_ids),
+        )
+        force_window_used = (
+            sum(
+                1
+                for message_id in force_laugh_ids
+                if self.reaction_ledger.has_reacted_to_message(
+                    channel_id=target.channel_id,
+                    message_id=message_id,
+                )
+            )
+            if force_window_enabled
+            else 0
+        )
+        force_window_remaining = max(0, force_window_cap - force_window_used)
+        force_window_capped = 0
         for message in candidates:
             if len(reacted_message_ids) >= self.config.reaction_max_per_channel:
                 cap_reached = True
                 break
+            in_force_window = message.message_id in force_laugh_ids
             if _is_own_message(
                 message,
                 character_names=character_names,
@@ -607,13 +630,19 @@ class NhiZuesRunner:
             ):
                 ledgered += 1
                 continue
+            if force_window_enabled and in_force_window and force_window_remaining <= 0:
+                force_window_capped += 1
+                last_reason = (
+                    "rolling reaction percentage cap reached for the recent non-own message window"
+                )
+                continue
             should_react, emoji, reason = should_auto_react(
                 message.text,
                 threshold=self.config.reaction_threshold,
                 sample_percent=self.config.reaction_sample_percent,
                 force_laugh_percent=(
                     self.config.reaction_force_laugh_percent
-                    if message.message_id in force_laugh_ids
+                    if in_force_window
                     else 0.0
                 ),
                 emoji_override=self.config.reaction_emoji_override,
@@ -637,6 +666,14 @@ class NhiZuesRunner:
                 return reacted_message_ids
             if not result.get("applied"):
                 already_present += 1
+                self.reaction_ledger.record(
+                    server_id=target.server_id,
+                    message=message,
+                    emoji=emoji,
+                    reason=f"already present from this account; {reason}",
+                )
+                if force_window_enabled and in_force_window:
+                    force_window_remaining = max(0, force_window_remaining - 1)
                 self.events.add(
                     event_type="reaction_already_present",
                     server_id=target.server_id,
@@ -666,6 +703,8 @@ class NhiZuesRunner:
                 draft=message.text,
             )
             reacted_message_ids.add(message.message_id)
+            if force_window_enabled and in_force_window:
+                force_window_remaining = max(0, force_window_remaining - 1)
         if not reacted_message_ids:
             self.events.add(
                 event_type="reaction_scan",
@@ -678,6 +717,8 @@ class NhiZuesRunner:
                     f"failed={failed}, own_skipped={own_skipped}, cap_reached={str(cap_reached).lower()}, "
                     f"threshold={self.config.reaction_threshold}, sample={self.config.reaction_sample_percent:g}%"
                     f", force_laugh={self.config.reaction_force_laugh_percent:g}%"
+                    f", force_window={force_window_used}/{force_window_cap}/{len(force_laugh_ids)}"
+                    f", force_window_capped={force_window_capped}"
                     + (f", last_skip={last_reason}" if last_reason else "")
                     + "."
                 ),
@@ -762,6 +803,12 @@ def _recent_non_own_message_ids(
         if len(message_ids) >= limit:
             break
     return set(message_ids)
+
+
+def _reaction_window_cap(percent: float, window_size: int) -> int:
+    percent = max(0.0, min(float(percent or 0.0), 100.0))
+    window_size = max(0, int(window_size or 0))
+    return int(window_size * (percent / 100.0))
 
 
 def _auto_reply_guard_reason(

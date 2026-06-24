@@ -76,12 +76,12 @@ Reaction behavior has three app-level controls:
 
 - **Reaction threshold**: `strict`, `normal`, or `loose`. Loose accepts lower-confidence acknowledgement-style messages.
 - **Random reaction percent**: optional percentage of otherwise eligible fresh messages to react to. Keep this low.
-- **Force laugh recent**: optional percentage for laugh-react sampling across the latest five visible non-character messages. It still obeys Dry-run mode, per-channel React, the per-scan cap, and the reaction ledger.
+- **Force laugh recent**: optional rolling cap for laugh-react sampling across the latest five visible non-character messages. Repeated scans do not keep adding reactions after the cap is full. For example, `40%` means at most 2 of those latest 5 non-character messages can be reacted to until new messages move the window. It still obeys Dry-run mode, per-channel React, the per-scan cap, and the reaction ledger.
 - **Reaction emoji override**: optional emoji that replaces the smart choice. When random sampling is enabled and this is blank, sampled reactions use the laugh emoji.
 
 Suggested testing baseline: `normal` threshold, `0%` random sample, cap `1-2` per channel scan.
 
-The **Events -> Reaction events** filter shows successful reactions, reaction failures, Dry/cap skips, already-present reactions, and no-action reaction scan summaries. A no-action scan summary includes candidate counts and the last skip reason so you can tell whether React was blocked by config, the ledger, threshold, or lack of recent eligible messages.
+The **Events -> Reaction events** filter shows successful reactions, reaction failures, Dry/cap skips, already-present reactions, and no-action reaction scan summaries. A no-action scan summary includes candidate counts, `force_window=used/cap/size`, `force_window_capped`, and the last skip reason so you can tell whether React was blocked by config, the ledger, threshold, force-window saturation, or lack of recent eligible messages.
 
 ### Auto
 
