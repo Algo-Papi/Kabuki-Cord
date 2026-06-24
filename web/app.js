@@ -330,6 +330,10 @@ function renderSettings() {
   $("scannerCycleSleep").value = appState.env.NHI_ZUES_SCANNER_CYCLE_SLEEP_SECONDS || "45";
   $("scannerMinDelay").value = appState.env.NHI_ZUES_SCANNER_MIN_CHANNEL_DELAY_SECONDS || "12";
   $("scannerMaxDelay").value = appState.env.NHI_ZUES_SCANNER_MAX_CHANNEL_DELAY_SECONDS || "35";
+  $("replyCooldownSeconds").value = appState.env.NHI_ZUES_REPLY_COOLDOWN_SECONDS || "900";
+  $("replyWindowSeconds").value = appState.env.NHI_ZUES_REPLY_WINDOW_SECONDS || "3600";
+  $("replyMaxPerWindow").value = appState.env.NHI_ZUES_REPLY_MAX_PER_WINDOW || "3";
+  $("replyRequireInterveningUser").value = strBool(appState.env.NHI_ZUES_REPLY_REQUIRE_INTERVENING_USER, true) ? "true" : "false";
   $("reactionMaxPerChannel").value = appState.env.NHI_ZUES_REACTION_MAX_PER_CHANNEL || "2";
   $("reactionThreshold").value = appState.env.NHI_ZUES_REACTION_THRESHOLD || "normal";
   $("reactionSamplePercent").value = appState.env.NHI_ZUES_REACTION_SAMPLE_PERCENT || "0";
@@ -1382,6 +1386,7 @@ function renderResponseHistory() {
       "manual_approval_created",
       "approval_send_started",
       "duplicate_reply_blocked",
+      "reply_guard_blocked",
       "approval_regenerated",
       "approval_send_failed",
       "dry_run",
@@ -1831,6 +1836,10 @@ async function saveAll() {
       NHI_ZUES_SCANNER_CYCLE_SLEEP_SECONDS: $("scannerCycleSleep").value,
       NHI_ZUES_SCANNER_MIN_CHANNEL_DELAY_SECONDS: $("scannerMinDelay").value,
       NHI_ZUES_SCANNER_MAX_CHANNEL_DELAY_SECONDS: $("scannerMaxDelay").value,
+      NHI_ZUES_REPLY_COOLDOWN_SECONDS: $("replyCooldownSeconds").value,
+      NHI_ZUES_REPLY_WINDOW_SECONDS: $("replyWindowSeconds").value,
+      NHI_ZUES_REPLY_MAX_PER_WINDOW: $("replyMaxPerWindow").value,
+      NHI_ZUES_REPLY_REQUIRE_INTERVENING_USER: $("replyRequireInterveningUser").value === "true",
       NHI_ZUES_REACTION_MAX_PER_CHANNEL: $("reactionMaxPerChannel").value,
       NHI_ZUES_REACTION_THRESHOLD: $("reactionThreshold").value,
       NHI_ZUES_REACTION_SAMPLE_PERCENT: $("reactionSamplePercent").value,
@@ -2344,6 +2353,7 @@ function eventTypeLabel(event) {
     approvals_cleared: "Approvals cleared",
     approval_send_started: "Delivery started",
     duplicate_reply_blocked: "Duplicate blocked",
+    reply_guard_blocked: "Auto reply blocked",
     approval_sent: "Approved response sent",
     approval_send_failed: "Send failed",
     message_sent: "Auto response sent",
@@ -2372,6 +2382,7 @@ function eventClass(event) {
     "manual_approval_created",
     "approval_send_started",
     "duplicate_reply_blocked",
+    "reply_guard_blocked",
     "reaction_already_present",
     "reaction_scan",
     "reaction_skipped",
@@ -2395,6 +2406,7 @@ function isNotifiableEvent(event) {
     "manual_approval_created",
     "approval_send_started",
     "duplicate_reply_blocked",
+    "reply_guard_blocked",
     "approval_sent",
     "approval_send_failed",
     "message_sent",

@@ -39,6 +39,10 @@ class AppConfig:
     scanner_channel_settle_seconds: float
     scanner_min_channel_delay_seconds: float
     scanner_max_channel_delay_seconds: float
+    reply_cooldown_seconds: float
+    reply_window_seconds: float
+    reply_max_per_window: int
+    reply_require_intervening_user: bool
     channels: tuple[ChannelTarget, ...]
     openai_api_key: str | None
     openai_model: str
@@ -91,6 +95,13 @@ def load_config() -> AppConfig:
         scanner_max_channel_delay_seconds=max(
             0.0,
             _env_float("NHI_ZUES_SCANNER_MAX_CHANNEL_DELAY_SECONDS", 35.0),
+        ),
+        reply_cooldown_seconds=max(0.0, _env_float("NHI_ZUES_REPLY_COOLDOWN_SECONDS", 900.0)),
+        reply_window_seconds=max(60.0, _env_float("NHI_ZUES_REPLY_WINDOW_SECONDS", 3600.0)),
+        reply_max_per_window=max(0, _env_int("NHI_ZUES_REPLY_MAX_PER_WINDOW", 3)),
+        reply_require_intervening_user=_env_bool(
+            "NHI_ZUES_REPLY_REQUIRE_INTERVENING_USER",
+            default=True,
         ),
         channels=_load_channels(
             Path(_env("NHI_ZUES_SERVERS_FILE", "config/servers.json")),

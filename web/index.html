@@ -336,6 +336,25 @@
                   <input id="scannerMaxDelay" type="number" min="0" max="600" step="1" />
                 </label>
                 <label class="field">
+                  <span>Auto reply cooldown</span>
+                  <input id="replyCooldownSeconds" type="number" min="0" max="7200" step="30" />
+                </label>
+                <label class="field">
+                  <span>Reply rate window</span>
+                  <input id="replyWindowSeconds" type="number" min="60" max="21600" step="60" />
+                </label>
+                <label class="field">
+                  <span>Max replies/window</span>
+                  <input id="replyMaxPerWindow" type="number" min="0" max="20" step="1" />
+                </label>
+                <label class="field">
+                  <span>Require another user</span>
+                  <select id="replyRequireInterveningUser">
+                    <option value="true">Yes - block back-to-back auto replies</option>
+                    <option value="false">No - cooldown only</option>
+                  </select>
+                </label>
+                <label class="field">
                   <span>Reaction cap per scan</span>
                   <input id="reactionMaxPerChannel" type="number" min="0" max="10" step="1" />
                 </label>

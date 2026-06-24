@@ -4,6 +4,7 @@ import asyncio
 import logging
 import random
 import time
+from datetime import datetime, timezone
 
 from .approvals import ApprovalQueue
 from .browser import DiscordWebSession, discord_login_blocker_message
@@ -11,6 +12,7 @@ from .budget import BudgetManager
 from .character import CharacterCardStore
 from .character_memory import CharacterMemoryStore
 from .config import AppConfig
+from .discord_text import clean_discord_display_name
 from .events import EventLog
 from .llm import ReplyPlanner
 from .memory import ConversationMemory
@@ -417,6 +419,29 @@ class NhiZuesRunner:
                         draft=decision.draft,
                     )
                 else:
+                    guard_reason = _auto_reply_guard_reason(
+                        self.config,
+                        self.reply_ledger,
+                        channel_id=target.channel_id,
+                        visible_messages=visible_messages,
+                        character_names=(character.name, *character.aliases),
+                    )
+                    if guard_reason:
+                        log.info(
+                            "auto reply guard blocked server=%s channel=%s reason=%s",
+                            target.server_id,
+                            target.channel_id,
+                            guard_reason,
+                        )
+                        self.events.add(
+                            event_type="reply_guard_blocked",
+                            server_id=target.server_id,
+                            channel_id=target.channel_id,
+                            summary=guard_reason,
+                            draft=decision.draft,
+                        )
+                        self.memory.save()
+                        continue
                     await session.send_message(
                         decision.draft,
                         typing_enabled=self.config.typing_indicator_enabled,
@@ -620,8 +645,104 @@ def _recent_reaction_candidates(
     return candidates
 
 
+def _auto_reply_guard_reason(
+    config: AppConfig,
+    reply_ledger: ReplyLedger,
+    *,
+    channel_id: str,
+    visible_messages,
+    character_names: tuple[str, ...],
+    now: datetime | None = None,
+) -> str:
+    now = now or datetime.now(timezone.utc)
+    cooldown_seconds = max(0.0, float(getattr(config, "reply_cooldown_seconds", 0.0) or 0.0))
+    if cooldown_seconds:
+        latest = reply_ledger.latest_for_channel(channel_id=channel_id)
+        latest_at = _reply_created_at(latest)
+        if latest_at is not None:
+            age_seconds = (now - latest_at).total_seconds()
+            if age_seconds < cooldown_seconds:
+                return (
+                    "Auto reply blocked by channel cooldown: "
+                    f"last sent {_format_seconds(age_seconds)} ago; "
+                    f"cooldown is {_format_seconds(cooldown_seconds)}."
+                )
+
+    max_per_window = max(0, int(getattr(config, "reply_max_per_window", 0) or 0))
+    window_seconds = max(60.0, float(getattr(config, "reply_window_seconds", 3600.0) or 3600.0))
+    if max_per_window:
+        recent = reply_ledger.recent_for_channel(
+            channel_id=channel_id,
+            window_seconds=window_seconds,
+            now=now,
+        )
+        if len(recent) >= max_per_window:
+            return (
+                "Auto reply blocked by channel rate limit: "
+                f"{len(recent)} sent in the last {_format_seconds(window_seconds)}; "
+                f"limit is {max_per_window}."
+            )
+
+    if bool(getattr(config, "reply_require_intervening_user", True)):
+        streak_reason = _own_message_streak_guard_reason(
+            visible_messages,
+            character_names=character_names,
+        )
+        if streak_reason:
+            return streak_reason
+
+    return ""
+
+
+def _own_message_streak_guard_reason(messages, *, character_names: tuple[str, ...]) -> str:
+    visible = list(messages or [])
+    last_own_index = -1
+    for index, message in enumerate(visible):
+        if _is_character_author(getattr(message, "author", ""), character_names):
+            last_own_index = index
+    if last_own_index < 0:
+        return ""
+    for message in visible[last_own_index + 1 :]:
+        if not _is_character_author(getattr(message, "author", ""), character_names):
+            return ""
+    return (
+        "Auto reply blocked because the last visible message in this channel is already "
+        "from the character. Waiting for another user before posting again."
+    )
+
+
+def _reply_created_at(reply) -> datetime | None:
+    if reply is None:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(reply.created_at).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _is_character_author(author: str, character_names: tuple[str, ...]) -> bool:
+    cleaned_author = _normalize_author(author)
+    if not cleaned_author:
+        return False
+    return cleaned_author in {_normalize_author(name) for name in character_names if name}
+
+
 def _normalize_author(value: str) -> str:
-    return " ".join(str(value or "").lower().split())
+    return " ".join(clean_discord_display_name(str(value or "")).lower().split())
+
+
+def _format_seconds(seconds: float) -> str:
+    value = max(0, int(round(float(seconds or 0))))
+    minutes, remainder = divmod(value, 60)
+    if minutes <= 0:
+        return f"{remainder}s"
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h {minutes}m"
+    return f"{minutes}m {remainder:02d}s"
 
 
 def _requires_approval(

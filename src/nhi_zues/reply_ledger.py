@@ -71,6 +71,33 @@ class ReplyLedger:
             if item.channel_id == channel_id and source_ids.intersection(item.source_message_ids)
         ]
 
+    def latest_for_channel(self, *, channel_id: str) -> SentReply | None:
+        for item in reversed(self._items):
+            if item.channel_id == channel_id:
+                return item
+        return None
+
+    def recent_for_channel(
+        self,
+        *,
+        channel_id: str,
+        window_seconds: float,
+        now: datetime | None = None,
+    ) -> list[SentReply]:
+        if window_seconds <= 0:
+            return []
+        now = now or datetime.now(timezone.utc)
+        recent: list[SentReply] = []
+        for item in self._items:
+            if item.channel_id != channel_id:
+                continue
+            created_at = _parse_created_at(item.created_at)
+            if created_at is None:
+                continue
+            if (now - created_at).total_seconds() <= window_seconds:
+                recent.append(item)
+        return recent
+
     def list(self) -> list[SentReply]:
         return list(self._items)
 
@@ -125,3 +152,13 @@ def _draft_hash(draft: str) -> str:
 def _reply_id(*, channel_id: str, draft_hash: str, source_ids: tuple[str, ...]) -> str:
     raw = "\n".join((channel_id, draft_hash, *source_ids))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _parse_created_at(value: str) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
