@@ -9,7 +9,7 @@ This is the replacement checklist for animated and sprite-like visual assets cur
 | `web/assets/monitor_spy_frames/frame_000.png` through `frame_005.png` | Scanner Monitor popup activity animation: generated high-resolution keyframes of the kabuki actor sneaking through Japanese alleys, dropping mail, scanning with a magnifying glass, peeking into a shoji window from behind, and looping out of frame. The monitor holds each frame for 5 seconds before its transition. | `web/monitor.html`, `web/monitor.js`, `web/monitor.css` |
 | `web/assets/scanner-kabuki-sheet.png` | Upgraded 16-frame, 256px-source default topbar operation/status sprite: the actor dances through a searching loop with an integrated magnifying glass. | `web/styles.css`, `web/app.js` |
 | `web/assets/scanner-kabuki-sync-sheet.png` | Upgraded 11-frame, 256px-source topbar animation while syncing Discord servers/channels: the actor unrolls a channel scroll, connects cyan cords between server lanterns, stamps the sync, and settles back to idle. | `web/styles.css`, `web/app.js` |
-| `web/assets/scanner-kabuki-repair-sheet.png` | Topbar animation while repairing/reloading a server channel list. | `web/styles.css`, `web/app.js` |
+| `web/assets/scanner-kabuki-repair-sheet.png` | Upgraded 10-frame, 256px-source topbar animation while repairing/reloading a server channel list: the actor inspects a broken shrine-like channel control box, crouches, opens the panel, wrenches, reconnects glowing cyan cables, stamps the fix, and returns to idle. | `web/styles.css`, `web/app.js` |
 | `web/assets/scanner-kabuki-backfill-sheet.png` | Upgraded 8-frame, 256px-source topbar animation while backfilling older channel history: the actor pulls a ledger from a wooden archive shelf, indexes it, files it back, and settles into a loop. | `web/styles.css`, `web/app.js` |
 | `web/assets/scanner-kabuki-latest-sheet.png` | Topbar animation while refreshing the latest visible messages. | `web/styles.css`, `web/app.js` |
 | `web/assets/scanner-kabuki-refresh-sheet.png` | Topbar animation while refreshing local app state. | `web/styles.css`, `web/app.js` |
@@ -33,6 +33,7 @@ This is the replacement checklist for animated and sprite-like visual assets cur
 | `web/assets/source/semi_auto_keyframes/frame_000.png` through `frame_011.png` | Cleaned transparent keyframes used to assemble the upgraded Semi Auto transition sprite sheet. | Source/reference asset |
 | `web/assets/source/live_fire_keyframes/frame_000.png` through `frame_011.png` | Cleaned transparent keyframes used to assemble the upgraded Live Fire transition sprite sheet. | Source/reference asset |
 | `web/assets/source/sync_keyframes/frame_000.png` through `frame_010.png` | Cleaned transparent keyframes used to assemble the upgraded Sync Discord action sprite sheet. | Source/reference asset |
+| `web/assets/source/repair_keyframes/frame_000.png` through `frame_009.png` | Cleaned transparent keyframes used to assemble the upgraded Repair action sprite sheet. | Source/reference asset |
 | `web/assets/source/posting_keyframes/frame_000.png` through `frame_009.png` | Cleaned transparent keyframes used to assemble the upgraded Posting action sprite sheet. | Source/reference asset |
 | `web/assets/source/discord_blocked_keyframes/frame_000.png` through `frame_009.png` | Cleaned transparent keyframes used to assemble the upgraded Discord Blocked action sprite sheet. | Source/reference asset |
 | `web/assets/source/scanner_keyframes/frame_000.png` through `frame_015.png` | Cleaned transparent keyframes used to assemble the upgraded default Scanner topbar sprite sheet. | Source/reference asset |
@@ -62,6 +63,7 @@ This is the replacement checklist for animated and sprite-like visual assets cur
 | `scripts/generate_spy_story_sprite.py` | Generates the legacy single-sheet Scanner Monitor animation. |
 | `scripts/generate_discord_blocked_sprite.py` | Reassembles `scanner-kabuki-discord-blocked-sheet.png` from cleaned source keyframes. |
 | `scripts/generate_sync_sprite.py` | Reassembles `scanner-kabuki-sync-sheet.png` from cleaned source keyframes. |
+| `scripts/generate_repair_sprite.py` | Reassembles `scanner-kabuki-repair-sheet.png` from cleaned source keyframes. |
 | `scripts/generate_semi_auto_sprite.py` | Reassembles `mode-kabuki-semi-auto-sheet.png` from cleaned source keyframes. |
 | `scripts/generate_live_fire_sprite.py` | Reassembles `mode-kabuki-live-fire-sheet.png` from cleaned source keyframes. |
 
@@ -83,7 +85,7 @@ New action sprites should use the HD kabuki actor style from `web/assets/source/
 
 Recommended replacement order:
 
-1. `scanner-kabuki-repair-sheet.png`, `scanner-kabuki-latest-sheet.png`, and `scanner-kabuki-refresh-sheet.png`.
-2. `scanner-kabuki-sheet.png`, `scanner-kabuki-backfill-sheet.png`, `scanner-kabuki-sync-sheet.png`, `scanner-kabuki-posting-sheet.png`, `scanner-kabuki-discord-blocked-sheet.png`, `mode-kabuki-dry-sheet.png`, `mode-kabuki-full-auto-sheet.png`, `mode-kabuki-semi-auto-sheet.png`, and `mode-kabuki-live-fire-sheet.png` are already upgraded as the first pass, but can be refined later with hand-painted in-betweens if needed.
+1. `scanner-kabuki-latest-sheet.png` and `scanner-kabuki-refresh-sheet.png`.
+2. `scanner-kabuki-sheet.png`, `scanner-kabuki-backfill-sheet.png`, `scanner-kabuki-sync-sheet.png`, `scanner-kabuki-repair-sheet.png`, `scanner-kabuki-posting-sheet.png`, `scanner-kabuki-discord-blocked-sheet.png`, `mode-kabuki-dry-sheet.png`, `mode-kabuki-full-auto-sheet.png`, `mode-kabuki-semi-auto-sheet.png`, and `mode-kabuki-live-fire-sheet.png` are already upgraded as the first pass, but can be refined later with hand-painted in-betweens if needed.
 
 For upgraded topbar sheets, prefer 256px source frames and a CSS-specific frame count/duration rather than forcing every animation into the legacy 20-frame, 128px-source path. For the larger mode transition overlay, use at least 256px source frames and export at the display scale or higher.
