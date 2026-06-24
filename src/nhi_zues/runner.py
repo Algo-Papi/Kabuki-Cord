@@ -4,7 +4,6 @@ import asyncio
 import logging
 import math
 import random
-import time
 from datetime import datetime, timezone
 
 from .approvals import ApprovalQueue
@@ -64,6 +63,7 @@ class NhiZuesRunner:
         self.user_instructions = UserInstructionStore(config.state_dir / "user_instructions.json")
         self.events = EventLog(config.state_dir / "events.json")
         self._target_cursor = 0
+        self._completed_loop_count = 0
         self._own_author_ids: set[str] = set()
 
     async def run_once(self) -> None:
@@ -170,33 +170,45 @@ class NhiZuesRunner:
             raise RuntimeError(discord_login_blocker_message(await session.account_blocker_state()))
         await self._remember_current_account_id(session)
 
-        last_checked: dict[tuple[str, str], float] = {}
         while not _stop_requested(stop_event):
-            planned_targets = self._due_targets(last_checked, apply_limit=False) if loop else list(self.config.channels)
-            targets = self._limit_targets(planned_targets) if loop else planned_targets
+            planned_targets = self._planned_targets() if loop else list(self.config.channels)
+            if loop:
+                completed_in_loop = self._loop_cursor()
+                targets, will_complete_loop = self._select_targets(planned_targets)
+            else:
+                completed_in_loop = 0
+                targets, will_complete_loop = planned_targets, True
+            loop_state = self._loop_state(
+                planned_targets=planned_targets,
+                selected_targets=targets,
+                will_complete_loop=will_complete_loop,
+                completed_in_loop=completed_in_loop,
+            )
             if on_targets_planned:
-                on_targets_planned(planned_targets)
+                on_targets_planned(planned_targets, loop_state)
             if targets:
                 await self._process_channels(
                     session,
                     targets,
                     planned_targets=planned_targets,
+                    loop_state=loop_state,
                     stop_event=stop_event,
                     on_target_start=on_target_start,
                     on_target_complete=on_target_complete,
                 )
-                now = time.monotonic()
-                for target in targets:
-                    last_checked[(target.server_id, target.channel_id)] = now
+                if loop and will_complete_loop:
+                    self._completed_loop_count = int(getattr(self, "_completed_loop_count", 0) or 0) + 1
             if not loop:
                 return
 
-            sleep_seconds = self.config.scanner_cycle_sleep_seconds if targets else min(
-                self.config.poll_seconds,
-                self.config.scanner_cycle_sleep_seconds,
+            sleep_seconds = self.config.scanner_cycle_sleep_seconds
+            loop_state = self._loop_state(
+                planned_targets=self._planned_targets(),
+                selected_targets=(),
+                will_complete_loop=False,
             )
             if on_cycle:
-                on_cycle(sleep_seconds)
+                on_cycle(sleep_seconds, loop_state)
             if await _sleep_interruptible(stop_event, sleep_seconds):
                 return
 
@@ -211,39 +223,74 @@ class NhiZuesRunner:
         own_ids.add(str(account_id))
         self._own_author_ids = own_ids
 
-    def _due_targets(self, last_checked: dict[tuple[str, str], float], *, apply_limit: bool = True):
-        now = time.monotonic()
-        due = []
-        for target in self.config.channels:
-            key = (target.server_id, target.channel_id)
-            interval = target.poll_seconds or self.config.poll_seconds
-            if key not in last_checked or now - last_checked[key] >= interval:
-                due.append(target)
-        if not apply_limit:
-            return due
-        return self._limit_targets(due)
+    def _planned_targets(self):
+        targets = list(self.config.channels)
+        if not targets:
+            return []
+        start = int(getattr(self, "_target_cursor", 0) or 0) % len(targets)
+        return targets[start:] + targets[:start]
+
+    def _select_targets(self, targets):
+        start_cursor = self._loop_cursor()
+        selected = self._limit_targets(targets)
+        next_cursor = self._loop_cursor()
+        return selected, bool(selected) and next_cursor <= start_cursor
 
     def _limit_targets(self, targets):
         limit = max(1, self.config.scanner_max_channels_per_cycle)
         all_targets = list(self.config.channels)
         if not targets or not all_targets:
             return []
-        due_keys = {(target.server_id, target.channel_id) for target in targets}
-        start = int(getattr(self, "_target_cursor", 0) or 0) % len(all_targets)
-        selected = []
-        last_index = start
-        for offset in range(len(all_targets)):
-            index = (start + offset) % len(all_targets)
-            target = all_targets[index]
-            if (target.server_id, target.channel_id) not in due_keys:
-                continue
-            selected.append(target)
-            last_index = index
-            if len(selected) >= limit:
-                break
+        current_loop_remaining = len(all_targets) - self._loop_cursor()
+        selected = list(targets)[: min(limit, current_loop_remaining)]
         if selected:
-            self._target_cursor = (last_index + 1) % len(all_targets)
+            last_index = self._target_index(selected[-1])
+            if last_index >= 0:
+                self._target_cursor = (last_index + 1) % len(all_targets)
         return selected
+
+    def _loop_cursor(self) -> int:
+        total = len(self.config.channels)
+        if not total:
+            return 0
+        return int(getattr(self, "_target_cursor", 0) or 0) % total
+
+    def _target_index(self, target) -> int:
+        for index, item in enumerate(self.config.channels):
+            if item.server_id == target.server_id and item.channel_id == target.channel_id:
+                return index
+        return -1
+
+    def _loop_state(
+        self,
+        *,
+        planned_targets,
+        selected_targets,
+        will_complete_loop: bool,
+        target=None,
+        completed_in_loop: int | None = None,
+    ) -> dict[str, int | bool]:
+        total = len(self.config.channels)
+        cursor = self._loop_cursor()
+        completed_loops = int(getattr(self, "_completed_loop_count", 0) or 0)
+        position = 0
+        if target is not None:
+            target_index = self._target_index(target)
+            if target_index >= 0:
+                position = target_index + 1
+        if completed_in_loop is None:
+            completed_in_loop = cursor
+        return {
+            "completed_loops": completed_loops,
+            "current_loop": completed_loops + 1,
+            "total_channels": total,
+            "cursor": cursor,
+            "position": position,
+            "completed_in_loop": max(0, min(int(completed_in_loop or 0), total)),
+            "selected_count": len(list(selected_targets or ())),
+            "planned_count": len(list(planned_targets or ())),
+            "will_complete_loop": bool(will_complete_loop),
+        }
 
     async def _process_channels(
         self,
@@ -251,6 +298,7 @@ class NhiZuesRunner:
         targets,
         *,
         planned_targets=None,
+        loop_state=None,
         stop_event=None,
         on_target_start=None,
         on_target_complete=None,
@@ -268,7 +316,15 @@ class NhiZuesRunner:
                     )
                 except StopIteration:
                     planned_index = index
-                on_target_start(target, planned_index, planned)
+                target_index = self._target_index(target)
+                target_loop_state = self._loop_state(
+                    planned_targets=planned,
+                    selected_targets=targets,
+                    will_complete_loop=bool((loop_state or {}).get("will_complete_loop")),
+                    target=target,
+                    completed_in_loop=max(0, target_index),
+                )
+                on_target_start(target, planned_index, planned, target_loop_state)
             await self._raise_if_account_blocked(session, target)
             current_url = await session.navigate_channel(target.server_id, target.channel_id)
             await self._raise_if_account_blocked(session, target)
@@ -285,7 +341,15 @@ class NhiZuesRunner:
                     summary=f"Checked channel but Discord redirected to {current_url}.",
                 )
                 if on_target_complete:
-                    on_target_complete(target, 0, 0)
+                    target_index = self._target_index(target)
+                    complete_loop_state = self._loop_state(
+                        planned_targets=list(planned_targets or targets),
+                        selected_targets=targets,
+                        will_complete_loop=bool((loop_state or {}).get("will_complete_loop")),
+                        target=target,
+                        completed_in_loop=max(0, target_index + 1),
+                    )
+                    on_target_complete(target, 0, 0, complete_loop_state)
                 continue
 
             if await self._channel_settle_delay(stop_event):
@@ -374,7 +438,15 @@ class NhiZuesRunner:
                 )
                 self.memory.save()
                 if on_target_complete:
-                    on_target_complete(target, len(visible_messages), len(fresh))
+                    target_index = self._target_index(target)
+                    complete_loop_state = self._loop_state(
+                        planned_targets=list(planned_targets or targets),
+                        selected_targets=targets,
+                        will_complete_loop=bool((loop_state or {}).get("will_complete_loop")),
+                        target=target,
+                        completed_in_loop=max(0, target_index + 1),
+                    )
+                    on_target_complete(target, len(visible_messages), len(fresh), complete_loop_state)
                 continue
 
             decision = await self.planner.plan(
@@ -559,7 +631,15 @@ class NhiZuesRunner:
 
             self.memory.save()
             if on_target_complete:
-                on_target_complete(target, len(visible_messages), len(fresh))
+                target_index = self._target_index(target)
+                complete_loop_state = self._loop_state(
+                    planned_targets=list(planned_targets or targets),
+                    selected_targets=targets,
+                    will_complete_loop=bool((loop_state or {}).get("will_complete_loop")),
+                    target=target,
+                    completed_in_loop=max(0, target_index + 1),
+                )
+                on_target_complete(target, len(visible_messages), len(fresh), complete_loop_state)
 
     async def _channel_pacing_delay(self) -> None:
         lower = max(0.0, self.config.scanner_min_channel_delay_seconds)

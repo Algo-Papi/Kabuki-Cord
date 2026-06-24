@@ -71,7 +71,7 @@ This is the replacement checklist for animated and sprite-like visual assets cur
 
 ## Scanner Timing Defaults
 
-The Scanner Monitor now displays the active pace in its Pace card. With default environment values, Kabuki-Cord scans `1` channel per cycle, waits `12s` on the loaded channel before reading, rests for `45s`, then checks the next due channel. The `12-35s` per-channel delay only becomes visible between channels when `NHI_ZUES_SCANNER_MAX_CHANNELS_PER_CYCLE` is raised above `1`.
+The Scanner Monitor now displays the active pace in its Pace card and a loop HUD over the bottom-right of the animation frame. With default environment values, Kabuki-Cord scans `1` observed channel per cycle, waits `12s` on the loaded channel before reading, rests for `45s`, then checks the next channel in the global round-robin order. Adding or removing observed channels automatically changes the full-loop estimate and loop countdown. The `12-35s` per-channel delay only becomes visible between channels when `NHI_ZUES_SCANNER_MAX_CHANNELS_PER_CYCLE` is raised above `1`.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |

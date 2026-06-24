@@ -4,7 +4,6 @@
       "server_id": "server_id_here",
       "label": "Example Server",
       "character_card": null,
-      "poll_seconds": 120,
       "channels": [
         {
           "channel_id": "channel_id_here",

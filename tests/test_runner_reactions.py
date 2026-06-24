@@ -500,7 +500,7 @@ class RunnerReactionTests(unittest.IsolatedAsyncioTestCase):
 
 
 class RunnerTargetRotationTests(unittest.TestCase):
-    def test_limit_targets_rotates_through_due_channels(self) -> None:
+    def test_limit_targets_rotates_through_global_loop_order(self) -> None:
         first = ChannelTarget(server_id="s", channel_id="1")
         second = ChannelTarget(server_id="s", channel_id="2")
         third = ChannelTarget(server_id="s", channel_id="3")
@@ -510,11 +510,17 @@ class RunnerTargetRotationTests(unittest.TestCase):
             channels=(first, second, third),
         )
 
-        self.assertEqual([first], app._limit_targets([first, second, third]))
-        self.assertEqual([second], app._limit_targets([first, second, third]))
-        self.assertEqual([third], app._limit_targets([first, second, third]))
+        selected, completed_loop = app._select_targets(app._planned_targets())
+        self.assertEqual([first], selected)
+        self.assertFalse(completed_loop)
+        selected, completed_loop = app._select_targets(app._planned_targets())
+        self.assertEqual([second], selected)
+        self.assertFalse(completed_loop)
+        selected, completed_loop = app._select_targets(app._planned_targets())
+        self.assertEqual([third], selected)
+        self.assertTrue(completed_loop)
 
-    def test_limit_targets_respects_due_subset_after_rotation(self) -> None:
+    def test_limit_targets_respects_rotated_subset(self) -> None:
         first = ChannelTarget(server_id="s", channel_id="1")
         second = ChannelTarget(server_id="s", channel_id="2")
         third = ChannelTarget(server_id="s", channel_id="3")
@@ -526,6 +532,33 @@ class RunnerTargetRotationTests(unittest.TestCase):
         app._target_cursor = 1
 
         self.assertEqual([third], app._limit_targets([third]))
+
+    def test_select_targets_finishes_loop_before_wrapping(self) -> None:
+        first = ChannelTarget(server_id="s", channel_id="1")
+        second = ChannelTarget(server_id="s", channel_id="2")
+        third = ChannelTarget(server_id="s", channel_id="3")
+        app = NhiZuesRunner.__new__(NhiZuesRunner)
+        app.config = SimpleNamespace(
+            scanner_max_channels_per_cycle=2,
+            channels=(first, second, third),
+        )
+        app._target_cursor = 2
+
+        selected, completed_loop = app._select_targets([third, first, second])
+
+        self.assertEqual([third], selected)
+        self.assertTrue(completed_loop)
+        self.assertEqual(0, app._target_cursor)
+
+    def test_planned_targets_start_from_current_cursor(self) -> None:
+        first = ChannelTarget(server_id="s", channel_id="1")
+        second = ChannelTarget(server_id="s", channel_id="2")
+        third = ChannelTarget(server_id="s", channel_id="3")
+        app = NhiZuesRunner.__new__(NhiZuesRunner)
+        app.config = SimpleNamespace(channels=(first, second, third))
+        app._target_cursor = 1
+
+        self.assertEqual([second, third, first], app._planned_targets())
 
 
 class MemoryStub:

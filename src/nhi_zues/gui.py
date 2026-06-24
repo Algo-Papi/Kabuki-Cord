@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import ipaddress
 import json
+import math
 import mimetypes
 import os
 import re
@@ -581,7 +582,7 @@ class RuntimeController:
                 on_target_complete=self._mark_target_complete,
             )
 
-    def _mark_cycle_complete(self, sleep_seconds: float | None = None) -> None:
+    def _mark_cycle_complete(self, sleep_seconds: float | None = None, loop_state: dict | None = None) -> None:
         self._last_run_at = time.time()
         self._last_error = ""
         self._set_phase("running")
@@ -597,10 +598,11 @@ class RuntimeController:
                 "next_scan_at": now + sleep_value if sleep_value else None,
                 "current_started_at": None,
                 "current_estimated_done_at": None,
+                "loop": self._loop_payload(loop_state, status="resting"),
                 "updated_at": now,
             }
 
-    def _mark_targets_planned(self, targets) -> None:
+    def _mark_targets_planned(self, targets, loop_state: dict | None = None) -> None:
         planned = [self._target_payload(target) for target in targets]
         now = time.time()
         with self._lock:
@@ -614,10 +616,11 @@ class RuntimeController:
                 "next_scan_at": now if planned else None,
                 "current_started_at": None,
                 "current_estimated_done_at": None,
+                "loop": self._loop_payload(loop_state, status="queued"),
                 "updated_at": now,
             }
 
-    def _mark_target_start(self, target, index: int, targets) -> None:
+    def _mark_target_start(self, target, index: int, targets, loop_state: dict | None = None) -> None:
         remaining = [self._target_payload(item) for item in list(targets)[index + 1 : index + 6]]
         now = time.time()
         with self._lock:
@@ -631,10 +634,17 @@ class RuntimeController:
                 "next_scan_at": None,
                 "current_started_at": now,
                 "current_estimated_done_at": now + self._estimated_target_seconds(),
+                "loop": self._loop_payload(loop_state, status="scanning"),
                 "updated_at": now,
             }
 
-    def _mark_target_complete(self, target, visible_count: int, fresh_count: int) -> None:
+    def _mark_target_complete(
+        self,
+        target,
+        visible_count: int,
+        fresh_count: int,
+        loop_state: dict | None = None,
+    ) -> None:
         completed = {
             **self._target_payload(target),
             "visible_messages": int(visible_count or 0),
@@ -648,6 +658,7 @@ class RuntimeController:
                 "last_completed": completed,
                 "current_started_at": None,
                 "current_estimated_done_at": None,
+                "loop": self._loop_payload(loop_state, status="completed_channel"),
                 "updated_at": time.time(),
             }
 
@@ -666,6 +677,16 @@ class RuntimeController:
             "next_scan_at": None,
             "current_started_at": None,
             "current_estimated_done_at": None,
+            "loop": {
+                "current_loop": 0,
+                "completed_loops": 0,
+                "total_channels": 0,
+                "completed_in_loop": 0,
+                "remaining_channels": 0,
+                "estimated_loop_seconds": 0,
+                "estimated_remaining_seconds": 0,
+                "estimated_complete_at": None,
+            },
             "updated_at": time.time(),
         }
 
@@ -682,17 +703,61 @@ class RuntimeController:
     def _estimated_target_seconds() -> float:
         try:
             config = load_config()
-            return max(
-                20.0,
-                min(
-                    120.0,
-                    float(config.scanner_channel_settle_seconds)
-                    + float(config.scanner_max_channel_delay_seconds)
-                    + 20.0,
-                ),
-            )
+            return _estimated_channel_scan_seconds(config)
         except Exception:
             return 45.0
+
+    def _loop_payload(self, loop_state: dict | None, *, status: str) -> dict:
+        try:
+            config = load_config()
+            total = int((loop_state or {}).get("total_channels") or len(config.channels) or 0)
+            completed_in_loop = int((loop_state or {}).get("completed_in_loop") or 0)
+            completed_in_loop = max(0, min(completed_in_loop, total))
+            remaining = max(0, total - completed_in_loop)
+            if status == "scanning" and remaining == 0 and total:
+                remaining = 1
+            loop_seconds = _estimated_loop_seconds(config, total)
+            remaining_seconds = _estimated_loop_seconds(config, remaining)
+            current_loop = int((loop_state or {}).get("current_loop") or 0)
+            completed_loops = int((loop_state or {}).get("completed_loops") or 0)
+            if not current_loop and total:
+                current_loop = completed_loops + 1
+            return {
+                "current_loop": current_loop,
+                "completed_loops": completed_loops,
+                "total_channels": total,
+                "position": int((loop_state or {}).get("position") or 0),
+                "completed_in_loop": completed_in_loop,
+                "remaining_channels": remaining,
+                "estimated_loop_seconds": loop_seconds,
+                "estimated_remaining_seconds": remaining_seconds,
+                "estimated_complete_at": time.time() + remaining_seconds if remaining else time.time(),
+            }
+        except Exception:
+            return self._empty_scan()["loop"]
+
+
+def _estimated_channel_scan_seconds(config: AppConfig) -> float:
+    return max(15.0, min(90.0, float(config.scanner_channel_settle_seconds) + 18.0))
+
+
+def _estimated_loop_seconds(config: AppConfig, channel_count: int) -> float:
+    total = max(0, int(channel_count or 0))
+    if total <= 0:
+        return 0.0
+    per_channel = _estimated_channel_scan_seconds(config)
+    per_cycle = max(1, int(config.scanner_max_channels_per_cycle or 1))
+    cycle_count = math.ceil(total / per_cycle)
+    between_channel_delays = max(0, total - cycle_count)
+    average_delay = (
+        max(0.0, float(config.scanner_min_channel_delay_seconds))
+        + max(0.0, float(config.scanner_max_channel_delay_seconds))
+    ) / 2
+    return (
+        total * per_channel
+        + between_channel_delays * average_delay
+        + cycle_count * max(0.0, float(config.scanner_cycle_sleep_seconds))
+    )
 
 
 RUNTIME = RuntimeController()
@@ -804,10 +869,10 @@ def app_state() -> dict:
             "NHI_ZUES_REPLY_WINDOW_SECONDS": env.get("NHI_ZUES_REPLY_WINDOW_SECONDS", "3600"),
             "NHI_ZUES_REPLY_MAX_PER_WINDOW": env.get("NHI_ZUES_REPLY_MAX_PER_WINDOW", "3"),
             "NHI_ZUES_REPLY_REQUIRE_INTERVENING_USER": env.get("NHI_ZUES_REPLY_REQUIRE_INTERVENING_USER", "true"),
-            "NHI_ZUES_REACTION_MAX_PER_CHANNEL": env.get("NHI_ZUES_REACTION_MAX_PER_CHANNEL", "2"),
+            "NHI_ZUES_REACTION_MAX_PER_CHANNEL": env.get("NHI_ZUES_REACTION_MAX_PER_CHANNEL", "3"),
             "NHI_ZUES_REACTION_THRESHOLD": env.get("NHI_ZUES_REACTION_THRESHOLD", "normal"),
             "NHI_ZUES_REACTION_SAMPLE_PERCENT": env.get("NHI_ZUES_REACTION_SAMPLE_PERCENT", "0"),
-            "NHI_ZUES_REACTION_FORCE_LAUGH_PERCENT": env.get("NHI_ZUES_REACTION_FORCE_LAUGH_PERCENT", "0"),
+            "NHI_ZUES_REACTION_FORCE_LAUGH_PERCENT": env.get("NHI_ZUES_REACTION_FORCE_LAUGH_PERCENT", "20"),
             "NHI_ZUES_REACTION_EMOJI_OVERRIDE": env.get("NHI_ZUES_REACTION_EMOJI_OVERRIDE", ""),
         },
         "servers": _read_json(config.servers_file, default={"servers": []}),
@@ -1090,7 +1155,6 @@ def sync_discord_servers() -> dict:
                 "server_id": server_id,
                 "label": label,
                 "character_card": None,
-                "poll_seconds": 120,
                 "channels": [],
             }
             server_list.append(existing)
@@ -1167,7 +1231,6 @@ def repair_discord_server(body: dict) -> dict:
             "server_id": server_id,
             "label": f"Server {server_id}",
             "character_card": None,
-            "poll_seconds": 120,
             "channels": [],
         }
         server_list.append(server)

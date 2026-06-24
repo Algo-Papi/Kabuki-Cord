@@ -69,19 +69,19 @@ If React is on and Observe is on:
 
 - The channel can receive reactions even when Engage is off.
 - Reactions are still blocked by Dry-run mode.
-- Each channel scan is capped by `NHI_ZUES_REACTION_MAX_PER_CHANNEL`, which defaults to `2`.
+- Each channel scan is capped by `NHI_ZUES_REACTION_MAX_PER_CHANNEL`, which defaults to `3`.
 - The reaction ledger prevents repeating any app-made reaction on the same Discord message.
 
 Reaction behavior has four app-level controls:
 
 - **Reaction threshold**: `strict`, `normal`, or `loose`. Loose accepts lower-confidence acknowledgement-style messages.
 - **Random reaction percent**: optional percentage of otherwise eligible fresh messages to react to. Keep this low.
-- **Force recent reaction**: optional rolling target/cap for reacting across the latest five visible non-character messages. Repeated scans do not keep adding reactions after the cap is full, but if the window is below target, the scanner spends available per-scan reaction cap to catch up. For example, `40%` means Kabuki tries to keep up to 2 of those latest 5 non-character messages reacted until new messages move the window. It still obeys Dry-run mode, per-channel React, the per-scan cap, and the reaction ledger.
+- **Force recent reaction**: optional rolling target/cap for reacting across the latest five visible non-character messages. Repeated scans do not keep adding reactions after the cap is full, but if the window is below target, the scanner spends available per-scan reaction cap to catch up. For example, `20%` means Kabuki tries to keep up to 1 of those latest 5 non-character messages reacted until new messages move the window. It still obeys Dry-run mode, per-channel React, the per-scan cap, and the reaction ledger.
 - **Reaction emoji override**: optional emoji that replaces the smart choice.
 
 Smart reaction selection is conservative: obvious jokes can get `😂`, clear agreement can get `👍`, thanks/help/support can get `🙏`, questions can get `🤔`, and serious or notably weird claims usually get `👀`. The forced-reaction percentage controls frequency, not a forced laugh emoji.
 
-Suggested testing baseline: `normal` threshold, `0%` random sample, cap `1-2` per channel scan.
+Suggested testing baseline: `normal` threshold, `0%` random sample, cap `1-3` per channel scan.
 
 The **Events -> Reaction events** filter shows successful reactions, reaction failures, Dry/cap skips, already-present reactions, and no-action reaction scan summaries. A no-action scan summary includes candidate counts, `force_window=used/cap/size`, `force_window_capped`, and the last skip reason so you can tell whether React was blocked by config, the ledger, threshold, force-window saturation, or lack of recent eligible messages.
 
@@ -267,14 +267,13 @@ Important constraints:
 
 ### Account Safety Pacing
 
-The scanner should not sweep every enabled channel back-to-back. The conservative defaults are:
+The scanner uses one global round-robin loop across every Observe-enabled channel. The conservative defaults are:
 
 - `NHI_ZUES_SCANNER_MAX_CHANNELS_PER_CYCLE=1`
 - `NHI_ZUES_SCANNER_CYCLE_SLEEP_SECONDS=45`
 - `NHI_ZUES_SCANNER_CHANNEL_SETTLE_SECONDS=12`
-- `NHI_ZUES_POLL_SECONDS=180`
 
-`NHI_ZUES_SCANNER_CHANNEL_SETTLE_SECONDS` keeps the scanner on a channel briefly after navigation before message extraction. This reduces rapid browser churn and gives Discord time to finish rendering the latest messages. If you increase **Max channels per cycle**, the min/max wait settings add a pause between channel checks. Keep the observed channel list narrow, keep server scan cadences in minutes rather than seconds, and prefer **Dry Mode** or approval-based modes while testing.
+`NHI_ZUES_SCANNER_CHANNEL_SETTLE_SECONDS` keeps the scanner on a channel briefly after navigation before message extraction. This reduces rapid browser churn and gives Discord time to finish rendering the latest messages. If you increase **Max channels per cycle**, the min/max wait settings add a pause between channel checks inside that cycle. Keep the observed channel list narrow and prefer **Dry Mode** or approval-based modes while testing.
 
 If Discord repeatedly forces password resets or login checkpoints, treat that as an account security signal and reduce activity rather than retrying harder:
 
@@ -289,7 +288,7 @@ Kabuki-Cord should not attempt to bypass Discord account security systems. If ch
 
 ### Scanner Monitor and Replies
 
-Click **Monitor** in the top bar to open a separate scanner-status window. It reports the live scanner phase, current channel, next due channel, the next five due channels, scanner pacing, and the last completed scan counts. Normal scanner passes update remembered conversation history from the visible messages in each enabled channel as soon as the channel is read; use **Backfill** when you need deeper scrollback beyond what Discord currently renders.
+Click **Monitor** in the top bar to open a separate scanner-status window. It reports the live scanner phase, current channel, next channel in the round-robin loop, upcoming channels, scanner pacing, the estimated full-loop countdown, loop counter, and the last completed scan counts. Normal scanner passes update remembered conversation history from the visible messages in each enabled channel as soon as the channel is read; use **Backfill** when you need deeper scrollback beyond what Discord currently renders.
 
 The **Replies** tab lists remembered messages that appear to need attention after the character's last post. It flags explicit mentions/tags plus immediate adjacent replies in a short window, then shows red dots on the matching server icons. These indicators are based on local scan memory, so they clear after a later character response is scanned back into memory.
 

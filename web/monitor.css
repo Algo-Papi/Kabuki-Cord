@@ -319,6 +319,42 @@ h1 {
   animation: glint-pop 1650ms ease-out forwards;
 }
 
+.loop-hud {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  z-index: 6;
+  display: grid;
+  gap: 3px;
+  min-width: 128px;
+  border: 1px solid rgba(244, 221, 150, 0.34);
+  border-radius: 8px;
+  background: rgba(7, 10, 15, 0.74);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.42);
+  padding: 9px 10px;
+  text-align: right;
+  backdrop-filter: blur(6px);
+}
+
+.loop-hud span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.loop-hud b,
+.loop-hud strong {
+  color: #f4dd96;
+  font-variant-numeric: tabular-nums;
+}
+
+.loop-hud strong {
+  font-size: 19px;
+  line-height: 1;
+}
+
 .scan-board {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

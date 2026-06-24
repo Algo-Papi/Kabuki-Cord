@@ -171,7 +171,6 @@ function renderServerPanel() {
   const srv = server();
   $("serverTitle").textContent = srv.label || srv.server_id || "No server";
   $("serverLabel").value = srv.label || "";
-  $("serverPoll").value = srv.poll_seconds || 120;
   $("serverCharacter").innerHTML =
     `<option value="">Use global card</option>` +
     appState.characters
@@ -334,10 +333,10 @@ function renderSettings() {
   $("replyWindowSeconds").value = appState.env.NHI_ZUES_REPLY_WINDOW_SECONDS || "3600";
   $("replyMaxPerWindow").value = appState.env.NHI_ZUES_REPLY_MAX_PER_WINDOW || "3";
   $("replyRequireInterveningUser").value = strBool(appState.env.NHI_ZUES_REPLY_REQUIRE_INTERVENING_USER, true) ? "true" : "false";
-  $("reactionMaxPerChannel").value = appState.env.NHI_ZUES_REACTION_MAX_PER_CHANNEL || "2";
+  $("reactionMaxPerChannel").value = appState.env.NHI_ZUES_REACTION_MAX_PER_CHANNEL || "3";
   $("reactionThreshold").value = appState.env.NHI_ZUES_REACTION_THRESHOLD || "normal";
   $("reactionSamplePercent").value = appState.env.NHI_ZUES_REACTION_SAMPLE_PERCENT || "0";
-  $("reactionForceLaughPercent").value = appState.env.NHI_ZUES_REACTION_FORCE_LAUGH_PERCENT || "0";
+  $("reactionForceLaughPercent").value = appState.env.NHI_ZUES_REACTION_FORCE_LAUGH_PERCENT || "20";
   updateReactionForceLaughLabel();
   $("reactionEmojiOverride").value = appState.env.NHI_ZUES_REACTION_EMOJI_OVERRIDE || "";
 }
@@ -1786,7 +1785,6 @@ function syncFormsToState() {
   const srv = server();
   srv.label = $("serverLabel").value.trim();
   srv.character_card = $("serverCharacter").value || null;
-  srv.poll_seconds = Number($("serverPoll").value || 120);
 
   const card = appState.active_character.card;
   card.name = $("cardName").value.trim();

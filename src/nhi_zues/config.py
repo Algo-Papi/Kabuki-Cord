@@ -19,7 +19,6 @@ class ChannelTarget:
     engage_enabled: bool = True
     react_enabled: bool = False
     auto_respond_enabled: bool = False
-    poll_seconds: float | None = None
 
 
 @dataclass(frozen=True)
@@ -33,7 +32,6 @@ class AppConfig:
     runtime_mode: str
     dry_run: bool
     headless: bool
-    poll_seconds: float
     scanner_max_channels_per_cycle: int
     scanner_cycle_sleep_seconds: float
     scanner_channel_settle_seconds: float
@@ -82,7 +80,6 @@ def load_config() -> AppConfig:
         runtime_mode=_runtime_mode(),
         dry_run=_env_bool("NHI_ZUES_DRY_RUN", default=True),
         headless=_env_bool("NHI_ZUES_HEADLESS", default=False),
-        poll_seconds=_env_float("NHI_ZUES_POLL_SECONDS", 180.0),
         scanner_max_channels_per_cycle=max(1, _env_int("NHI_ZUES_SCANNER_MAX_CHANNELS_PER_CYCLE", 1)),
         scanner_cycle_sleep_seconds=max(5.0, _env_float("NHI_ZUES_SCANNER_CYCLE_SLEEP_SECONDS", 45.0)),
         scanner_channel_settle_seconds=max(
@@ -125,12 +122,12 @@ def load_config() -> AppConfig:
             "NHI_ZUES_WRITING_MISSPELLINGS",
             "definitely:definately,because:becuase,probably:prolly",
         ),
-        reaction_max_per_channel=max(0, _env_int("NHI_ZUES_REACTION_MAX_PER_CHANNEL", 2)),
+        reaction_max_per_channel=max(0, _env_int("NHI_ZUES_REACTION_MAX_PER_CHANNEL", 3)),
         reaction_threshold=_reaction_threshold(),
         reaction_sample_percent=max(0.0, min(_env_float("NHI_ZUES_REACTION_SAMPLE_PERCENT", 0.0), 100.0)),
         reaction_force_laugh_percent=max(
             0.0,
-            min(_env_float("NHI_ZUES_REACTION_FORCE_LAUGH_PERCENT", 0.0), 100.0),
+            min(_env_float("NHI_ZUES_REACTION_FORCE_LAUGH_PERCENT", 20.0), 100.0),
         ),
         reaction_emoji_override=_env("NHI_ZUES_REACTION_EMOJI_OVERRIDE", ""),
         typing_indicator_enabled=_env_bool("NHI_ZUES_TYPING_INDICATOR_ENABLED", default=True),
@@ -234,7 +231,6 @@ def _load_channels(servers_file: Path, fallback_raw: str) -> tuple[ChannelTarget
             server_id = str(server["server_id"]).strip()
             server_label = str(server.get("label") or "")
             character_card = server.get("character_card")
-            poll_seconds = server.get("poll_seconds")
             for channel in server.get("channels", []):
                 if channel.get("scan_enabled", True) is False:
                     continue
@@ -249,7 +245,6 @@ def _load_channels(servers_file: Path, fallback_raw: str) -> tuple[ChannelTarget
                         engage_enabled=bool(channel.get("engage_enabled", True)),
                         react_enabled=bool(channel.get("react_enabled", False)),
                         auto_respond_enabled=bool(channel.get("auto_respond_enabled", False)),
-                        poll_seconds=float(poll_seconds) if poll_seconds else None,
                     )
                 )
         if targets:

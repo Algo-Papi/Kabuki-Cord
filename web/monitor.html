@@ -25,6 +25,10 @@
           <img id="spySceneFrameB" class="spy-frame" src="/assets/monitor_spy_frames/frame_000.png" alt="" />
           <div id="stageTransition" class="stage-transition"></div>
           <div class="stage-glints"></div>
+          <div class="loop-hud">
+            <span>Loop <b id="loopCounter">--</b></span>
+            <strong id="loopCountdown">--</strong>
+          </div>
         </div>
         <div class="scan-board">
           <div class="scan-card current">
@@ -39,7 +43,7 @@
           <div class="scan-card">
             <span>Next</span>
             <strong id="nextTarget">None queued</strong>
-            <small id="nextDetail">No due channel yet.</small>
+            <small id="nextDetail">No channel queued yet.</small>
             <div class="countdown-line">
               <span id="nextCountdownLabel">Next scan</span>
               <strong id="nextCountdown">--</strong>

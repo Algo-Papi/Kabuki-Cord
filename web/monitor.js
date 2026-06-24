@@ -150,13 +150,14 @@ function render(state) {
   });
   renderTarget("next", scan.next, {
     title: "None queued",
-    detail: "The scanner is resting or waiting for a channel to become due.",
+    detail: "The scanner is resting or waiting for the next loop slot.",
   });
   renderCompleted(scan.last_completed);
   renderUpcoming(scan.upcoming || []);
   renderActionHistory(state);
   renderPace(state);
   renderCountdowns();
+  renderLoopHud(state);
 }
 
 function renderTarget(kind, target, fallback) {
@@ -204,6 +205,26 @@ function renderCountdowns() {
   $("nextCountdown").textContent = formatCountdown(nextAt - now);
 }
 
+function renderLoopHud(state) {
+  const runtime = state?.runtime || {};
+  const scan = runtime.scan || {};
+  const loop = scan.loop || {};
+  const counter = $("loopCounter");
+  const countdown = $("loopCountdown");
+  if (!counter || !countdown) return;
+  if (!runtime.running || !Number(loop.total_channels || 0)) {
+    counter.textContent = "--";
+    countdown.textContent = "--";
+    return;
+  }
+  const now = Date.now() / 1000;
+  const currentLoop = Number(loop.current_loop || loop.completed_loops + 1 || 1);
+  const total = Number(loop.total_channels || 0);
+  const completed = Number(loop.completed_in_loop || 0);
+  counter.textContent = `${currentLoop} - ${Math.min(completed, total)}/${total}`;
+  countdown.textContent = formatCountdown(Number(loop.estimated_complete_at || 0) - now);
+}
+
 function renderIdleCountdown(running, scan, now, nextAt) {
   const idleCountdown = $("idleCountdown");
   const idleLabel = $("idleCountdownLabel");
@@ -227,11 +248,13 @@ function renderPace(state) {
   const app = state.app || {};
   const runtime = state.runtime || {};
   const scan = runtime.scan || {};
+  const loop = scan.loop || {};
   const maxChannels = Number(app.scanner_max_channels_per_cycle || 1);
   const cycleRest = Number(app.scanner_cycle_sleep_seconds || 45);
   const settleDelay = Number(app.scanner_channel_settle_seconds || 12);
   const minDelay = Number(app.scanner_min_channel_delay_seconds || 12);
   const maxDelay = Number(app.scanner_max_channel_delay_seconds || 35);
+  const totalChannels = Number(loop.total_channels || 0);
   const target = $("idleTarget");
   const detail = $("idleDetail");
   if (!target || !detail) return;
@@ -240,7 +263,7 @@ function renderPace(state) {
       ? "Scanning now"
       : "Between channels"
     : "Paused";
-  detail.textContent = `${maxChannels} channel${maxChannels === 1 ? "" : "s"}/cycle, ${formatSeconds(settleDelay)} settle, ${formatSeconds(cycleRest)} rest, ${formatDelayRange(minDelay, maxDelay)} channel delay`;
+  detail.textContent = `${totalChannels || "No"} observed channel${totalChannels === 1 ? "" : "s"}, ${maxChannels}/cycle, ${formatSeconds(settleDelay)} settle, ${formatSeconds(cycleRest)} rest, loop est. ${formatSeconds(loop.estimated_loop_seconds || 0)}, ${formatDelayRange(minDelay, maxDelay)} channel delay`;
 }
 
 function renderCompleted(target) {
@@ -264,7 +287,7 @@ function renderUpcoming(items) {
         <span>${escapeHtml(item.server_label || item.server_id || "Unknown server")}</span>
       </div>
     `).join("")
-    : `<div class="queue-empty">No upcoming due channels are queued right now.</div>`;
+    : `<div class="queue-empty">No upcoming channels are queued right now.</div>`;
 }
 
 function renderActionHistory(state) {
@@ -624,7 +647,10 @@ loadSpyAnimation();
 setupSoundToggle();
 refresh();
 refreshTimer = setInterval(refresh, 1800);
-countdownTimer = setInterval(renderCountdowns, 1000);
+countdownTimer = setInterval(() => {
+  renderCountdowns();
+  renderLoopHud(latestState);
+}, 1000);
 window.addEventListener("beforeunload", () => {
   if (refreshTimer) clearInterval(refreshTimer);
   if (spyFrameTimer) clearInterval(spyFrameTimer);
