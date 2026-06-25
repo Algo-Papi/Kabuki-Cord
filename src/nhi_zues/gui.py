@@ -42,6 +42,7 @@ from .output_guard import outgoing_block_reason
 from .reactions import suggest_emoji_reaction
 from .reply_ledger import ReplyLedger, duplicate_reply_message
 from .runner import NhiZuesRunner
+from .safety_review import SafetyReviewQueue
 from .secrets import discord_credential_status, get_discord_credentials, set_discord_credentials
 from .user_instructions import UserInstructionStore
 
@@ -168,6 +169,14 @@ class GuiHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/unresponded-dismiss":
             try:
                 dismissed = dismiss_unresponded_replies(body)
+            except ValueError as exc:
+                self._json({"ok": False, "error": str(exc)}, status=400)
+                return
+            self._json({"ok": True, "dismissed": dismissed, "state": app_state()})
+            return
+        if parsed.path == "/api/safety-review-dismiss":
+            try:
+                dismissed = dismiss_safety_reviews(body)
             except ValueError as exc:
                 self._json({"ok": False, "error": str(exc)}, status=400)
                 return
@@ -705,6 +714,7 @@ class RuntimeController:
             "server_label": str(getattr(target, "server_label", "") or getattr(target, "server_id", "") or ""),
             "channel_id": str(getattr(target, "channel_id", "") or ""),
             "channel_label": str(getattr(target, "label", "") or getattr(target, "channel_id", "") or ""),
+            "safety_review_enabled": bool(getattr(target, "safety_review_enabled", False)),
         }
 
     @staticmethod
@@ -862,6 +872,9 @@ def app_state() -> dict:
             "scanner_channel_settle_seconds": config.scanner_channel_settle_seconds,
             "scanner_min_channel_delay_seconds": config.scanner_min_channel_delay_seconds,
             "scanner_max_channel_delay_seconds": config.scanner_max_channel_delay_seconds,
+            "safety_review_exclusive": config.safety_review_exclusive,
+            "safety_review_history_limit": config.safety_review_history_limit,
+            "safety_review_scroll_rounds": config.safety_review_scroll_rounds,
             "reply_cooldown_seconds": config.reply_cooldown_seconds,
             "reply_window_seconds": config.reply_window_seconds,
             "reply_max_per_window": config.reply_max_per_window,
@@ -909,6 +922,9 @@ def app_state() -> dict:
             "NHI_ZUES_SCANNER_CYCLE_SLEEP_SECONDS": env.get("NHI_ZUES_SCANNER_CYCLE_SLEEP_SECONDS", "45"),
             "NHI_ZUES_SCANNER_MIN_CHANNEL_DELAY_SECONDS": env.get("NHI_ZUES_SCANNER_MIN_CHANNEL_DELAY_SECONDS", "12"),
             "NHI_ZUES_SCANNER_MAX_CHANNEL_DELAY_SECONDS": env.get("NHI_ZUES_SCANNER_MAX_CHANNEL_DELAY_SECONDS", "35"),
+            "NHI_ZUES_SAFETY_REVIEW_EXCLUSIVE": env.get("NHI_ZUES_SAFETY_REVIEW_EXCLUSIVE", "true"),
+            "NHI_ZUES_SAFETY_REVIEW_HISTORY_LIMIT": env.get("NHI_ZUES_SAFETY_REVIEW_HISTORY_LIMIT", "420"),
+            "NHI_ZUES_SAFETY_REVIEW_SCROLL_ROUNDS": env.get("NHI_ZUES_SAFETY_REVIEW_SCROLL_ROUNDS", "45"),
             "NHI_ZUES_REPLY_COOLDOWN_SECONDS": env.get("NHI_ZUES_REPLY_COOLDOWN_SECONDS", "900"),
             "NHI_ZUES_REPLY_WINDOW_SECONDS": env.get("NHI_ZUES_REPLY_WINDOW_SECONDS", "3600"),
             "NHI_ZUES_REPLY_MAX_PER_WINDOW": env.get("NHI_ZUES_REPLY_MAX_PER_WINDOW", "3"),
@@ -935,6 +951,7 @@ def app_state() -> dict:
         "events": events_state(config.state_dir / "events.json"),
         "memory": memory_state(config.state_dir / "memory.json"),
         "unresponded": unresponded_replies_state(config),
+        "safety_reviews": SafetyReviewQueue(config.state_dir / "safety_review.json").state(),
         "reply_ledger": reply_ledger_state(config.state_dir / "sent_replies.json"),
     }
 
@@ -1199,6 +1216,7 @@ def sync_discord_servers() -> dict:
                 "server_id": server_id,
                 "label": label,
                 "character_card": None,
+                "safety_review_enabled": False,
                 "channels": [],
             }
             server_list.append(existing)
@@ -1275,6 +1293,7 @@ def repair_discord_server(body: dict) -> dict:
             "server_id": server_id,
             "label": f"Server {server_id}",
             "character_card": None,
+            "safety_review_enabled": False,
             "channels": [],
         }
         server_list.append(server)
@@ -1793,6 +1812,36 @@ def dismiss_unresponded_replies(body: dict) -> int:
         summary=f"Dismissed {len(requested)} unresponded reply notification(s).",
     )
     return len(requested)
+
+
+def dismiss_safety_reviews(body: dict) -> int:
+    config = load_config()
+    queue = SafetyReviewQueue(config.state_dir / "safety_review.json")
+    raw_review_ids = body.get("review_ids", [])
+    if isinstance(raw_review_ids, str):
+        raw_review_ids = [raw_review_ids]
+    if not isinstance(raw_review_ids, list):
+        raw_review_ids = []
+    requested = {
+        str(review_id).strip()
+        for review_id in raw_review_ids
+        if str(review_id or "").strip()
+    }
+    single_id = str(body.get("review_id") or "").strip()
+    if single_id:
+        requested.add(single_id)
+    all_open = bool(body.get("all"))
+    if not requested and not all_open:
+        raise ValueError("No Dojo Sweep item id was provided.")
+
+    dismissed = queue.dismiss(sorted(requested), all_open=all_open)
+    EventLog(config.state_dir / "events.json").add(
+        event_type="safety_review_dismissed",
+        server_id=str(body.get("server_id") or ""),
+        channel_id=str(body.get("channel_id") or ""),
+        summary=f"Dismissed {dismissed} Dojo Sweep item(s).",
+    )
+    return dismissed
 
 
 def unresponded_replies_state(config: AppConfig, *, include_dismissed: bool = False) -> dict:
@@ -3024,6 +3073,9 @@ def update_env(values: dict) -> None:
         "NHI_ZUES_SCANNER_CYCLE_SLEEP_SECONDS",
         "NHI_ZUES_SCANNER_MIN_CHANNEL_DELAY_SECONDS",
         "NHI_ZUES_SCANNER_MAX_CHANNEL_DELAY_SECONDS",
+        "NHI_ZUES_SAFETY_REVIEW_EXCLUSIVE",
+        "NHI_ZUES_SAFETY_REVIEW_HISTORY_LIMIT",
+        "NHI_ZUES_SAFETY_REVIEW_SCROLL_ROUNDS",
         "NHI_ZUES_REACTION_MAX_PER_CHANNEL",
         "NHI_ZUES_REACTION_THRESHOLD",
         "NHI_ZUES_REACTION_SAMPLE_PERCENT",

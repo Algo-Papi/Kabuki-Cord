@@ -128,6 +128,7 @@ function render() {
   renderObserved();
   renderHistory();
   renderUnrespondedReplies();
+  renderSafetyReviews();
   renderMetrics();
   renderEventsPanel();
   renderPreviewTabs();
@@ -177,6 +178,7 @@ function renderServerPanel() {
       .map((card) => `<option value="${escapeAttr(card.path)}">${escapeHtml(card.name)} (${escapeHtml(card.path)})</option>`)
       .join("");
   $("serverCharacter").value = srv.character_card || "";
+  $("serverSafetyReview").checked = Boolean(srv.safety_review_enabled);
 
   $("channelList").innerHTML = visibleChannels()
     .map((chan) => {
@@ -329,6 +331,9 @@ function renderSettings() {
   $("scannerCycleSleep").value = appState.env.NHI_ZUES_SCANNER_CYCLE_SLEEP_SECONDS || "45";
   $("scannerMinDelay").value = appState.env.NHI_ZUES_SCANNER_MIN_CHANNEL_DELAY_SECONDS || "12";
   $("scannerMaxDelay").value = appState.env.NHI_ZUES_SCANNER_MAX_CHANNEL_DELAY_SECONDS || "35";
+  $("safetyReviewExclusive").value = strBool(appState.env.NHI_ZUES_SAFETY_REVIEW_EXCLUSIVE, true) ? "true" : "false";
+  $("safetyReviewHistoryLimit").value = appState.env.NHI_ZUES_SAFETY_REVIEW_HISTORY_LIMIT || "420";
+  $("safetyReviewScrollRounds").value = appState.env.NHI_ZUES_SAFETY_REVIEW_SCROLL_ROUNDS || "45";
   $("replyCooldownSeconds").value = appState.env.NHI_ZUES_REPLY_COOLDOWN_SECONDS || "900";
   $("replyWindowSeconds").value = appState.env.NHI_ZUES_REPLY_WINDOW_SECONDS || "3600";
   $("replyMaxPerWindow").value = appState.env.NHI_ZUES_REPLY_MAX_PER_WINDOW || "3";
@@ -1343,7 +1348,9 @@ function renderMetrics() {
   $("topUsageCalls").textContent = `${calls} call${calls === 1 ? "" : "s"}`;
   $("memoryUsers").textContent = appState.memory.user_count || 0;
   $("seenMessages").textContent = appState.memory.seen_ids || 0;
-  $("triggerState").textContent = channel()?.engage_enabled ? "eligible" : "disabled";
+  $("triggerState").textContent = server()?.safety_review_enabled
+    ? "deep sweep"
+    : channel()?.engage_enabled ? "eligible" : "disabled";
 }
 
 function renderPreviewTabs() {
@@ -1353,8 +1360,10 @@ function renderPreviewTabs() {
   $("previewMode").classList.toggle("active", previewPanelMode === "preview");
   $("eventsMode").classList.toggle("active", previewPanelMode === "events");
   $("repliesMode").classList.toggle("active", previewPanelMode === "replies");
+  $("safetyMode").classList.toggle("active", previewPanelMode === "safety");
   renderEventBadge();
   renderReplyBadge();
+  renderSafetyBadge();
 }
 
 function renderEventsPanel() {
@@ -1486,6 +1495,83 @@ function renderReplyBadge() {
   const badge = $("replyBadge");
   if (!badge) return;
   const count = Number(appState?.unresponded?.count || 0);
+  badge.textContent = count > 99 ? "99+" : String(count);
+  badge.classList.toggle("visible", count > 0);
+}
+
+function renderSafetyReviews() {
+  const items = appState.safety_reviews?.items || [];
+  const maxOpen = Number(appState.safety_reviews?.max_open_count || 10);
+  const dismissAllButton = $("dismissAllSafetyReviews");
+  if (dismissAllButton) dismissAllButton.disabled = items.length === 0;
+  $("safetyReviewList").innerHTML = items
+    .map((item) => `
+      <article class="safety-review-card ${escapeAttr(item.severity || "medium")}">
+        <div class="safety-review-head">
+          <div>
+            <strong>${escapeHtml(item.category || "Dojo Sweep")}</strong>
+            <span>${escapeHtml(item.severity || "medium")} · ${escapeHtml(formatTime(item.created_at))}</span>
+          </div>
+          <button class="reply-watch-dismiss" data-dismiss-safety-review="${escapeAttr(item.review_id || "")}" data-server-id="${escapeAttr(item.server_id || "")}" data-channel-id="${escapeAttr(item.channel_id || "")}" title="Dismiss Dojo Sweep item" type="button">
+            <i class="bi bi-x-lg"></i>
+          </button>
+        </div>
+        <div class="safety-review-scope">
+          ${escapeHtml(item.server_label || findServerLabel(item.server_id))} / ${escapeHtml(formatChannelName(item.channel_label || item.channel_id, "text"))}
+        </div>
+        <div class="safety-review-author">${escapeHtml(item.author || "unknown user")}</div>
+        <p>${escapeHtml(truncateText(item.text || "", 320))}</p>
+        <div class="safety-review-reason">
+          <span>${escapeHtml(item.reason || "High-risk moderation cue detected.")}</span>
+          ${(item.matched_cues || []).length ? `<small>${escapeHtml((item.matched_cues || []).join(", "))}</small>` : ""}
+        </div>
+        <div class="reply-watch-actions">
+          <button class="small-button" data-open-safety-review="${escapeAttr(item.review_id || "")}">
+            <i class="bi bi-box-arrow-up-right"></i> Open Message
+          </button>
+          <button class="small-button" data-copy-safety-link="${escapeAttr(item.review_id || "")}">
+            <i class="bi bi-copy"></i> Copy Link
+          </button>
+          <button class="small-button ghost-button" data-dismiss-safety-review="${escapeAttr(item.review_id || "")}" data-server-id="${escapeAttr(item.server_id || "")}" data-channel-id="${escapeAttr(item.channel_id || "")}">
+            <i class="bi bi-check2"></i> Dismiss
+          </button>
+        </div>
+      </article>
+    `)
+    .join("") || `<div class="note-item">No open Dojo Sweep items. Enable Dojo Sweep on a server to queue up to ${maxOpen} manual moderation checks.</div>`;
+
+  document.querySelectorAll("[data-open-safety-review]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const item = safetyReviewById(button.dataset.openSafetyReview);
+      if (!item) return;
+      openDiscordMessage(item.server_id, item.channel_id, item.message_id).catch((error) => toast(error.message));
+    });
+  });
+  document.querySelectorAll("[data-copy-safety-link]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const item = safetyReviewById(button.dataset.copySafetyLink);
+      if (!item?.message_link) return toast("No Discord message link recorded for this item");
+      await navigator.clipboard.writeText(item.message_link);
+      toast("Discord message link copied");
+    });
+  });
+  document.querySelectorAll("[data-dismiss-safety-review]").forEach((button) => {
+    button.addEventListener("click", () => dismissSafetyReviews({
+      reviewIds: [button.dataset.dismissSafetyReview],
+      serverId: button.dataset.serverId,
+      channelId: button.dataset.channelId,
+    }));
+  });
+}
+
+function safetyReviewById(reviewId) {
+  return (appState.safety_reviews?.items || []).find((item) => item.review_id === reviewId);
+}
+
+function renderSafetyBadge() {
+  const badge = $("safetyBadge");
+  if (!badge) return;
+  const count = Number(appState?.safety_reviews?.open_count || 0);
   badge.textContent = count > 99 ? "99+" : String(count);
   badge.classList.toggle("visible", count > 0);
 }
@@ -1785,6 +1871,7 @@ function syncFormsToState() {
   const srv = server();
   srv.label = $("serverLabel").value.trim();
   srv.character_card = $("serverCharacter").value || null;
+  srv.safety_review_enabled = $("serverSafetyReview").checked;
 
   const card = appState.active_character.card;
   card.name = $("cardName").value.trim();
@@ -1836,6 +1923,9 @@ async function saveAll() {
       NHI_ZUES_SCANNER_CYCLE_SLEEP_SECONDS: $("scannerCycleSleep").value,
       NHI_ZUES_SCANNER_MIN_CHANNEL_DELAY_SECONDS: $("scannerMinDelay").value,
       NHI_ZUES_SCANNER_MAX_CHANNEL_DELAY_SECONDS: $("scannerMaxDelay").value,
+      NHI_ZUES_SAFETY_REVIEW_EXCLUSIVE: $("safetyReviewExclusive").value,
+      NHI_ZUES_SAFETY_REVIEW_HISTORY_LIMIT: $("safetyReviewHistoryLimit").value,
+      NHI_ZUES_SAFETY_REVIEW_SCROLL_ROUNDS: $("safetyReviewScrollRounds").value,
       NHI_ZUES_REPLY_COOLDOWN_SECONDS: $("replyCooldownSeconds").value,
       NHI_ZUES_REPLY_WINDOW_SECONDS: $("replyWindowSeconds").value,
       NHI_ZUES_REPLY_MAX_PER_WINDOW: $("replyMaxPerWindow").value,
@@ -2194,6 +2284,27 @@ async function dismissUnrespondedReplies({ messageIds = [], serverId = "", chann
   }
 }
 
+async function dismissSafetyReviews({ reviewIds = [], serverId = "", channelId = "", all = false } = {}) {
+  const ids = reviewIds.filter(Boolean);
+  if (!all && !ids.length) return;
+  try {
+    const result = await api("/api/safety-review-dismiss", {
+      method: "POST",
+      body: JSON.stringify({
+        all,
+        review_ids: ids,
+        server_id: serverId,
+        channel_id: channelId,
+      }),
+    });
+    appState = result.state;
+    render();
+    toast(all ? "Dojo Sweep queue dismissed" : "Dojo Sweep item dismissed");
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
 function renderUpdateResult(result) {
   const message = result.ok
     ? result.update_available
@@ -2379,6 +2490,9 @@ function eventTypeLabel(event) {
     reaction_scan: "Reaction scan",
     reaction_skipped: "Reaction skipped",
     unresponded_reply_dismissed: "Reply notice dismissed",
+    safety_review_scan: "Dojo sweep scan",
+    safety_review_flagged: "Dojo sweep flagged",
+    safety_review_dismissed: "Dojo sweep dismissed",
   };
   return labels[event.event_type] || event.event_type || "Event";
 }
@@ -2387,6 +2501,7 @@ function eventClass(event) {
   if (["approval_send_failed", "channel_unavailable", "reaction_failed", "discord_account_challenge", "output_guard_blocked"].includes(event.event_type)) return "failed";
   if (["message_sent", "approval_sent"].includes(event.event_type)) return "sent";
   if (["reaction_added"].includes(event.event_type)) return "reaction";
+  if (["safety_review_flagged"].includes(event.event_type)) return "failed";
   if ([
     "approval_queued",
     "manual_approval_created",
@@ -2397,6 +2512,8 @@ function eventClass(event) {
     "reaction_scan",
     "reaction_skipped",
     "reaction_suggested",
+    "safety_review_scan",
+    "safety_review_dismissed",
   ].includes(event.event_type)) return "attention";
   return "";
 }
@@ -2424,6 +2541,7 @@ function isNotifiableEvent(event) {
     "channel_unavailable",
     "reaction_added",
     "reaction_failed",
+    "safety_review_flagged",
   ].includes(event.event_type);
 }
 
@@ -2800,6 +2918,7 @@ $("eventFilter").addEventListener("change", () => {
   renderEventFeed();
 });
 $("dismissAllReplies").addEventListener("click", () => dismissUnrespondedReplies({ all: true }));
+$("dismissAllSafetyReviews").addEventListener("click", () => dismissSafetyReviews({ all: true }));
 $("saveAll").addEventListener("click", saveAll);
 $("saveServers").addEventListener("click", saveAll);
 $("syncDiscordServers").addEventListener("click", () => syncDiscordServers().catch((error) => toast(error.message)));
@@ -2870,6 +2989,18 @@ $("addChannel").addEventListener("click", () => {
     auto_respond_enabled: false,
   });
   selectedChannel = channels().length - 1;
+  render();
+});
+
+$("serverSafetyReview").addEventListener("change", () => {
+  const srv = server();
+  srv.safety_review_enabled = $("serverSafetyReview").checked;
+  persistServersSoon();
+  if (srv.safety_review_enabled) {
+    toast("Dojo Sweep enabled. Other servers pause while this server is deep-reviewed.");
+  } else {
+    toast("Dojo Sweep disabled for this server");
+  }
   render();
 });
 

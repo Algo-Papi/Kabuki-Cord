@@ -4,6 +4,7 @@
       "server_id": "server_id_here",
       "label": "Example Server",
       "character_card": null,
+      "safety_review_enabled": false,
       "channels": [
         {
           "channel_id": "channel_id_here",

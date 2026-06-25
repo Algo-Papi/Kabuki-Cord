@@ -370,6 +370,42 @@ h2 {
   line-height: 1.35;
 }
 
+.safety-review-toggle {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  margin-top: 4px;
+  border: 1px solid rgba(239, 107, 120, 0.28);
+  border-radius: 8px;
+  background: rgba(239, 107, 120, 0.06);
+  padding: 10px 11px;
+}
+
+.safety-review-toggle input {
+  width: 18px;
+  min-height: 18px;
+  margin: 2px 0 0;
+  accent-color: var(--red);
+}
+
+.safety-review-toggle span {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.safety-review-toggle strong {
+  color: #ffe1e5;
+  font-size: 13px;
+}
+
+.safety-review-toggle small {
+  color: #b8c2cc;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 input,
 select,
 textarea {
@@ -2418,7 +2454,9 @@ button:disabled {
 
 .preview-tabs {
   display: flex;
-  gap: 28px;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 10px 14px;
   padding: 22px 22px 0;
 }
 
@@ -2526,6 +2564,77 @@ button:disabled {
 .event-card p {
   margin: 7px 0 0;
   color: #c9d3dd;
+}
+
+.safety-review-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.safety-review-card {
+  border: 1px solid rgba(217, 185, 91, 0.32);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.025);
+  padding: 12px;
+}
+
+.safety-review-card.high,
+.safety-review-card.critical {
+  border-color: rgba(239, 107, 120, 0.5);
+  background: rgba(239, 107, 120, 0.055);
+}
+
+.safety-review-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: start;
+}
+
+.safety-review-head strong {
+  display: block;
+  color: #fff;
+  font-size: 13px;
+}
+
+.safety-review-head span,
+.safety-review-scope,
+.safety-review-reason span,
+.safety-review-reason small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.safety-review-scope {
+  margin-top: 5px;
+  overflow-wrap: anywhere;
+}
+
+.safety-review-author {
+  margin-top: 8px;
+  color: #eef3f8;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.safety-review-card p {
+  margin: 7px 0 0;
+  color: #d8e1ea;
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.safety-review-reason {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 9px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  padding-top: 8px;
 }
 
 .chat-sample {

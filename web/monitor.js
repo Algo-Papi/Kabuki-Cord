@@ -4,8 +4,11 @@ let spyFrameTimer = null;
 let countdownTimer = null;
 let spyFrameIndex = 0;
 let spyFrames = ["/assets/monitor_spy_frames/frame_000.png"];
+let normalSpyFrames = ["/assets/monitor_spy_frames/frame_000.png"];
+let dojoSweepFrames = ["/assets/monitor_dojo_sweep_frames/frame_000.png"];
 let spyFrameMs = 180;
 let activeFrameLayer = "A";
+let activeAnimationMode = "scan";
 let transitionIndex = 0;
 let spyPaused = false;
 let latestState = null;
@@ -55,55 +58,115 @@ async function refresh() {
 }
 
 async function loadSpyAnimation() {
-  try {
-    const response = await fetch("/assets/monitor_spy_frames/manifest.json");
-    if (response.ok) {
-      const manifest = await response.json();
-      const count = Number(manifest.frame_count || 1);
-      spyFrameMs = Number(manifest.frame_ms || 180);
-      spyFrames = Array.from({ length: count }, (_, index) =>
-        `/assets/monitor_spy_frames/frame_${String(index).padStart(3, "0")}.png`
-      );
-    }
-  } catch {
-    spyFrames = ["/assets/monitor_spy_frames/frame_000.png"];
-  }
-  spyFrames.forEach((src) => {
-    const image = new Image();
-    image.src = src;
-  });
-  const pausedImage = new Image();
-  pausedImage.src = pausedFrame;
+  const normal = await loadFrameSet("/assets/monitor_spy_frames", "/assets/monitor_spy_frames/frame_000.png");
+  normalSpyFrames = normal.frames;
+  spyFrameMs = normal.frameMs;
+  spyFrames = normalSpyFrames;
+  const dojo = await loadFrameSet("/assets/monitor_dojo_sweep_frames", "/assets/monitor_dojo_sweep_frames/frame_000.png");
+  dojoSweepFrames = dojo.frames;
+  preloadImages([...normalSpyFrames, ...dojoSweepFrames, pausedFrame]);
   if (spyFrameTimer) clearInterval(spyFrameTimer);
   spyFrameTimer = null;
   if (!spyPaused) spyFrameTimer = setInterval(advanceSpyFrame, spyFrameMs);
 }
 
+async function loadFrameSet(directory, fallbackFrame) {
+  let frames = [fallbackFrame];
+  let frameMs = 180;
+  try {
+    const response = await fetch(`${directory}/manifest.json`);
+    if (response.ok) {
+      const manifest = await response.json();
+      const count = Number(manifest.frame_count || 1);
+      frameMs = Number(manifest.frame_ms || 180);
+      frames = Array.from({ length: count }, (_, index) =>
+        `${directory}/frame_${String(index).padStart(3, "0")}.png`
+      );
+    }
+  } catch {
+    frames = [fallbackFrame];
+  }
+  return { frames, frameMs };
+}
+
+function preloadImages(sources) {
+  sources.forEach((src) => {
+    const image = new Image();
+    image.src = src;
+  });
+}
+
 function advanceSpyFrame() {
   if (spyPaused) return;
+  if (activeAnimationMode === "dojo_sweep") {
+    syncDojoSweepFrame();
+    return;
+  }
+  showSceneFrame((spyFrameIndex + 1) % spyFrames.length, { transition: true });
+}
+
+function showSceneFrame(nextIndex, { transition: useTransition }) {
   const active = activeFrameLayer === "A" ? $("spySceneFrameA") : $("spySceneFrameB");
   const incoming = activeFrameLayer === "A" ? $("spySceneFrameB") : $("spySceneFrameA");
   if (!active || !incoming || !spyFrames.length) return;
-  spyFrameIndex = (spyFrameIndex + 1) % spyFrames.length;
+  nextIndex = Math.max(0, Math.min(spyFrames.length - 1, Number(nextIndex) || 0));
+  if (nextIndex === spyFrameIndex && incoming.src.endsWith(spyFrames[nextIndex])) return;
+  spyFrameIndex = nextIndex;
   incoming.src = spyFrames[spyFrameIndex];
   const scene = document.querySelector(".spy-scene");
-  const transition = $("stageTransition");
+  const stageTransition = $("stageTransition");
   scene?.classList.remove("transitioning");
-  if (transition) transition.className = "stage-transition";
+  if (stageTransition) stageTransition.className = "stage-transition";
   void scene?.offsetWidth;
   incoming.classList.add("active");
   active.classList.remove("active");
-  scene?.classList.add("transitioning");
-  if (transition) {
+  if (useTransition) scene?.classList.add("transitioning");
+  if (useTransition && stageTransition) {
     const transitionType = stageTransitionTypes[transitionIndex % stageTransitionTypes.length];
     transitionIndex += 1;
-    transition.classList.add("active", transitionType);
+    stageTransition.classList.add("active", transitionType);
   }
   activeFrameLayer = activeFrameLayer === "A" ? "B" : "A";
   setTimeout(() => {
     scene?.classList.remove("transitioning");
-    if (transition) transition.className = "stage-transition";
+    if (stageTransition) stageTransition.className = "stage-transition";
   }, 1900);
+}
+
+function setAnimationMode(mode) {
+  const nextMode = mode === "dojo_sweep" ? "dojo_sweep" : "scan";
+  if (activeAnimationMode === nextMode) return;
+  activeAnimationMode = nextMode;
+  spyFrames = nextMode === "dojo_sweep" ? dojoSweepFrames : normalSpyFrames;
+  spyFrameIndex = 0;
+  const scene = document.querySelector(".spy-scene");
+  scene?.classList.toggle("dojo-sweep", nextMode === "dojo_sweep");
+  const frameA = $("spySceneFrameA");
+  const frameB = $("spySceneFrameB");
+  if (frameA && frameB) {
+    frameA.src = spyFrames[0] || "";
+    frameB.src = frameA.src;
+    frameA.classList.add("active");
+    frameB.classList.remove("active");
+    activeFrameLayer = "A";
+  }
+}
+
+function syncDojoSweepFrame() {
+  const runtime = latestState?.runtime || {};
+  const scan = runtime.scan || {};
+  if (!runtime.running || scan.status !== "scanning" || !isDojoSweepTarget(scan.current)) return;
+  const startedAt = Number(scan.current_started_at || 0);
+  const doneAt = Number(scan.current_estimated_done_at || 0);
+  const now = Date.now() / 1000;
+  const duration = Math.max(4, doneAt - startedAt);
+  const progress = startedAt && doneAt ? Math.max(0, Math.min(1, (now - startedAt) / duration)) : 0;
+  const nextIndex = Math.min(spyFrames.length - 1, Math.floor(progress * spyFrames.length));
+  showSceneFrame(nextIndex, { transition: false });
+}
+
+function isDojoSweepTarget(target) {
+  return Boolean(target?.safety_review_enabled);
 }
 
 function setSpyPaused(paused) {
@@ -116,6 +179,7 @@ function setSpyPaused(paused) {
   spyPaused = paused;
   scene.classList.toggle("paused", paused);
   scene.classList.remove("transitioning");
+  scene.classList.toggle("dojo-sweep", !paused && activeAnimationMode === "dojo_sweep");
   if (transition) transition.className = "stage-transition";
 
   if (paused) {
@@ -142,9 +206,12 @@ function render(state) {
   const runtime = state.runtime || {};
   const scan = runtime.scan || {};
   const status = scan.status || runtime.phase || "idle";
+  const sweepActive = runtime.running && status === "scanning" && isDojoSweepTarget(scan.current);
+  setAnimationMode(sweepActive ? "dojo_sweep" : "scan");
   setSpyPaused(!runtime.running);
-  $("monitorStatus").className = `status-pill ${runtime.running ? "running" : "paused"}`;
-  $("monitorStatus").textContent = runtime.running ? statusLabel(status) : "Paused";
+  if (sweepActive) syncDojoSweepFrame();
+  $("monitorStatus").className = `status-pill ${sweepActive ? "sweep" : runtime.running ? "running" : "paused"}`;
+  $("monitorStatus").textContent = runtime.running ? (sweepActive ? "Dojo Sweep" : statusLabel(status)) : "Paused";
 
   renderTarget("current", scan.current, {
     title: runtime.running ? currentTitle(status) : "Scanner paused",
@@ -172,7 +239,7 @@ function renderTarget(kind, target, fallback) {
   }
   titleEl.textContent = formatTargetTitle(target);
   detailEl.textContent = target.channel_id
-    ? `#${target.channel_label || target.channel_id} - ${target.channel_id}`
+    ? `${target.safety_review_enabled ? "Dojo Sweep - " : ""}#${target.channel_label || target.channel_id} - ${target.channel_id}`
     : fallback.detail;
 }
 
@@ -707,6 +774,7 @@ refreshTimer = setInterval(refresh, 1800);
 countdownTimer = setInterval(() => {
   renderCountdowns();
   renderLoopHud(latestState);
+  if (activeAnimationMode === "dojo_sweep") syncDojoSweepFrame();
 }, 1000);
 window.addEventListener("beforeunload", () => {
   if (refreshTimer) clearInterval(refreshTimer);

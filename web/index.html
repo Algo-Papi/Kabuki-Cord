@@ -39,6 +39,13 @@
             <span>Character Card</span>
             <select id="serverCharacter"></select>
           </label>
+          <label class="safety-review-toggle">
+            <input id="serverSafetyReview" type="checkbox" />
+            <span>
+              <strong>Dojo Sweep</strong>
+              <small>Deep review override: pause other servers, back-scroll channel history, and queue high-risk items.</small>
+            </span>
+          </label>
         </section>
 
         <section class="panel-section channels-section">
@@ -329,6 +336,21 @@
                   <input id="scannerMaxDelay" type="number" min="0" max="600" step="1" />
                 </label>
                 <label class="field">
+                  <span>Dojo Sweep exclusive</span>
+                  <select id="safetyReviewExclusive">
+                    <option value="true">Yes - pause other servers</option>
+                    <option value="false">No - scan normally</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>Dojo Sweep history limit</span>
+                  <input id="safetyReviewHistoryLimit" type="number" min="20" max="1500" step="20" />
+                </label>
+                <label class="field">
+                  <span>Dojo Sweep scroll rounds</span>
+                  <input id="safetyReviewScrollRounds" type="number" min="1" max="150" step="1" />
+                </label>
+                <label class="field">
                   <span>Auto reply cooldown</span>
                   <input id="replyCooldownSeconds" type="number" min="0" max="7200" step="30" />
                 </label>
@@ -449,6 +471,7 @@
           <button class="preview-tab active" data-preview-tab="preview">Preview</button>
           <button class="preview-tab" data-preview-tab="events">Events <span id="eventBadge" class="event-badge"></span></button>
           <button class="preview-tab" data-preview-tab="replies">Replies <span id="replyBadge" class="event-badge"></span></button>
+          <button class="preview-tab" data-preview-tab="safety">Sweep <span id="safetyBadge" class="event-badge"></span></button>
           <div class="api-spend-pill" title="OpenAI API spend today">
             <i class="bi bi-cash-coin"></i>
             <span id="topDailySpend">$0.000000</span>
@@ -516,6 +539,17 @@
               <button id="dismissAllReplies" class="small-button" type="button"><i class="bi bi-check2-circle"></i> Dismiss All</button>
             </div>
             <div id="unrespondedReplies" class="reply-watch-list"></div>
+          </section>
+        </div>
+
+        <div id="safetyMode" class="preview-mode">
+          <section class="preview-block">
+            <div class="section-title with-action">
+              <span>Dojo Sweep Queue</span>
+              <button id="dismissAllSafetyReviews" class="small-button" type="button"><i class="bi bi-check2-circle"></i> Dismiss All</button>
+            </div>
+            <div class="field-hint">Manual review only. The open queue is capped at 10 items. Deep Sweep searches accessible channel history, opens no reports, and leaves final decisions to you.</div>
+            <div id="safetyReviewList" class="safety-review-list"></div>
           </section>
         </div>
       </aside>

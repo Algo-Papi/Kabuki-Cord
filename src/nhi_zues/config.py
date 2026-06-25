@@ -15,6 +15,7 @@ class ChannelTarget:
     label: str = ""
     server_label: str = ""
     character_card: str | None = None
+    safety_review_enabled: bool = False
     scan_enabled: bool = True
     engage_enabled: bool = True
     react_enabled: bool = False
@@ -37,6 +38,9 @@ class AppConfig:
     scanner_channel_settle_seconds: float
     scanner_min_channel_delay_seconds: float
     scanner_max_channel_delay_seconds: float
+    safety_review_exclusive: bool
+    safety_review_history_limit: int
+    safety_review_scroll_rounds: int
     reply_cooldown_seconds: float
     reply_window_seconds: float
     reply_max_per_window: int
@@ -94,6 +98,9 @@ def load_config() -> AppConfig:
             0.0,
             _env_float("NHI_ZUES_SCANNER_MAX_CHANNEL_DELAY_SECONDS", 35.0),
         ),
+        safety_review_exclusive=_env_bool("NHI_ZUES_SAFETY_REVIEW_EXCLUSIVE", default=True),
+        safety_review_history_limit=max(20, _env_int("NHI_ZUES_SAFETY_REVIEW_HISTORY_LIMIT", 420)),
+        safety_review_scroll_rounds=max(1, _env_int("NHI_ZUES_SAFETY_REVIEW_SCROLL_ROUNDS", 45)),
         reply_cooldown_seconds=max(0.0, _env_float("NHI_ZUES_REPLY_COOLDOWN_SECONDS", 900.0)),
         reply_window_seconds=max(60.0, _env_float("NHI_ZUES_REPLY_WINDOW_SECONDS", 3600.0)),
         reply_max_per_window=max(0, _env_int("NHI_ZUES_REPLY_MAX_PER_WINDOW", 3)),
@@ -231,6 +238,7 @@ def _load_channels(servers_file: Path, fallback_raw: str) -> tuple[ChannelTarget
             server_id = str(server["server_id"]).strip()
             server_label = str(server.get("label") or "")
             character_card = server.get("character_card")
+            safety_review_enabled = bool(server.get("safety_review_enabled", False))
             for channel in server.get("channels", []):
                 if channel.get("scan_enabled", True) is False:
                     continue
@@ -241,6 +249,7 @@ def _load_channels(servers_file: Path, fallback_raw: str) -> tuple[ChannelTarget
                         label=str(channel.get("label") or ""),
                         server_label=server_label,
                         character_card=character_card,
+                        safety_review_enabled=safety_review_enabled,
                         scan_enabled=bool(channel.get("scan_enabled", True)),
                         engage_enabled=bool(channel.get("engage_enabled", True)),
                         react_enabled=bool(channel.get("react_enabled", False)),

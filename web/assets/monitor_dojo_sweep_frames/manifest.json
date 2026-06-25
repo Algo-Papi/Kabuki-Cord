@@ -1,0 +1,16 @@
+{
+  "frame_count": 48,
+  "frame_ms": 150,
+  "width": 960,
+  "height": 720,
+  "source": "../source/dojo_sweep_keyframes/key_000.png",
+  "keyframes": [
+    "key_000.png",
+    "key_001.png",
+    "key_002.png",
+    "key_003.png",
+    "key_004.png"
+  ],
+  "timing": "scanner-dwell-synced",
+  "animation": "five-pose-sweep-cycle-with-dust-vortex"
+}

@@ -21,6 +21,7 @@ from .output_guard import outgoing_block_reason
 from .reaction_ledger import ReactionLedger
 from .reactions import should_auto_react
 from .reply_ledger import ReplyLedger, duplicate_reply_message
+from .safety_review import SafetyReviewQueue, detect_safety_review_findings
 from .secrets import get_discord_credentials
 from .topics import TopicTracker
 from .user_instructions import UserInstructionStore
@@ -67,6 +68,7 @@ class NhiZuesRunner:
         self.discarded_approvals = DiscardedApprovalStore(config.state_dir / "discarded_approvals.json")
         self.reply_ledger = ReplyLedger(config.state_dir / "sent_replies.json")
         self.reaction_ledger = ReactionLedger(config.state_dir / "reactions.json")
+        self.safety_reviews = SafetyReviewQueue(config.state_dir / "safety_review.json")
         self.user_instructions = UserInstructionStore(config.state_dir / "user_instructions.json")
         self.events = EventLog(config.state_dir / "events.json")
         channel_count = len(config.channels)
@@ -232,11 +234,21 @@ class NhiZuesRunner:
         self._own_author_ids = own_ids
 
     def _planned_targets(self):
-        targets = list(self.config.channels)
+        targets = self._active_targets()
         if not targets:
             return []
         start = int(getattr(self, "_target_cursor", 0) or 0) % len(targets)
         return targets[start:] + targets[:start]
+
+    def _active_targets(self):
+        targets = list(self.config.channels)
+        if not targets:
+            return []
+        if bool(getattr(self.config, "safety_review_exclusive", True)):
+            sweep_targets = [target for target in targets if getattr(target, "safety_review_enabled", False)]
+            if sweep_targets:
+                return sweep_targets
+        return targets
 
     def _select_targets(self, targets):
         start_cursor = self._loop_cursor()
@@ -246,7 +258,7 @@ class NhiZuesRunner:
 
     def _limit_targets(self, targets):
         limit = max(1, self.config.scanner_max_channels_per_cycle)
-        all_targets = list(self.config.channels)
+        all_targets = self._active_targets()
         if not targets or not all_targets:
             return []
         current_loop_remaining = len(all_targets) - self._loop_cursor()
@@ -258,13 +270,13 @@ class NhiZuesRunner:
         return selected
 
     def _loop_cursor(self) -> int:
-        total = len(self.config.channels)
+        total = len(self._active_targets())
         if not total:
             return 0
         return int(getattr(self, "_target_cursor", 0) or 0) % total
 
     def _target_index(self, target) -> int:
-        for index, item in enumerate(self.config.channels):
+        for index, item in enumerate(self._active_targets()):
             if item.server_id == target.server_id and item.channel_id == target.channel_id:
                 return index
         return -1
@@ -278,7 +290,7 @@ class NhiZuesRunner:
         target=None,
         completed_in_loop: int | None = None,
     ) -> dict[str, int | bool]:
-        total = len(self.config.channels)
+        total = len(self._active_targets())
         cursor = self._loop_cursor()
         completed_loops = int(getattr(self, "_completed_loop_count", 0) or 0)
         position = 0
@@ -385,6 +397,90 @@ class NhiZuesRunner:
                 own_message_ids=own_message_ids,
                 own_texts=own_texts,
             )
+            if getattr(target, "safety_review_enabled", False):
+                review_source = visible_messages
+                review_source_label = "visible"
+                try:
+                    review_source = await session.read_channel_history(
+                        target.server_id,
+                        target.channel_id,
+                        limit=int(getattr(self.config, "safety_review_history_limit", 420) or 420),
+                        scroll_rounds=int(getattr(self.config, "safety_review_scroll_rounds", 45) or 45),
+                    )
+                    review_source_label = "history"
+                    fresh = self.memory.ingest(target.channel_id, review_source)
+                    own_author_ids.update(
+                        _own_author_ids_from_messages(
+                            review_source,
+                            character_names=character_names,
+                            own_texts=own_texts,
+                        )
+                    )
+                    self._own_author_ids = own_author_ids
+                except Exception as exc:
+                    log.warning(
+                        "server=%s channel=%s safety_review_history_failed=%s",
+                        target.server_id,
+                        target.channel_id,
+                        exc,
+                    )
+                    self.events.add(
+                        event_type="safety_review_scan",
+                        server_id=target.server_id,
+                        channel_id=target.channel_id,
+                        summary=(
+                            "Dojo Sweep could not back-scroll channel history, so it fell back "
+                            f"to {len(visible_messages)} currently visible message(s): {exc}"
+                        ),
+                    )
+                review_messages = _without_own_messages(
+                    review_source,
+                    character_names=character_names,
+                    own_author_ids=own_author_ids,
+                    own_message_ids=own_message_ids,
+                    own_texts=own_texts,
+                )
+                findings = detect_safety_review_findings(review_messages)
+                added = self.safety_reviews.add_findings(
+                    server_id=target.server_id,
+                    server_label=target.server_label,
+                    channel_id=target.channel_id,
+                    channel_label=target.label,
+                    findings=findings,
+                )
+                event_type = "safety_review_flagged" if added else "safety_review_scan"
+                self.events.add(
+                    event_type=event_type,
+                    server_id=target.server_id,
+                    channel_id=target.channel_id,
+                    summary=(
+                        f"Dojo Sweep scanned {len(review_messages)} non-own {review_source_label} message(s), "
+                        f"{len(fresh)} new; queued {len(added)} new review item(s). "
+                        "Replies/reactions are disabled and other servers are skipped while Dojo Sweep is on."
+                    ),
+                    draft="\n".join(item.text for item in added[:3]),
+                )
+                log.info(
+                    "server=%s channel=%s safety_review=true source=%s scanned=%s fresh=%s queued=%s",
+                    target.server_id,
+                    target.channel_id,
+                    review_source_label,
+                    len(review_messages),
+                    len(fresh),
+                    len(added),
+                )
+                self.memory.save()
+                if on_target_complete:
+                    target_index = self._target_index(target)
+                    complete_loop_state = self._loop_state(
+                        planned_targets=list(planned_targets or targets),
+                        selected_targets=targets,
+                        will_complete_loop=bool((loop_state or {}).get("will_complete_loop")),
+                        target=target,
+                        completed_in_loop=max(0, target_index + 1),
+                    )
+                    on_target_complete(target, len(review_source), len(fresh), complete_loop_state)
+                continue
             reaction_candidates = _recent_reaction_candidates(
                 visible_messages,
                 fresh,
