@@ -75,6 +75,54 @@ class ApprovalStateTests(unittest.TestCase):
             self.assertEqual("Rook", approval["source_messages"][0]["author"])
             self.assertEqual("this is the message being answered", approval["source_messages"][0]["text"])
 
+    def test_approval_state_reports_missing_source_ids_without_losing_found_previews(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state_dir = root / ".state"
+            servers_file = root / "servers.json"
+            servers_file.write_text(json.dumps({"servers": []}), encoding="utf-8")
+            found = MessageRecord(
+                server_id="server-1",
+                channel_id="channel-1",
+                message_id="chat-messages-1-100",
+                author="Rook",
+                author_id="123",
+                text="found source text",
+                observed_at=datetime(2026, 6, 23, tzinfo=timezone.utc),
+            )
+            missing = MessageRecord(
+                server_id="server-1",
+                channel_id="channel-1",
+                message_id="chat-messages-1-101",
+                author="Muse",
+                author_id="456",
+                text="missing source text",
+                observed_at=datetime(2026, 6, 23, tzinfo=timezone.utc),
+            )
+            memory = ConversationMemory(state_dir / "memory.json")
+            memory.ingest("channel-1", [found])
+            memory.save()
+            ApprovalQueue(state_dir / "approvals.json").add(
+                server_id="server-1",
+                channel_id="channel-1",
+                character_name="NHI Zues",
+                engagement_type="reply",
+                reason="manual response",
+                draft="yeah that part is weird",
+                source_messages=[found, missing],
+            )
+
+            [approval] = approval_items_state(
+                SimpleNamespace(state_dir=state_dir, servers_file=servers_file)
+            )
+
+            self.assertEqual(["chat-messages-1-101"], approval["source_missing_ids"])
+            self.assertEqual(
+                ["chat-messages-1-100"],
+                [source["message_id"] for source in approval["source_messages"]],
+            )
+            self.assertEqual("found source text", approval["source_messages"][0]["text"])
+
     def test_approval_queue_keeps_only_five_newest_items(self) -> None:
         with TemporaryDirectory() as tmp:
             queue = ApprovalQueue(Path(tmp) / "approvals.json")
@@ -114,6 +162,32 @@ class ApprovalStateTests(unittest.TestCase):
                 ["draft 1", "draft 2", "draft 3", "draft 4", "draft 5"],
                 [item.draft for item in reloaded.list()],
             )
+
+    def test_find_source_overlap_ignores_blanks_and_stays_in_channel(self) -> None:
+        with TemporaryDirectory() as tmp:
+            queue = ApprovalQueue(Path(tmp) / "approvals.json")
+            source = MessageRecord(
+                server_id="server-1",
+                channel_id="channel-1",
+                message_id="source-1",
+                author="Rook",
+                author_id="123",
+                text="source text",
+                observed_at=datetime(2026, 6, 23, tzinfo=timezone.utc),
+            )
+            item = queue.add(
+                server_id="server-1",
+                channel_id="channel-1",
+                character_name="NHI Zues",
+                engagement_type="reply",
+                reason="reason",
+                draft="draft",
+                source_messages=[source],
+            )
+
+            self.assertIs(queue.find_source_overlap(channel_id="channel-1", source_message_ids=["", "source-1"]), item)
+            self.assertIsNone(queue.find_source_overlap(channel_id="channel-2", source_message_ids=["source-1"]))
+            self.assertIsNone(queue.find_source_overlap(channel_id="channel-1", source_message_ids=["", " "]))
 
     def test_own_source_block_message_blocks_character_source(self) -> None:
         with TemporaryDirectory() as tmp:

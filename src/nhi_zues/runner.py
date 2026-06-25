@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import math
 import random
-from datetime import datetime, timezone
+from dataclasses import dataclass
 
 from .approvals import ApprovalQueue
 from .browser import DiscordWebSession, discord_login_blocker_message
@@ -16,18 +15,52 @@ from .discarded_approvals import DiscardedApprovalStore, discarded_approval_mess
 from .events import EventLog
 from .llm import ReplyPlanner
 from .memory import ConversationMemory
-from . import own_identity
 from .output_guard import outgoing_block_reason
 from .reaction_ledger import ReactionLedger
-from .reactions import should_auto_react
+from .reaction_service import (
+    process_reactions as _process_reactions_service,
+    reaction_window_cap as _reaction_window_cap,
+    recent_non_own_message_ids as _recent_non_own_message_ids,
+    recent_reaction_candidates as _recent_reaction_candidates,
+    without_own_messages as _without_own_messages,
+)
+from .reply_policy import (
+    approval_gate_reason as _approval_gate_reason,
+    auto_reply_guard_reason as _auto_reply_guard_reason,
+    is_own_message as _is_own_message,
+    own_author_ids_from_messages as _own_author_ids_from_messages,
+    requires_approval as _requires_approval,
+)
 from .reply_ledger import ReplyLedger, duplicate_reply_message
 from .safety_review import SafetyReviewQueue, detect_safety_review_findings
+from . import scan_scheduler
 from .secrets import get_discord_credentials
 from .topics import TopicTracker
 from .user_instructions import UserInstructionStore
+from .models import DraftDecision, MessageRecord
 
 
 log = logging.getLogger(__name__)
+
+
+@dataclass
+class ChannelScanState:
+    visible_messages: list[MessageRecord]
+    fresh_messages: list[MessageRecord]
+    character: object
+    character_names: tuple[str, ...]
+    own_message_ids: set[str]
+    own_texts: set[str]
+    own_author_ids: set[str]
+
+
+@dataclass
+class ReplyPlanningState:
+    snapshot: object
+    context: list[MessageRecord]
+    user_memories: list
+    user_notes: list
+    character_memory: object
 
 
 class NhiZuesRunner:
@@ -164,7 +197,23 @@ class NhiZuesRunner:
 
         self.config.state_dir.mkdir(parents=True, exist_ok=True)
         self.memory.load()
+        await self._prepare_discord_session(session, verify_login=verify_login)
+        await self._run_scan_cycles(
+            session,
+            loop=loop,
+            stop_event=stop_event,
+            on_cycle=on_cycle,
+            on_targets_planned=on_targets_planned,
+            on_target_start=on_target_start,
+            on_target_complete=on_target_complete,
+        )
 
+    async def _prepare_discord_session(
+        self,
+        session: DiscordWebSession,
+        *,
+        verify_login: bool,
+    ) -> None:
         if verify_login:
             credentials = get_discord_credentials()
             logged_in = await session.login_if_needed(
@@ -180,14 +229,19 @@ class NhiZuesRunner:
             raise RuntimeError(discord_login_blocker_message(await session.account_blocker_state()))
         await self._remember_current_account_id(session)
 
+    async def _run_scan_cycles(
+        self,
+        session: DiscordWebSession,
+        *,
+        loop: bool,
+        stop_event=None,
+        on_cycle=None,
+        on_targets_planned=None,
+        on_target_start=None,
+        on_target_complete=None,
+    ) -> None:
         while not _stop_requested(stop_event):
-            planned_targets = self._planned_targets() if loop else list(self.config.channels)
-            if loop:
-                completed_in_loop = self._loop_cursor()
-                targets, will_complete_loop = self._select_targets(planned_targets)
-            else:
-                completed_in_loop = 0
-                targets, will_complete_loop = planned_targets, True
+            planned_targets, targets, will_complete_loop, completed_in_loop = self._cycle_targets(loop)
             loop_state = self._loop_state(
                 planned_targets=planned_targets,
                 selected_targets=targets,
@@ -222,6 +276,14 @@ class NhiZuesRunner:
             if await _sleep_interruptible(stop_event, sleep_seconds):
                 return
 
+    def _cycle_targets(self, loop: bool) -> tuple[list, list, bool, int]:
+        planned_targets = self._planned_targets() if loop else list(self.config.channels)
+        if not loop:
+            return planned_targets, planned_targets, True, 0
+        completed_in_loop = self._loop_cursor()
+        targets, will_complete_loop = self._select_targets(planned_targets)
+        return planned_targets, targets, will_complete_loop, completed_in_loop
+
     async def _remember_current_account_id(self, session: DiscordWebSession) -> None:
         try:
             account_id = await session.current_user_id()
@@ -234,52 +296,34 @@ class NhiZuesRunner:
         self._own_author_ids = own_ids
 
     def _planned_targets(self):
-        targets = self._active_targets()
-        if not targets:
-            return []
-        start = int(getattr(self, "_target_cursor", 0) or 0) % len(targets)
-        return targets[start:] + targets[:start]
+        return scan_scheduler.planned_targets(self.config, getattr(self, "_target_cursor", 0))
 
     def _active_targets(self):
-        targets = list(self.config.channels)
-        if not targets:
-            return []
-        if bool(getattr(self.config, "safety_review_exclusive", True)):
-            sweep_targets = [target for target in targets if getattr(target, "safety_review_enabled", False)]
-            if sweep_targets:
-                return sweep_targets
-        return targets
+        return scan_scheduler.active_targets(self.config)
 
     def _select_targets(self, targets):
-        start_cursor = self._loop_cursor()
-        selected = self._limit_targets(targets)
-        next_cursor = self._loop_cursor()
-        return selected, bool(selected) and next_cursor <= start_cursor
+        selected, next_cursor, completed_loop = scan_scheduler.select_targets(
+            self.config,
+            getattr(self, "_target_cursor", 0),
+            targets,
+        )
+        self._target_cursor = next_cursor
+        return selected, completed_loop
 
     def _limit_targets(self, targets):
-        limit = max(1, self.config.scanner_max_channels_per_cycle)
-        all_targets = self._active_targets()
-        if not targets or not all_targets:
-            return []
-        current_loop_remaining = len(all_targets) - self._loop_cursor()
-        selected = list(targets)[: min(limit, current_loop_remaining)]
-        if selected:
-            last_index = self._target_index(selected[-1])
-            if last_index >= 0:
-                self._target_cursor = (last_index + 1) % len(all_targets)
+        selected, next_cursor = scan_scheduler.limit_targets(
+            self.config,
+            targets,
+            getattr(self, "_target_cursor", 0),
+        )
+        self._target_cursor = next_cursor
         return selected
 
     def _loop_cursor(self) -> int:
-        total = len(self._active_targets())
-        if not total:
-            return 0
-        return int(getattr(self, "_target_cursor", 0) or 0) % total
+        return scan_scheduler.normalized_cursor(self.config, getattr(self, "_target_cursor", 0))
 
     def _target_index(self, target) -> int:
-        for index, item in enumerate(self._active_targets()):
-            if item.server_id == target.server_id and item.channel_id == target.channel_id:
-                return index
-        return -1
+        return scan_scheduler.target_index(self.config, target)
 
     def _loop_state(
         self,
@@ -290,27 +334,16 @@ class NhiZuesRunner:
         target=None,
         completed_in_loop: int | None = None,
     ) -> dict[str, int | bool]:
-        total = len(self._active_targets())
-        cursor = self._loop_cursor()
-        completed_loops = int(getattr(self, "_completed_loop_count", 0) or 0)
-        position = 0
-        if target is not None:
-            target_index = self._target_index(target)
-            if target_index >= 0:
-                position = target_index + 1
-        if completed_in_loop is None:
-            completed_in_loop = cursor
-        return {
-            "completed_loops": completed_loops,
-            "current_loop": completed_loops + 1,
-            "total_channels": total,
-            "cursor": cursor,
-            "position": position,
-            "completed_in_loop": max(0, min(int(completed_in_loop or 0), total)),
-            "selected_count": len(list(selected_targets or ())),
-            "planned_count": len(list(planned_targets or ())),
-            "will_complete_loop": bool(will_complete_loop),
-        }
+        return scan_scheduler.loop_state(
+            self.config,
+            getattr(self, "_target_cursor", 0),
+            getattr(self, "_completed_loop_count", 0),
+            planned_targets=planned_targets,
+            selected_targets=selected_targets,
+            will_complete_loop=will_complete_loop,
+            target=target,
+            completed_in_loop=completed_in_loop,
+        )
 
     async def _process_channels(
         self,
@@ -323,439 +356,618 @@ class NhiZuesRunner:
         on_target_start=None,
         on_target_complete=None,
     ) -> None:
+        planned = list(planned_targets or targets)
         for index, target in enumerate(targets):
             if index > 0:
                 await self._channel_pacing_delay()
-            if on_target_start:
-                planned = list(planned_targets or targets)
-                try:
-                    planned_index = next(
-                        item_index
-                        for item_index, item in enumerate(planned)
-                        if item.server_id == target.server_id and item.channel_id == target.channel_id
-                    )
-                except StopIteration:
-                    planned_index = index
-                target_index = self._target_index(target)
-                target_loop_state = self._loop_state(
-                    planned_targets=planned,
-                    selected_targets=targets,
-                    will_complete_loop=bool((loop_state or {}).get("will_complete_loop")),
-                    target=target,
-                    completed_in_loop=max(0, target_index),
+            self._notify_target_start(
+                target,
+                index,
+                targets,
+                planned,
+                loop_state,
+                on_target_start,
+            )
+            if not await self._open_channel_or_record_unavailable(session, target):
+                self._notify_target_complete(
+                    target,
+                    targets,
+                    planned,
+                    loop_state,
+                    on_target_complete,
+                    visible_count=0,
+                    fresh_count=0,
                 )
-                on_target_start(target, planned_index, planned, target_loop_state)
-            await self._raise_if_account_blocked(session, target)
-            current_url = await session.navigate_channel(target.server_id, target.channel_id)
-            await self._raise_if_account_blocked(session, target)
-            if f"/{target.channel_id}" not in current_url:
-                log.warning(
-                    "channel=%s redirected to %s; account may not have access",
-                    target.channel_id,
-                    current_url,
-                )
-                self.events.add(
-                    event_type="channel_unavailable",
-                    server_id=target.server_id,
-                    channel_id=target.channel_id,
-                    summary=f"Checked channel but Discord redirected to {current_url}.",
-                )
-                if on_target_complete:
-                    target_index = self._target_index(target)
-                    complete_loop_state = self._loop_state(
-                        planned_targets=list(planned_targets or targets),
-                        selected_targets=targets,
-                        will_complete_loop=bool((loop_state or {}).get("will_complete_loop")),
-                        target=target,
-                        completed_in_loop=max(0, target_index + 1),
-                    )
-                    on_target_complete(target, 0, 0, complete_loop_state)
                 continue
 
             if await self._channel_settle_delay(stop_event):
                 return
-            visible_messages = await session.read_visible_messages(target.server_id, target.channel_id)
-            fresh = self.memory.ingest(target.channel_id, visible_messages)
-            self.memory.save()
-            character = self.characters.for_server(target.server_id, target.character_card)
-            character_names = (character.name, *character.aliases)
-            own_message_ids = self.reply_ledger.own_message_ids_for_channel(channel_id=target.channel_id)
-            own_texts = self.reply_ledger.own_texts_for_channel(channel_id=target.channel_id)
-            own_author_ids = set(getattr(self, "_own_author_ids", set()))
-            own_author_ids.update(
-                _own_author_ids_from_messages(
-                    visible_messages,
-                    character_names=character_names,
-                    own_texts=own_texts,
-                )
-            )
-            self._own_author_ids = own_author_ids
-            fresh = _without_own_messages(
-                fresh,
-                character_names=character_names,
-                own_author_ids=own_author_ids,
-                own_message_ids=own_message_ids,
-                own_texts=own_texts,
-            )
+
+            state = await self._capture_channel_state(session, target)
             if getattr(target, "safety_review_enabled", False):
-                review_source = visible_messages
-                review_source_label = "visible"
-                try:
-                    review_source = await session.read_channel_history(
-                        target.server_id,
-                        target.channel_id,
-                        limit=int(getattr(self.config, "safety_review_history_limit", 420) or 420),
-                        scroll_rounds=int(getattr(self.config, "safety_review_scroll_rounds", 45) or 45),
-                    )
-                    review_source_label = "history"
-                    fresh = self.memory.ingest(target.channel_id, review_source)
-                    own_author_ids.update(
-                        _own_author_ids_from_messages(
-                            review_source,
-                            character_names=character_names,
-                            own_texts=own_texts,
-                        )
-                    )
-                    self._own_author_ids = own_author_ids
-                except Exception as exc:
-                    log.warning(
-                        "server=%s channel=%s safety_review_history_failed=%s",
-                        target.server_id,
-                        target.channel_id,
-                        exc,
-                    )
-                    self.events.add(
-                        event_type="safety_review_scan",
-                        server_id=target.server_id,
-                        channel_id=target.channel_id,
-                        summary=(
-                            "Dojo Sweep could not back-scroll channel history, so it fell back "
-                            f"to {len(visible_messages)} currently visible message(s): {exc}"
-                        ),
-                    )
-                review_messages = _without_own_messages(
-                    review_source,
-                    character_names=character_names,
-                    own_author_ids=own_author_ids,
-                    own_message_ids=own_message_ids,
-                    own_texts=own_texts,
+                visible_count, fresh_count = await self._process_safety_review_channel(
+                    session,
+                    target,
+                    state,
                 )
-                findings = detect_safety_review_findings(review_messages)
-                added = self.safety_reviews.add_findings(
-                    server_id=target.server_id,
-                    server_label=target.server_label,
-                    channel_id=target.channel_id,
-                    channel_label=target.label,
-                    findings=findings,
-                )
-                event_type = "safety_review_flagged" if added else "safety_review_scan"
-                self.events.add(
-                    event_type=event_type,
-                    server_id=target.server_id,
-                    channel_id=target.channel_id,
-                    summary=(
-                        f"Dojo Sweep scanned {len(review_messages)} non-own {review_source_label} message(s), "
-                        f"{len(fresh)} new; queued {len(added)} new review item(s). "
-                        "Replies/reactions are disabled and other servers are skipped while Dojo Sweep is on."
-                    ),
-                    draft="\n".join(item.text for item in added[:3]),
-                )
-                log.info(
-                    "server=%s channel=%s safety_review=true source=%s scanned=%s fresh=%s queued=%s",
-                    target.server_id,
-                    target.channel_id,
-                    review_source_label,
-                    len(review_messages),
-                    len(fresh),
-                    len(added),
-                )
-                self.memory.save()
-                if on_target_complete:
-                    target_index = self._target_index(target)
-                    complete_loop_state = self._loop_state(
-                        planned_targets=list(planned_targets or targets),
-                        selected_targets=targets,
-                        will_complete_loop=bool((loop_state or {}).get("will_complete_loop")),
-                        target=target,
-                        completed_in_loop=max(0, target_index + 1),
-                    )
-                    on_target_complete(target, len(review_source), len(fresh), complete_loop_state)
-                continue
-            reaction_candidates = _recent_reaction_candidates(
-                visible_messages,
-                fresh,
-                character_names=character_names,
-                own_author_ids=own_author_ids,
-                own_message_ids=own_message_ids,
-                own_texts=own_texts,
-            )
-            force_laugh_ids = _recent_non_own_message_ids(
-                visible_messages,
-                character_names=character_names,
-                own_author_ids=own_author_ids,
-                own_message_ids=own_message_ids,
-                own_texts=own_texts,
-                limit=5,
-            )
-            reacted_message_ids = await self._process_reactions(
-                session,
+            else:
+                await self._process_regular_channel(session, target, state)
+                visible_count = len(state.visible_messages)
+                fresh_count = len(state.fresh_messages)
+
+            self._notify_target_complete(
                 target,
-                reaction_candidates,
-                fresh_count=len(fresh),
-                force_laugh_ids=force_laugh_ids,
+                targets,
+                planned,
+                loop_state,
+                on_target_complete,
+                visible_count=visible_count,
+                fresh_count=fresh_count,
+            )
+
+    def _notify_target_start(
+        self,
+        target,
+        fallback_index: int,
+        targets,
+        planned: list,
+        loop_state,
+        callback,
+    ) -> None:
+        if not callback:
+            return
+        planned_index = self._planned_index(planned, target, fallback=fallback_index)
+        target_index = self._target_index(target)
+        target_loop_state = self._loop_state(
+            planned_targets=planned,
+            selected_targets=targets,
+            will_complete_loop=bool((loop_state or {}).get("will_complete_loop")),
+            target=target,
+            completed_in_loop=max(0, target_index),
+        )
+        callback(target, planned_index, planned, target_loop_state)
+
+    def _notify_target_complete(
+        self,
+        target,
+        targets,
+        planned: list,
+        loop_state,
+        callback,
+        *,
+        visible_count: int,
+        fresh_count: int,
+    ) -> None:
+        if not callback:
+            return
+        target_index = self._target_index(target)
+        complete_loop_state = self._loop_state(
+            planned_targets=planned,
+            selected_targets=targets,
+            will_complete_loop=bool((loop_state or {}).get("will_complete_loop")),
+            target=target,
+            completed_in_loop=max(0, target_index + 1),
+        )
+        callback(target, visible_count, fresh_count, complete_loop_state)
+
+    @staticmethod
+    def _planned_index(planned: list, target, *, fallback: int) -> int:
+        try:
+            return next(
+                item_index
+                for item_index, item in enumerate(planned)
+                if item.server_id == target.server_id and item.channel_id == target.channel_id
+            )
+        except StopIteration:
+            return fallback
+
+    async def _open_channel_or_record_unavailable(
+        self,
+        session: DiscordWebSession,
+        target,
+    ) -> bool:
+        await self._raise_if_account_blocked(session, target)
+        current_url = await session.navigate_channel(target.server_id, target.channel_id)
+        await self._raise_if_account_blocked(session, target)
+        if f"/{target.channel_id}" in current_url:
+            return True
+        log.warning(
+            "channel=%s redirected to %s; account may not have access",
+            target.channel_id,
+            current_url,
+        )
+        self.events.add(
+            event_type="channel_unavailable",
+            server_id=target.server_id,
+            channel_id=target.channel_id,
+            summary=f"Checked channel but Discord redirected to {current_url}.",
+        )
+        return False
+
+    async def _capture_channel_state(
+        self,
+        session: DiscordWebSession,
+        target,
+    ) -> ChannelScanState:
+        visible_messages = await session.read_visible_messages(target.server_id, target.channel_id)
+        fresh_messages = self.memory.ingest(target.channel_id, visible_messages)
+        self.memory.save()
+        character = self.characters.for_server(target.server_id, target.character_card)
+        character_names = (character.name, *character.aliases)
+        own_message_ids = self.reply_ledger.own_message_ids_for_channel(channel_id=target.channel_id)
+        own_texts = self.reply_ledger.own_texts_for_channel(channel_id=target.channel_id)
+        own_author_ids = self._update_own_author_ids(
+            visible_messages,
+            character_names=character_names,
+            own_texts=own_texts,
+        )
+        fresh_messages = _without_own_messages(
+            fresh_messages,
+            character_names=character_names,
+            own_author_ids=own_author_ids,
+            own_message_ids=own_message_ids,
+            own_texts=own_texts,
+        )
+        return ChannelScanState(
+            visible_messages=visible_messages,
+            fresh_messages=fresh_messages,
+            character=character,
+            character_names=character_names,
+            own_message_ids=own_message_ids,
+            own_texts=own_texts,
+            own_author_ids=own_author_ids,
+        )
+
+    def _update_own_author_ids(
+        self,
+        messages: list[MessageRecord],
+        *,
+        character_names: tuple[str, ...],
+        own_texts,
+    ) -> set[str]:
+        own_author_ids = set(getattr(self, "_own_author_ids", set()))
+        own_author_ids.update(
+            _own_author_ids_from_messages(
+                messages,
                 character_names=character_names,
-                own_author_ids=own_author_ids,
-                own_message_ids=own_message_ids,
                 own_texts=own_texts,
             )
-            reply_fresh = [
-                message
-                for message in fresh
-                if message.message_id not in reacted_message_ids
-            ]
-            snapshot = self.topics.update(target.channel_id, fresh)
-            context = self.memory.context(target.channel_id, limit=80)
-            user_memories = self.memory.user_context_for(context, limit=10)
-            user_notes = self.user_instructions.for_users(
-                [user.user_key for user in user_memories],
-                server_id=target.server_id,
-                channel_id=target.channel_id,
-            )
-            card_id = target.character_card or self.config.character_card
-            character_memory = self.character_memory.load(card_id)
-            if not target.engage_enabled:
-                log.info(
-                    "server=%s channel=%s visible=%s fresh=%s engage=false",
-                    target.server_id,
-                    target.channel_id,
-                    len(visible_messages),
-                    len(fresh),
-                )
-                self.events.add(
-                    event_type="channel_checked",
-                    server_id=target.server_id,
-                    channel_id=target.channel_id,
-                    summary=(
-                        f"Reviewed {len(visible_messages)} visible message(s), "
-                        f"{len(fresh)} new; Engage is off."
-                    ),
-                )
-                self.memory.save()
-                if on_target_complete:
-                    target_index = self._target_index(target)
-                    complete_loop_state = self._loop_state(
-                        planned_targets=list(planned_targets or targets),
-                        selected_targets=targets,
-                        will_complete_loop=bool((loop_state or {}).get("will_complete_loop")),
-                        target=target,
-                        completed_in_loop=max(0, target_index + 1),
-                    )
-                    on_target_complete(target, len(visible_messages), len(fresh), complete_loop_state)
-                continue
+        )
+        self._own_author_ids = own_author_ids
+        return own_author_ids
 
-            decision = await self.planner.plan(
-                channel_id=target.channel_id,
-                character=character,
-                character_memory=character_memory,
-                new_messages=reply_fresh,
-                context=context,
-                topics=snapshot,
-                user_memories=user_memories,
-                user_instructions=user_notes,
-            )
+    async def _process_safety_review_channel(
+        self,
+        session: DiscordWebSession,
+        target,
+        state: ChannelScanState,
+    ) -> tuple[int, int]:
+        review_source, fresh_messages, review_source_label = await self._read_safety_review_source(
+            session,
+            target,
+            state,
+        )
+        review_messages = _without_own_messages(
+            review_source,
+            character_names=state.character_names,
+            own_author_ids=state.own_author_ids,
+            own_message_ids=state.own_message_ids,
+            own_texts=state.own_texts,
+        )
+        findings = detect_safety_review_findings(review_messages)
+        added = self.safety_reviews.add_findings(
+            server_id=target.server_id,
+            server_label=getattr(target, "server_label", ""),
+            channel_id=target.channel_id,
+            channel_label=getattr(target, "label", ""),
+            findings=findings,
+        )
+        event_type = "safety_review_flagged" if added else "safety_review_scan"
+        self.events.add(
+            event_type=event_type,
+            server_id=target.server_id,
+            channel_id=target.channel_id,
+            summary=(
+                f"Dojo Sweep scanned {len(review_messages)} non-own {review_source_label} message(s), "
+                f"{len(fresh_messages)} new; queued {len(added)} new review item(s). "
+                "Replies/reactions are disabled and other servers are skipped while Dojo Sweep is on."
+            ),
+            draft="\n".join(item.text for item in added[:3]),
+        )
+        log.info(
+            "server=%s channel=%s safety_review=true source=%s scanned=%s fresh=%s queued=%s",
+            target.server_id,
+            target.channel_id,
+            review_source_label,
+            len(review_messages),
+            len(fresh_messages),
+            len(added),
+        )
+        self.memory.save()
+        return len(review_source), len(fresh_messages)
 
-            log.info(
-                "server=%s character=%s channel=%s visible=%s fresh=%s users=%s topics=%s decision=%s",
+    async def _read_safety_review_source(
+        self,
+        session: DiscordWebSession,
+        target,
+        state: ChannelScanState,
+    ) -> tuple[list[MessageRecord], list[MessageRecord], str]:
+        try:
+            review_source = await session.read_channel_history(
                 target.server_id,
-                character.name,
                 target.channel_id,
-                len(visible_messages),
-                len(fresh),
-                len(user_memories),
-                snapshot.top_topics,
-                decision.reason,
+                limit=int(getattr(self.config, "safety_review_history_limit", 420) or 420),
+                scroll_rounds=int(getattr(self.config, "safety_review_scroll_rounds", 45) or 45),
+            )
+        except Exception as exc:
+            log.warning(
+                "server=%s channel=%s safety_review_history_failed=%s",
+                target.server_id,
+                target.channel_id,
+                exc,
             )
             self.events.add(
-                event_type="channel_checked",
+                event_type="safety_review_scan",
                 server_id=target.server_id,
                 channel_id=target.channel_id,
                 summary=(
-                    f"Reviewed {len(visible_messages)} visible message(s), "
-                    f"{len(fresh)} new; {decision.reason}."
+                    "Dojo Sweep could not back-scroll channel history, so it fell back "
+                    f"to {len(state.visible_messages)} currently visible message(s): {exc}"
                 ),
             )
-            if decision.should_reply and decision.draft:
-                output_block = outgoing_block_reason(decision.draft)
-                if output_block:
-                    log.info("output guard blocked draft channel=%s", target.channel_id)
-                    self.events.add(
-                        event_type="output_guard_blocked",
-                        server_id=target.server_id,
-                        channel_id=target.channel_id,
-                        summary=output_block,
-                        draft=decision.draft,
-                    )
-                    self.memory.save()
-                    continue
-                source_ids = tuple(message.message_id for message in reply_fresh)
-                discarded_message = discarded_approval_message(
-                    self.discarded_approvals.find_overlap(
-                        channel_id=target.channel_id,
-                        source_message_ids=source_ids,
-                    )
-                )
-                if discarded_message:
-                    log.info("discarded approval suppressed channel=%s", target.channel_id)
-                    self.events.add(
-                        event_type="discarded_approval_suppressed",
-                        server_id=target.server_id,
-                        channel_id=target.channel_id,
-                        summary=discarded_message,
-                        draft=decision.draft,
-                    )
-                    self.memory.save()
-                    continue
-                duplicate_message = duplicate_reply_message(
-                    self.reply_ledger.find_overlap(
-                        channel_id=target.channel_id,
-                        source_message_ids=source_ids,
-                    )
-                )
-                if duplicate_message:
-                    log.info("duplicate reply blocked channel=%s", target.channel_id)
-                    self.events.add(
-                        event_type="duplicate_reply_blocked",
-                        server_id=target.server_id,
-                        channel_id=target.channel_id,
-                        summary=duplicate_message,
-                        draft=decision.draft,
-                    )
-                    self.memory.save()
-                    continue
+            return state.visible_messages, state.fresh_messages, "visible"
 
-                if self.config.runtime_mode == "dry":
-                    log.info("dry mode draft for %s: %s", target.channel_id, decision.draft)
-                    self.events.add(
-                        event_type="dry_run",
-                        server_id=target.server_id,
-                        channel_id=target.channel_id,
-                        summary=decision.reason,
-                        draft=decision.draft,
-                    )
-                elif _requires_approval(
-                    self.config.runtime_mode,
-                    decision.engagement_type,
-                    auto_respond_enabled=target.auto_respond_enabled,
-                ):
-                    approval_reason = _approval_gate_reason(
-                        self.config.runtime_mode,
-                        decision.engagement_type,
-                        auto_respond_enabled=target.auto_respond_enabled,
-                    )
-                    approval_summary = (
-                        f"{decision.reason}; queued for approval because {approval_reason}"
-                        if approval_reason
-                        else decision.reason
-                    )
-                    existing = self.approvals.find_source_overlap(
-                        channel_id=target.channel_id,
-                        source_message_ids=source_ids,
-                    )
-                    if existing:
-                        self.events.add(
-                            event_type="duplicate_reply_blocked",
-                            server_id=target.server_id,
-                            channel_id=target.channel_id,
-                            summary=(
-                                "Duplicate approval skipped: an approval is already queued "
-                                "for one or more of the same source messages."
-                            ),
-                            draft=decision.draft,
-                        )
-                        self.memory.save()
-                        continue
-                    item = self.approvals.add(
-                        server_id=target.server_id,
-                        channel_id=target.channel_id,
-                        character_name=character.name,
-                        engagement_type=decision.engagement_type,
-                        reason=approval_summary,
-                        draft=decision.draft,
-                        source_messages=fresh,
-                    )
-                    log.info("queued approval=%s channel=%s", item.approval_id, target.channel_id)
-                    self.events.add(
-                        event_type="approval_queued",
-                        server_id=target.server_id,
-                        channel_id=target.channel_id,
-                        summary=approval_summary,
-                        draft=decision.draft,
-                    )
-                else:
-                    guard_reason = _auto_reply_guard_reason(
-                        self.config,
-                        self.reply_ledger,
-                        channel_id=target.channel_id,
-                        visible_messages=visible_messages,
-                        character_names=character_names,
-                        own_author_ids=own_author_ids,
-                        own_message_ids=own_message_ids,
-                        own_texts=own_texts,
-                    )
-                    if guard_reason:
-                        log.info(
-                            "auto reply guard blocked server=%s channel=%s reason=%s",
-                            target.server_id,
-                            target.channel_id,
-                            guard_reason,
-                        )
-                        self.events.add(
-                            event_type="reply_guard_blocked",
-                            server_id=target.server_id,
-                            channel_id=target.channel_id,
-                            summary=guard_reason,
-                            draft=decision.draft,
-                        )
-                        self.memory.save()
-                        continue
-                    delivery = await session.send_message(
-                        decision.draft,
-                        typing_enabled=self.config.typing_indicator_enabled,
-                        typing_min_seconds=self.config.typing_min_seconds,
-                        typing_max_seconds=self.config.typing_max_seconds,
-                        typing_chars_per_second=self.config.typing_chars_per_second,
-                    )
-                    target_message = reply_fresh[-1] if reply_fresh else None
-                    self.events.add(
-                        event_type="message_sent",
-                        server_id=target.server_id,
-                        channel_id=target.channel_id,
-                        summary=decision.reason,
-                        draft=decision.draft,
-                        message_id=str(delivery.get("message_id") or ""),
-                        target_message_id=str(source_ids[-1] if source_ids else ""),
-                        target_author=str(getattr(target_message, "author", "") or ""),
-                    )
-                    self.reply_ledger.record(
-                        server_id=target.server_id,
-                        channel_id=target.channel_id,
-                        mode="auto",
-                        draft=decision.draft,
-                        source_message_ids=source_ids,
-                        message_id=str(delivery.get("message_id") or ""),
-                    )
+        fresh_messages = self.memory.ingest(target.channel_id, review_source)
+        state.own_author_ids = self._update_own_author_ids(
+            review_source,
+            character_names=state.character_names,
+            own_texts=state.own_texts,
+        )
+        return review_source, fresh_messages, "history"
 
+    async def _process_regular_channel(
+        self,
+        session: DiscordWebSession,
+        target,
+        state: ChannelScanState,
+    ) -> None:
+        reacted_message_ids = await self._process_channel_reactions(session, target, state)
+        reply_fresh = [
+            message
+            for message in state.fresh_messages
+            if message.message_id not in reacted_message_ids
+        ]
+        planning = self._build_reply_planning_state(target, state)
+        if not target.engage_enabled:
+            self._record_engage_disabled(target, state)
             self.memory.save()
-            if on_target_complete:
-                target_index = self._target_index(target)
-                complete_loop_state = self._loop_state(
-                    planned_targets=list(planned_targets or targets),
-                    selected_targets=targets,
-                    will_complete_loop=bool((loop_state or {}).get("will_complete_loop")),
-                    target=target,
-                    completed_in_loop=max(0, target_index + 1),
-                )
-                on_target_complete(target, len(visible_messages), len(fresh), complete_loop_state)
+            return
+
+        decision = await self.planner.plan(
+            channel_id=target.channel_id,
+            character=state.character,
+            character_memory=planning.character_memory,
+            new_messages=reply_fresh,
+            context=planning.context,
+            topics=planning.snapshot,
+            user_memories=planning.user_memories,
+            user_instructions=planning.user_notes,
+        )
+        self._record_planner_decision(target, state, planning, decision)
+        await self._handle_reply_decision(session, target, state, decision, reply_fresh)
+        self.memory.save()
+
+    async def _process_channel_reactions(
+        self,
+        session: DiscordWebSession,
+        target,
+        state: ChannelScanState,
+    ) -> set[str]:
+        reaction_candidates = _recent_reaction_candidates(
+            state.visible_messages,
+            state.fresh_messages,
+            character_names=state.character_names,
+            own_author_ids=state.own_author_ids,
+            own_message_ids=state.own_message_ids,
+            own_texts=state.own_texts,
+        )
+        force_laugh_ids = _recent_non_own_message_ids(
+            state.visible_messages,
+            character_names=state.character_names,
+            own_author_ids=state.own_author_ids,
+            own_message_ids=state.own_message_ids,
+            own_texts=state.own_texts,
+            limit=5,
+        )
+        return await self._process_reactions(
+            session,
+            target,
+            reaction_candidates,
+            fresh_count=len(state.fresh_messages),
+            force_laugh_ids=force_laugh_ids,
+            character_names=state.character_names,
+            own_author_ids=state.own_author_ids,
+            own_message_ids=state.own_message_ids,
+            own_texts=state.own_texts,
+        )
+
+    def _build_reply_planning_state(self, target, state: ChannelScanState) -> ReplyPlanningState:
+        snapshot = self.topics.update(target.channel_id, state.fresh_messages)
+        context = self.memory.context(target.channel_id, limit=80)
+        user_memories = self.memory.user_context_for(context, limit=10)
+        user_notes = self.user_instructions.for_users(
+            [user.user_key for user in user_memories],
+            server_id=target.server_id,
+            channel_id=target.channel_id,
+        )
+        card_id = target.character_card or self.config.character_card
+        character_memory = self.character_memory.load(card_id)
+        return ReplyPlanningState(
+            snapshot=snapshot,
+            context=context,
+            user_memories=user_memories,
+            user_notes=user_notes,
+            character_memory=character_memory,
+        )
+
+    def _record_engage_disabled(self, target, state: ChannelScanState) -> None:
+        log.info(
+            "server=%s channel=%s visible=%s fresh=%s engage=false",
+            target.server_id,
+            target.channel_id,
+            len(state.visible_messages),
+            len(state.fresh_messages),
+        )
+        self.events.add(
+            event_type="channel_checked",
+            server_id=target.server_id,
+            channel_id=target.channel_id,
+            summary=(
+                f"Reviewed {len(state.visible_messages)} visible message(s), "
+                f"{len(state.fresh_messages)} new; Engage is off."
+            ),
+        )
+
+    def _record_planner_decision(
+        self,
+        target,
+        state: ChannelScanState,
+        planning: ReplyPlanningState,
+        decision: DraftDecision,
+    ) -> None:
+        log.info(
+            "server=%s character=%s channel=%s visible=%s fresh=%s users=%s topics=%s decision=%s",
+            target.server_id,
+            state.character.name,
+            target.channel_id,
+            len(state.visible_messages),
+            len(state.fresh_messages),
+            len(planning.user_memories),
+            planning.snapshot.top_topics,
+            decision.reason,
+        )
+        self.events.add(
+            event_type="channel_checked",
+            server_id=target.server_id,
+            channel_id=target.channel_id,
+            summary=(
+                f"Reviewed {len(state.visible_messages)} visible message(s), "
+                f"{len(state.fresh_messages)} new; {decision.reason}."
+            ),
+        )
+
+    async def _handle_reply_decision(
+        self,
+        session: DiscordWebSession,
+        target,
+        state: ChannelScanState,
+        decision: DraftDecision,
+        reply_fresh: list[MessageRecord],
+    ) -> None:
+        if not decision.should_reply or not decision.draft:
+            return
+        if self._record_output_block_if_needed(target, decision):
+            return
+        source_ids = tuple(message.message_id for message in reply_fresh)
+        if self._record_discarded_source_if_needed(target, decision, source_ids):
+            return
+        if self._record_duplicate_reply_if_needed(target, decision, source_ids):
+            return
+        if self.config.runtime_mode == "dry":
+            self._record_dry_run_decision(target, decision)
+            return
+        if _requires_approval(
+            self.config.runtime_mode,
+            decision.engagement_type,
+            auto_respond_enabled=target.auto_respond_enabled,
+        ):
+            self._queue_approval_decision(target, state, decision, source_ids)
+            return
+        await self._send_auto_reply_decision(session, target, state, decision, source_ids, reply_fresh)
+
+    def _record_output_block_if_needed(self, target, decision: DraftDecision) -> bool:
+        output_block = outgoing_block_reason(decision.draft)
+        if not output_block:
+            return False
+        log.info("output guard blocked draft channel=%s", target.channel_id)
+        self.events.add(
+            event_type="output_guard_blocked",
+            server_id=target.server_id,
+            channel_id=target.channel_id,
+            summary=output_block,
+            draft=decision.draft,
+        )
+        return True
+
+    def _record_discarded_source_if_needed(
+        self,
+        target,
+        decision: DraftDecision,
+        source_ids: tuple[str, ...],
+    ) -> bool:
+        discarded_message = discarded_approval_message(
+            self.discarded_approvals.find_overlap(
+                channel_id=target.channel_id,
+                source_message_ids=source_ids,
+            )
+        )
+        if not discarded_message:
+            return False
+        log.info("discarded approval suppressed channel=%s", target.channel_id)
+        self.events.add(
+            event_type="discarded_approval_suppressed",
+            server_id=target.server_id,
+            channel_id=target.channel_id,
+            summary=discarded_message,
+            draft=decision.draft,
+        )
+        return True
+
+    def _record_duplicate_reply_if_needed(
+        self,
+        target,
+        decision: DraftDecision,
+        source_ids: tuple[str, ...],
+    ) -> bool:
+        duplicate_message = duplicate_reply_message(
+            self.reply_ledger.find_overlap(
+                channel_id=target.channel_id,
+                source_message_ids=source_ids,
+            )
+        )
+        if not duplicate_message:
+            return False
+        log.info("duplicate reply blocked channel=%s", target.channel_id)
+        self.events.add(
+            event_type="duplicate_reply_blocked",
+            server_id=target.server_id,
+            channel_id=target.channel_id,
+            summary=duplicate_message,
+            draft=decision.draft,
+        )
+        return True
+
+    def _record_dry_run_decision(self, target, decision: DraftDecision) -> None:
+        log.info("dry mode draft for %s: %s", target.channel_id, decision.draft)
+        self.events.add(
+            event_type="dry_run",
+            server_id=target.server_id,
+            channel_id=target.channel_id,
+            summary=decision.reason,
+            draft=decision.draft,
+        )
+
+    def _queue_approval_decision(
+        self,
+        target,
+        state: ChannelScanState,
+        decision: DraftDecision,
+        source_ids: tuple[str, ...],
+    ) -> None:
+        approval_reason = _approval_gate_reason(
+            self.config.runtime_mode,
+            decision.engagement_type,
+            auto_respond_enabled=target.auto_respond_enabled,
+        )
+        approval_summary = (
+            f"{decision.reason}; queued for approval because {approval_reason}"
+            if approval_reason
+            else decision.reason
+        )
+        existing = self.approvals.find_source_overlap(
+            channel_id=target.channel_id,
+            source_message_ids=source_ids,
+        )
+        if existing:
+            self.events.add(
+                event_type="duplicate_reply_blocked",
+                server_id=target.server_id,
+                channel_id=target.channel_id,
+                summary=(
+                    "Duplicate approval skipped: an approval is already queued "
+                    "for one or more of the same source messages."
+                ),
+                draft=decision.draft,
+            )
+            return
+        item = self.approvals.add(
+            server_id=target.server_id,
+            channel_id=target.channel_id,
+            character_name=state.character.name,
+            engagement_type=decision.engagement_type,
+            reason=approval_summary,
+            draft=decision.draft,
+            source_messages=state.fresh_messages,
+        )
+        log.info("queued approval=%s channel=%s", item.approval_id, target.channel_id)
+        self.events.add(
+            event_type="approval_queued",
+            server_id=target.server_id,
+            channel_id=target.channel_id,
+            summary=approval_summary,
+            draft=decision.draft,
+        )
+
+    async def _send_auto_reply_decision(
+        self,
+        session: DiscordWebSession,
+        target,
+        state: ChannelScanState,
+        decision: DraftDecision,
+        source_ids: tuple[str, ...],
+        reply_fresh: list[MessageRecord],
+    ) -> None:
+        guard_reason = _auto_reply_guard_reason(
+            self.config,
+            self.reply_ledger,
+            channel_id=target.channel_id,
+            visible_messages=state.visible_messages,
+            character_names=state.character_names,
+            own_author_ids=state.own_author_ids,
+            own_message_ids=state.own_message_ids,
+            own_texts=state.own_texts,
+        )
+        if guard_reason:
+            log.info(
+                "auto reply guard blocked server=%s channel=%s reason=%s",
+                target.server_id,
+                target.channel_id,
+                guard_reason,
+            )
+            self.events.add(
+                event_type="reply_guard_blocked",
+                server_id=target.server_id,
+                channel_id=target.channel_id,
+                summary=guard_reason,
+                draft=decision.draft,
+            )
+            return
+        delivery = await session.send_message(
+            decision.draft,
+            typing_enabled=self.config.typing_indicator_enabled,
+            typing_min_seconds=self.config.typing_min_seconds,
+            typing_max_seconds=self.config.typing_max_seconds,
+            typing_chars_per_second=self.config.typing_chars_per_second,
+        )
+        target_message = reply_fresh[-1] if reply_fresh else None
+        self.events.add(
+            event_type="message_sent",
+            server_id=target.server_id,
+            channel_id=target.channel_id,
+            summary=decision.reason,
+            draft=decision.draft,
+            message_id=str(delivery.get("message_id") or ""),
+            target_message_id=str(source_ids[-1] if source_ids else ""),
+            target_author=str(getattr(target_message, "author", "") or ""),
+        )
+        self.reply_ledger.record(
+            server_id=target.server_id,
+            channel_id=target.channel_id,
+            mode="auto",
+            draft=decision.draft,
+            source_message_ids=source_ids,
+            message_id=str(delivery.get("message_id") or ""),
+        )
 
     async def _channel_pacing_delay(self) -> None:
         lower = max(0.0, self.config.scanner_min_channel_delay_seconds)
@@ -793,495 +1005,20 @@ class NhiZuesRunner:
         own_message_ids: set[str] | None = None,
         own_texts: set[str] | None = None,
     ) -> set[str]:
-        if not getattr(target, "react_enabled", False):
-            return set()
-        if self.config.runtime_mode == "dry":
-            self.events.add(
-                event_type="reaction_skipped",
-                server_id=target.server_id,
-                channel_id=target.channel_id,
-                summary=(
-                    "React is enabled, but Dry Mode blocks Discord reactions. "
-                    f"fresh={fresh_count}, candidates={len(candidates)}."
-                ),
-            )
-            return set()
-        if self.config.reaction_max_per_channel <= 0:
-            self.events.add(
-                event_type="reaction_skipped",
-                server_id=target.server_id,
-                channel_id=target.channel_id,
-                summary=(
-                    "React is enabled, but the per-scan reaction cap is 0. "
-                    f"fresh={fresh_count}, candidates={len(candidates)}."
-                ),
-            )
-            return set()
-
-        reacted_message_ids: set[str] = set()
-        ledgered = 0
-        ineligible = 0
-        attempted = 0
-        already_present = 0
-        failed = 0
-        own_skipped = 0
-        cap_reached = False
-        last_reason = ""
-        force_laugh_ids = force_laugh_ids or set()
-        own_author_ids = own_author_ids or set()
-        force_window_enabled = (
-            bool(force_laugh_ids)
-            and float(getattr(self.config, "reaction_force_laugh_percent", 0.0) or 0.0) > 0
-        )
-        force_window_cap = _reaction_window_cap(
-            self.config.reaction_force_laugh_percent,
-            len(force_laugh_ids),
-        )
-        force_window_used = (
-            sum(
-                1
-                for message_id in force_laugh_ids
-                if self.reaction_ledger.has_reacted_to_message(
-                    channel_id=target.channel_id,
-                    message_id=message_id,
-                )
-            )
-            if force_window_enabled
-            else 0
-        )
-        force_window_remaining = max(0, force_window_cap - force_window_used)
-        force_window_capped = 0
-        for message in candidates:
-            if len(reacted_message_ids) >= self.config.reaction_max_per_channel:
-                cap_reached = True
-                break
-            in_force_window = message.message_id in force_laugh_ids
-            if _is_own_message(
-                message,
-                character_names=character_names,
-                own_author_ids=own_author_ids,
-                own_message_ids=own_message_ids,
-                own_texts=own_texts,
-            ):
-                own_skipped += 1
-                last_reason = "message is from the configured character/account"
-                continue
-            if self.reaction_ledger.has_reacted_to_message(
-                channel_id=message.channel_id,
-                message_id=message.message_id,
-            ):
-                ledgered += 1
-                continue
-            if force_window_enabled and in_force_window and force_window_remaining <= 0:
-                force_window_capped += 1
-                last_reason = (
-                    "rolling reaction percentage cap reached for the recent non-own message window"
-                )
-                continue
-            force_window_fill = force_window_enabled and in_force_window and force_window_remaining > 0
-            should_react, emoji, reason = should_auto_react(
-                message.text,
-                threshold=self.config.reaction_threshold,
-                sample_percent=self.config.reaction_sample_percent,
-                force_laugh_percent=(
-                    100.0
-                    if force_window_fill
-                    else 0.0
-                ),
-                emoji_override=self.config.reaction_emoji_override,
-            )
-            if not should_react:
-                ineligible += 1
-                last_reason = reason
-                continue
-            if force_window_fill:
-                reason = _force_window_fill_reason(
-                    reason,
-                    self.config.reaction_force_laugh_percent,
-                )
-            try:
-                attempted += 1
-                result = await session.add_reaction(message.message_id, emoji)
-            except Exception as exc:
-                failed += 1
-                self.events.add(
-                    event_type="reaction_failed",
-                    server_id=target.server_id,
-                    channel_id=target.channel_id,
-                    summary=f"Could not add {emoji} reaction: {exc}",
-                    draft=message.text,
-                )
-                return reacted_message_ids
-            if result.get("already_present"):
-                already_present += 1
-                self.reaction_ledger.record(
-                    server_id=target.server_id,
-                    message=message,
-                    emoji=emoji,
-                    reason=f"already present from this account; {reason}",
-                )
-                if force_window_enabled and in_force_window:
-                    force_window_remaining = max(0, force_window_remaining - 1)
-                self.events.add(
-                    event_type="reaction_already_present",
-                    server_id=target.server_id,
-                    channel_id=target.channel_id,
-                    summary=(
-                        f"{emoji} reaction was already present from this account on "
-                        f"{message.author}; path={result.get('path') or 'existing'}."
-                    ),
-                    draft=message.text,
-                    message_id=message.message_id,
-                    target_message_id=message.message_id,
-                    target_author=message.author,
-                    emoji=emoji,
-                )
-                continue
-            if not result.get("applied"):
-                failed += 1
-                self.events.add(
-                    event_type="reaction_failed",
-                    server_id=target.server_id,
-                    channel_id=target.channel_id,
-                    summary=(
-                        f"Could not verify {emoji} reaction on {message.author}; "
-                        f"path={result.get('path') or 'unverified'}."
-                    ),
-                    draft=message.text,
-                    message_id=message.message_id,
-                    target_message_id=message.message_id,
-                    target_author=message.author,
-                    emoji=emoji,
-                )
-                continue
-
-            self.reaction_ledger.record(
-                server_id=target.server_id,
-                message=message,
-                emoji=emoji,
-                reason=reason,
-            )
-            self.events.add(
-                event_type="reaction_added",
-                server_id=target.server_id,
-                channel_id=target.channel_id,
-                summary=(
-                    f"Added {emoji} reaction to {message.author}: "
-                    f"{reason}; path={result.get('path') or 'existing'}."
-                ),
-                draft=message.text,
-                message_id=message.message_id,
-                target_message_id=message.message_id,
-                target_author=message.author,
-                emoji=emoji,
-            )
-            reacted_message_ids.add(message.message_id)
-            if force_window_enabled and in_force_window:
-                force_window_remaining = max(0, force_window_remaining - 1)
-        if not reacted_message_ids:
-            self.events.add(
-                event_type="reaction_scan",
-                server_id=target.server_id,
-                channel_id=target.channel_id,
-                summary=(
-                    "React scan made no new reaction. "
-                    f"fresh={fresh_count}, candidates={len(candidates)}, ledgered={ledgered}, "
-                    f"ineligible={ineligible}, attempted={attempted}, already_present={already_present}, "
-                    f"failed={failed}, own_skipped={own_skipped}, cap_reached={str(cap_reached).lower()}, "
-                    f"threshold={self.config.reaction_threshold}, sample={self.config.reaction_sample_percent:g}%"
-                    f", force_recent={self.config.reaction_force_laugh_percent:g}%"
-                    f", force_window={force_window_used}/{force_window_cap}/{len(force_laugh_ids)}"
-                    f", force_window_capped={force_window_capped}"
-                    + (f", last_skip={last_reason}" if last_reason else "")
-                    + "."
-                ),
-            )
-        return reacted_message_ids
-
-
-def _without_own_messages(
-    messages,
-    *,
-    character_names: tuple[str, ...],
-    own_author_ids: set[str] | None = None,
-    own_message_ids: set[str] | None = None,
-    own_texts: set[str] | None = None,
-):
-    return own_identity.without_own_messages(
-        messages,
-        character_names=character_names,
-        own_author_ids=own_author_ids,
-        own_message_ids=own_message_ids,
-        own_texts=own_texts,
-    )
-
-
-def _recent_reaction_candidates(
-    visible_messages,
-    fresh_messages,
-    *,
-    character_names: tuple[str, ...],
-    own_author_ids: set[str] | None = None,
-    own_message_ids: set[str] | None = None,
-    own_texts: set[str] | None = None,
-    max_visible: int = 12,
-):
-    candidates = []
-    seen_ids = set()
-    for message in _without_own_messages(
-        fresh_messages,
-        character_names=character_names,
-        own_author_ids=own_author_ids,
-        own_message_ids=own_message_ids,
-        own_texts=own_texts,
-    ):
-        if message.message_id in seen_ids:
-            continue
-        candidates.append(message)
-        seen_ids.add(message.message_id)
-    for message in reversed(
-        _without_own_messages(
-            visible_messages,
+        return await _process_reactions_service(
+            config=self.config,
+            events=self.events,
+            reaction_ledger=self.reaction_ledger,
+            session=session,
+            target=target,
+            candidates=candidates,
+            fresh_count=fresh_count,
+            force_laugh_ids=force_laugh_ids,
             character_names=character_names,
             own_author_ids=own_author_ids,
             own_message_ids=own_message_ids,
             own_texts=own_texts,
         )
-    ):
-        if len(candidates) >= max_visible:
-            break
-        if message.message_id in seen_ids:
-            continue
-        candidates.append(message)
-        seen_ids.add(message.message_id)
-    return candidates
-
-
-def _recent_non_own_message_ids(
-    visible_messages,
-    *,
-    character_names: tuple[str, ...],
-    own_author_ids: set[str] | None = None,
-    own_message_ids: set[str] | None = None,
-    own_texts: set[str] | None = None,
-    limit: int,
-) -> set[str]:
-    message_ids: list[str] = []
-    for message in reversed(
-        _without_own_messages(
-            visible_messages,
-            character_names=character_names,
-            own_author_ids=own_author_ids,
-            own_message_ids=own_message_ids,
-            own_texts=own_texts,
-        )
-    ):
-        message_id = str(getattr(message, "message_id", "") or "")
-        if not message_id or message_id in message_ids:
-            continue
-        message_ids.append(message_id)
-        if len(message_ids) >= limit:
-            break
-    return set(message_ids)
-
-
-def _reaction_window_cap(percent: float, window_size: int) -> int:
-    percent = max(0.0, min(float(percent or 0.0), 100.0))
-    window_size = max(0, int(window_size or 0))
-    if percent <= 0.0 or window_size <= 0:
-        return 0
-    return min(window_size, max(1, math.ceil(window_size * (percent / 100.0))))
-
-
-def _force_window_fill_reason(reason: str, percent: float) -> str:
-    label = f"force reaction target fill ({float(percent or 0.0):g}% target)"
-    return str(reason or "").replace("force reaction sample accepted (100%)", label)
-
-
-def _auto_reply_guard_reason(
-    config: AppConfig,
-    reply_ledger: ReplyLedger,
-    *,
-    channel_id: str,
-    visible_messages,
-    character_names: tuple[str, ...],
-    own_author_ids: set[str] | None = None,
-    own_message_ids: set[str] | None = None,
-    own_texts: set[str] | None = None,
-    now: datetime | None = None,
-) -> str:
-    now = now or datetime.now(timezone.utc)
-    cooldown_seconds = max(0.0, float(getattr(config, "reply_cooldown_seconds", 0.0) or 0.0))
-    if cooldown_seconds:
-        latest = reply_ledger.latest_for_channel(channel_id=channel_id)
-        latest_at = _reply_created_at(latest)
-        if latest_at is not None:
-            age_seconds = (now - latest_at).total_seconds()
-            if age_seconds < cooldown_seconds:
-                return (
-                    "Auto reply blocked by channel cooldown: "
-                    f"last sent {_format_seconds(age_seconds)} ago; "
-                    f"cooldown is {_format_seconds(cooldown_seconds)}."
-                )
-
-    max_per_window = max(0, int(getattr(config, "reply_max_per_window", 0) or 0))
-    window_seconds = max(60.0, float(getattr(config, "reply_window_seconds", 3600.0) or 3600.0))
-    if max_per_window:
-        recent = reply_ledger.recent_for_channel(
-            channel_id=channel_id,
-            window_seconds=window_seconds,
-            now=now,
-        )
-        if len(recent) >= max_per_window:
-            return (
-                "Auto reply blocked by channel rate limit: "
-                f"{len(recent)} sent in the last {_format_seconds(window_seconds)}; "
-                f"limit is {max_per_window}."
-            )
-
-    if bool(getattr(config, "reply_require_intervening_user", True)):
-        streak_reason = _own_message_streak_guard_reason(
-            visible_messages,
-            character_names=character_names,
-            own_author_ids=own_author_ids,
-            own_message_ids=own_message_ids,
-            own_texts=own_texts,
-        )
-        if streak_reason:
-            return streak_reason
-
-    return ""
-
-
-def _own_message_streak_guard_reason(
-    messages,
-    *,
-    character_names: tuple[str, ...],
-    own_author_ids: set[str] | None = None,
-    own_message_ids: set[str] | None = None,
-    own_texts: set[str] | None = None,
-) -> str:
-    visible = list(messages or [])
-    last_own_index = -1
-    for index, message in enumerate(visible):
-        if _is_own_message(
-            message,
-            character_names=character_names,
-            own_author_ids=own_author_ids,
-            own_message_ids=own_message_ids,
-            own_texts=own_texts,
-        ):
-            last_own_index = index
-    if last_own_index < 0:
-        return ""
-    for message in visible[last_own_index + 1 :]:
-        if not _is_own_message(
-            message,
-            character_names=character_names,
-            own_author_ids=own_author_ids,
-            own_message_ids=own_message_ids,
-            own_texts=own_texts,
-        ):
-            return ""
-    return (
-        "Auto reply blocked because the last visible message in this channel is already "
-        "from the character. Waiting for another user before posting again."
-    )
-
-
-def _reply_created_at(reply) -> datetime | None:
-    if reply is None:
-        return None
-    try:
-        parsed = datetime.fromisoformat(str(reply.created_at).replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
-
-
-def _own_author_ids_from_messages(
-    messages,
-    *,
-    character_names: tuple[str, ...],
-    own_texts: set[str] | None = None,
-) -> set[str]:
-    return own_identity.own_author_ids_from_messages(
-        messages,
-        character_names=character_names,
-        own_texts=own_texts,
-    )
-
-
-def _is_own_message(
-    message,
-    *,
-    character_names: tuple[str, ...],
-    own_author_ids: set[str] | None = None,
-    own_message_ids: set[str] | None = None,
-    own_texts: set[str] | None = None,
-) -> bool:
-    return own_identity.is_own_message(
-        message,
-        character_names=character_names,
-        own_author_ids=own_author_ids,
-        own_message_ids=own_message_ids,
-        own_texts=own_texts,
-    )
-
-
-def _is_character_author(author: str, character_names: tuple[str, ...]) -> bool:
-    return own_identity.is_character_author(author, character_names)
-
-
-def _normalize_author(value: str) -> str:
-    return own_identity.normalize_author(value)
-
-
-def _format_seconds(seconds: float) -> str:
-    value = max(0, int(round(float(seconds or 0))))
-    minutes, remainder = divmod(value, 60)
-    if minutes <= 0:
-        return f"{remainder}s"
-    hours, minutes = divmod(minutes, 60)
-    if hours:
-        return f"{hours}h {minutes}m"
-    return f"{minutes}m {remainder:02d}s"
-
-
-def _requires_approval(
-    runtime_mode: str,
-    engagement_type: str,
-    *,
-    auto_respond_enabled: bool,
-) -> bool:
-    mode = str(runtime_mode or "dry").lower()
-    kind = str(engagement_type or "").lower()
-    if mode == "live_fire":
-        return True
-    if not auto_respond_enabled:
-        return True
-    if mode == "semi_auto":
-        return kind in {"proactive", "manual"}
-    return False
-
-
-def _approval_gate_reason(
-    runtime_mode: str,
-    engagement_type: str,
-    *,
-    auto_respond_enabled: bool,
-) -> str:
-    mode = str(runtime_mode or "dry").lower()
-    kind = str(engagement_type or "").lower()
-    if mode == "live_fire":
-        return "Live Fire requires review for every draft"
-    if not auto_respond_enabled:
-        return "Auto is off for this channel"
-    if mode == "semi_auto" and kind in {"proactive", "manual"}:
-        return "Semi Auto reviews new starts and manual drafts"
-    return ""
 
 
 def _stop_requested(stop_event) -> bool:

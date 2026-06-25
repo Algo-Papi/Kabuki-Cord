@@ -50,6 +50,38 @@ class DiscordTextTests(unittest.TestCase):
 
         self.assertEqual("i push back a bit on fruit first.", _draft_with_reply_mention(BAD_DRAFT, [source]))
 
+    def test_draft_with_reply_mention_replaces_clean_textual_prefix_with_real_mention(self) -> None:
+        source = MessageRecord(
+            server_id="server",
+            channel_id="channel",
+            message_id="chat-messages-1-1",
+            author=BAD_AUTHOR,
+            author_id="12345",
+            text="I'll usually start with fruit",
+            observed_at=datetime(2026, 6, 23, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(
+            "<@12345> i push back a bit on fruit first.",
+            _draft_with_reply_mention("@Obvs.TheVillain i push back a bit on fruit first.", [source]),
+        )
+
+    def test_draft_with_reply_mention_does_not_double_prefix_existing_discord_mention(self) -> None:
+        source = MessageRecord(
+            server_id="server",
+            channel_id="channel",
+            message_id="chat-messages-1-1",
+            author="Rook",
+            author_id="12345",
+            text="I'll usually start with fruit",
+            observed_at=datetime(2026, 6, 23, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(
+            "<@!12345> i push back a bit on fruit first.",
+            _draft_with_reply_mention("<@!12345> i push back a bit on fruit first.", [source]),
+        )
+
     def test_prompt_message_lines_hide_scraped_metadata(self) -> None:
         line = _format_message_lines(
             [

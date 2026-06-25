@@ -4,16 +4,13 @@ import asyncio
 import hashlib
 import ipaddress
 import json
-import math
 import mimetypes
 import os
-import re
 import secrets as token_secrets
 import subprocess
 import sys
 import threading
 import time
-import urllib.error
 import urllib.request
 import webbrowser
 from dataclasses import asdict
@@ -25,6 +22,20 @@ from urllib.parse import unquote, urlparse
 
 from dotenv import load_dotenv
 
+from .approval_state import (
+    approval_config_indexes as _approval_config_indexes,
+    approval_items_state,
+)
+from .approval_workflow import (
+    approval_source_messages as _approval_source_messages_impl,
+    clear_approval_queue as _clear_approval_queue,
+    discard_approval as _discard_approval,
+    last_approval_source_message as _last_approval_source_message_impl,
+    memory_context as _memory_context_impl,
+    own_source_block_message as _own_source_block_message_impl,
+    server_character_card as _server_character_card_impl,
+    update_approval_draft as _update_approval_draft,
+)
 from .approvals import ApprovalQueue
 from .browser import DiscordWebSession, discord_login_blocker_message
 from .budget import BudgetManager
@@ -37,13 +48,31 @@ from .events import EventLog
 from .llm import ReplyPlanner
 from .memory import ConversationMemory
 from .models import MessageRecord
-from . import own_identity
+from .model_catalog import fetch_openai_models, model_catalog_state
+from .message_view import (
+    draft_with_reply_mention as _draft_with_reply_mention,
+    manual_source_messages as _manual_source_messages,
+    message_preview as _message_preview,
+    message_record_user_key as _message_record_user_key,
+    message_row_sort_key as _message_row_sort_key,
+    message_user_key as _message_user_key,
+    reply_mention_prefix as _reply_mention_prefix,
+    sorted_message_rows as _sorted_message_rows,
+    summarize_messages as _summarize_messages,
+)
 from .output_guard import outgoing_block_reason
 from .reactions import suggest_emoji_reaction
+from .redaction import redact_secret_text as _redact_secret_text
 from .reply_ledger import ReplyLedger, duplicate_reply_message
-from .runner import NhiZuesRunner
+from .runtime_controller import RuntimeController
 from .safety_review import SafetyReviewQueue
+from .scan_estimates import (
+    estimated_channel_scan_seconds as _estimated_channel_scan_seconds,
+    estimated_loop_seconds as _estimated_loop_seconds,
+)
 from .secrets import discord_credential_status, get_discord_credentials, set_discord_credentials
+from .server_sync import merge_channels as _merge_channels_impl
+from .server_sync import merge_discovered_servers
 from .user_instructions import UserInstructionStore
 
 
@@ -60,28 +89,6 @@ UPDATE_STATE_CACHE: dict[str, object] | None = None
 UPDATE_STATE_CACHE_AT = 0.0
 UPDATE_STATE_CACHE_LOCK = threading.Lock()
 UPDATE_STATE_CACHE_SECONDS = 300.0
-OPENAI_MODEL_FALLBACKS = [
-    {
-        "id": "gpt-5.4-nano",
-        "label": "GPT-5.4 nano - lowest-cost default",
-        "source": "fallback",
-    },
-    {
-        "id": "gpt-5.4-mini",
-        "label": "GPT-5.4 mini - balanced low-cost drafting",
-        "source": "fallback",
-    },
-    {
-        "id": "gpt-5.4",
-        "label": "GPT-5.4 - stronger reasoning",
-        "source": "fallback",
-    },
-    {
-        "id": "gpt-5.5",
-        "label": "GPT-5.5 - strongest, higher cost",
-        "source": "fallback",
-    },
-]
 
 
 def _is_loopback_host(host: str) -> bool:
@@ -408,426 +415,7 @@ class GuiHandler(BaseHTTPRequestHandler):
         return _is_loopback_host(host) and (port is None or port == server_port)
 
 
-class RuntimeController:
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._thread: threading.Thread | None = None
-        self._stop = threading.Event()
-        self._running = False
-        self._last_started_at: float | None = None
-        self._last_run_at: float | None = None
-        self._last_error: str = ""
-        self._phase = "idle"
-        self._scan = self._empty_scan()
-        self._resume_loop = {"cursor": 0, "completed_loops": 0}
-
-    def start(self) -> None:
-        with self._lock:
-            self._stop.clear()
-            if self._thread and self._thread.is_alive():
-                self._running = True
-                _record_runtime_event("runtime_start_requested", "Scanner was already running.")
-                return
-            self._running = True
-            self._last_started_at = time.time()
-            self._last_error = ""
-            self._phase = "starting"
-            self._scan = self._empty_scan("starting")
-            self._thread = threading.Thread(target=self._loop, name="kabuki-runtime", daemon=True)
-            self._thread.start()
-        _record_runtime_event("runtime_started", "Scanner start requested.")
-
-    def start_with_discord_handoff(self) -> None:
-        with self._lock:
-            self._stop.clear()
-            if self._thread and self._thread.is_alive():
-                self._running = True
-                _record_runtime_event("runtime_signin_handoff_requested", "Scanner was already running.")
-                return
-            self._running = True
-            self._last_started_at = time.time()
-            self._last_error = ""
-            self._phase = "waiting_for_discord_login"
-            self._scan = self._empty_scan("waiting_for_discord_login")
-            self._thread = threading.Thread(
-                target=self._login_handoff_loop,
-                name="kabuki-runtime-login-handoff",
-                daemon=True,
-            )
-            self._thread.start()
-        _record_runtime_event(
-            "runtime_signin_handoff_started",
-            "Visible Discord sign-in handoff started. Complete Discord login in that window.",
-        )
-
-    def pause(self, *, wait: bool = False, timeout: float = 10.0) -> None:
-        thread: threading.Thread | None = None
-        with self._lock:
-            self._running = False
-            self._stop.set()
-            self._phase = "stopping"
-            self._remember_resume_loop_from_scan_locked()
-            self._scan = self._empty_scan("stopping")
-            thread = self._thread
-        _record_runtime_event("runtime_paused", "Scanner pause requested.")
-        if wait and thread and thread.is_alive() and thread is not threading.current_thread():
-            thread.join(timeout=timeout)
-
-    def state(self) -> dict:
-        with self._lock:
-            thread_alive = bool(self._thread and self._thread.is_alive())
-            running = self._running and thread_alive
-            return {
-                "running": running,
-                "paused": not running,
-                "last_started_at": self._last_started_at,
-                "last_run_at": self._last_run_at,
-                "last_error": self._last_error,
-                "phase": self._phase if running else "idle",
-                "scan": self._copy_scan() if running else self._empty_scan(),
-            }
-
-    def _set_phase(self, phase: str) -> None:
-        with self._lock:
-            self._phase = phase
-
-    def _loop(self) -> None:
-        acquired = False
-        try:
-            config = load_config()
-            if not config.channels:
-                self._last_error = "No channels are enabled for Observe."
-                _record_runtime_event("runtime_error", self._last_error)
-                return
-            acquired = DISCORD_SESSION_LOCK.acquire(blocking=False)
-            if not acquired:
-                self._last_error = "Discord browser profile is busy."
-                _record_runtime_event("runtime_error", self._last_error)
-                return
-            self._set_phase("running")
-            try:
-                asyncio.run(
-                    self._runner(config).run_until_stopped(
-                        self._stop,
-                        on_cycle=self._mark_cycle_complete,
-                        on_targets_planned=self._mark_targets_planned,
-                        on_target_start=self._mark_target_start,
-                        on_target_complete=self._mark_target_complete,
-                    )
-                )
-                if self._stop.is_set():
-                    self._last_error = ""
-                    _record_runtime_event("runtime_stopped", "Scanner stopped cleanly.")
-            finally:
-                if acquired:
-                    DISCORD_SESSION_LOCK.release()
-        except Exception as exc:
-            self._last_error = _redact_secret_text(str(exc))
-            _record_runtime_event("runtime_error", self._last_error)
-        finally:
-            with self._lock:
-                self._running = False
-                self._phase = "idle"
-                self._scan = self._empty_scan()
-
-    def _login_handoff_loop(self) -> None:
-        acquired = False
-        try:
-            config = load_config()
-            if not config.channels:
-                self._last_error = "No channels are enabled for Observe."
-                _record_runtime_event("runtime_error", self._last_error)
-                return
-            acquired = DISCORD_SESSION_LOCK.acquire(blocking=False)
-            if not acquired:
-                self._last_error = "Discord browser profile is busy."
-                _record_runtime_event("runtime_error", self._last_error)
-                return
-            asyncio.run(self._run_login_handoff(config))
-            if self._stop.is_set():
-                self._last_error = ""
-                _record_runtime_event("runtime_stopped", "Scanner stopped cleanly.")
-        except Exception as exc:
-            self._last_error = _redact_secret_text(str(exc))
-            _record_runtime_event("runtime_error", self._last_error)
-        finally:
-            if acquired:
-                DISCORD_SESSION_LOCK.release()
-            with self._lock:
-                self._running = False
-                self._phase = "idle"
-                self._scan = self._empty_scan()
-
-    async def _run_login_handoff(self, config: AppConfig) -> None:
-        async with DiscordWebSession(
-            config.profile_dir,
-            browser_channel=config.browser_channel,
-            headless=False,
-        ) as session:
-            self._set_phase("waiting_for_discord_login")
-            await session.show_for_human()
-            await session.open_home()
-            _record_runtime_event(
-                "runtime_waiting_for_discord_login",
-                "Waiting for manual Discord sign-in in the visible browser window.",
-            )
-            while not self._stop.is_set():
-                if await session.is_logged_in():
-                    break
-                await asyncio.sleep(1.0)
-            if self._stop.is_set():
-                return
-            self._last_error = ""
-            self._set_phase("running")
-            _record_runtime_event(
-                "runtime_discord_login_ready",
-                "Discord sign-in completed; scanner is continuing in the same browser session.",
-            )
-            if config.headless:
-                await session.hide_for_automation()
-            await self._runner(config).run_until_stopped_in_session(
-                session,
-                self._stop,
-                on_cycle=self._mark_cycle_complete,
-                on_targets_planned=self._mark_targets_planned,
-                on_target_start=self._mark_target_start,
-                on_target_complete=self._mark_target_complete,
-            )
-
-    def _mark_cycle_complete(self, sleep_seconds: float | None = None, loop_state: dict | None = None) -> None:
-        self._last_run_at = time.time()
-        self._last_error = ""
-        self._set_phase("running")
-        now = time.time()
-        sleep_value = max(0.0, float(sleep_seconds or 0.0))
-        with self._lock:
-            self._scan = {
-                **self._scan,
-                "status": "resting",
-                "current": None,
-                "next": self._scan.get("next"),
-                "upcoming": self._scan.get("upcoming", []),
-                "next_scan_at": now + sleep_value if sleep_value else None,
-                "current_started_at": None,
-                "current_estimated_done_at": None,
-                "loop": self._loop_payload(loop_state, status="resting"),
-                "updated_at": now,
-            }
-            self._remember_resume_loop_locked(loop_state)
-
-    def _mark_targets_planned(self, targets, loop_state: dict | None = None) -> None:
-        planned = [self._target_payload(target) for target in targets]
-        now = time.time()
-        with self._lock:
-            self._scan = {
-                **self._scan,
-                "status": "queued" if planned else "waiting",
-                "current": None,
-                "next": planned[0] if planned else None,
-                "upcoming": planned[:5],
-                "planned_count": len(planned),
-                "next_scan_at": now if planned else None,
-                "current_started_at": None,
-                "current_estimated_done_at": None,
-                "loop": self._loop_payload(loop_state, status="queued"),
-                "updated_at": now,
-            }
-            self._remember_resume_loop_locked(loop_state)
-
-    def _mark_target_start(self, target, index: int, targets, loop_state: dict | None = None) -> None:
-        remaining = [self._target_payload(item) for item in list(targets)[index + 1 : index + 6]]
-        now = time.time()
-        with self._lock:
-            self._scan = {
-                **self._scan,
-                "status": "scanning",
-                "current": self._target_payload(target),
-                "next": remaining[0] if remaining else None,
-                "upcoming": remaining,
-                "planned_count": len(targets),
-                "next_scan_at": None,
-                "current_started_at": now,
-                "current_estimated_done_at": now + self._estimated_target_seconds(),
-                "loop": self._loop_payload(loop_state, status="scanning"),
-                "updated_at": now,
-            }
-            self._remember_resume_loop_locked(loop_state)
-
-    def _mark_target_complete(
-        self,
-        target,
-        visible_count: int,
-        fresh_count: int,
-        loop_state: dict | None = None,
-    ) -> None:
-        completed = {
-            **self._target_payload(target),
-            "visible_messages": int(visible_count or 0),
-            "fresh_messages": int(fresh_count or 0),
-        }
-        with self._lock:
-            self._scan = {
-                **self._scan,
-                "status": "completed_channel",
-                "current": None,
-                "last_completed": completed,
-                "current_started_at": None,
-                "current_estimated_done_at": None,
-                "loop": self._loop_payload(loop_state, status="completed_channel"),
-                "updated_at": time.time(),
-            }
-            self._remember_resume_loop_locked(loop_state)
-
-    def _copy_scan(self) -> dict:
-        return json.loads(json.dumps(self._scan))
-
-    @staticmethod
-    def _empty_scan(status: str = "idle") -> dict:
-        return {
-            "status": status,
-            "current": None,
-            "next": None,
-            "upcoming": [],
-            "last_completed": None,
-            "planned_count": 0,
-            "next_scan_at": None,
-            "current_started_at": None,
-            "current_estimated_done_at": None,
-            "loop": {
-                "current_loop": 0,
-                "completed_loops": 0,
-                "total_channels": 0,
-                "cursor": 0,
-                "completed_in_loop": 0,
-                "remaining_channels": 0,
-                "estimated_loop_seconds": 0,
-                "estimated_remaining_seconds": 0,
-                "estimated_complete_at": None,
-            },
-            "updated_at": time.time(),
-        }
-
-    @staticmethod
-    def _target_payload(target) -> dict:
-        return {
-            "server_id": str(getattr(target, "server_id", "") or ""),
-            "server_label": str(getattr(target, "server_label", "") or getattr(target, "server_id", "") or ""),
-            "channel_id": str(getattr(target, "channel_id", "") or ""),
-            "channel_label": str(getattr(target, "label", "") or getattr(target, "channel_id", "") or ""),
-            "safety_review_enabled": bool(getattr(target, "safety_review_enabled", False)),
-        }
-
-    @staticmethod
-    def _estimated_target_seconds() -> float:
-        try:
-            config = load_config()
-            return _estimated_channel_scan_seconds(config)
-        except Exception:
-            return 45.0
-
-    def _loop_payload(self, loop_state: dict | None, *, status: str) -> dict:
-        try:
-            config = load_config()
-            total = int((loop_state or {}).get("total_channels") or len(config.channels) or 0)
-            cursor = int((loop_state or {}).get("cursor") or 0)
-            completed_in_loop = int((loop_state or {}).get("completed_in_loop") or 0)
-            completed_in_loop = max(0, min(completed_in_loop, total))
-            remaining = max(0, total - completed_in_loop)
-            if status == "scanning" and remaining == 0 and total:
-                remaining = 1
-            loop_seconds = _estimated_loop_seconds(config, total)
-            remaining_seconds = _estimated_loop_seconds(config, remaining)
-            current_loop = int((loop_state or {}).get("current_loop") or 0)
-            completed_loops = int((loop_state or {}).get("completed_loops") or 0)
-            if not current_loop and total:
-                current_loop = completed_loops + 1
-            return {
-                "current_loop": current_loop,
-                "completed_loops": completed_loops,
-                "total_channels": total,
-                "cursor": max(0, min(cursor, total)) if total else 0,
-                "position": int((loop_state or {}).get("position") or 0),
-                "completed_in_loop": completed_in_loop,
-                "remaining_channels": remaining,
-                "estimated_loop_seconds": loop_seconds,
-                "estimated_remaining_seconds": remaining_seconds,
-                "estimated_complete_at": time.time() + remaining_seconds if remaining else time.time(),
-            }
-        except Exception:
-            return self._empty_scan()["loop"]
-
-    def _runner(self, config: AppConfig) -> NhiZuesRunner:
-        with self._lock:
-            resume = dict(self._resume_loop)
-        return NhiZuesRunner(
-            config,
-            start_cursor=int(resume.get("cursor") or 0),
-            completed_loop_count=int(resume.get("completed_loops") or 0),
-        )
-
-    def _remember_resume_loop_locked(self, loop_state: dict | None) -> None:
-        if not loop_state:
-            return
-        total = int((loop_state or {}).get("total_channels") or 0)
-        cursor = int((loop_state or {}).get("cursor") or 0)
-        completed_loops = int((loop_state or {}).get("completed_loops") or 0)
-        self._resume_loop = {
-            "cursor": max(0, min(cursor, total)) if total else 0,
-            "completed_loops": max(0, completed_loops),
-        }
-
-    def _remember_resume_loop_from_scan_locked(self) -> None:
-        loop = self._scan.get("loop") if isinstance(self._scan, dict) else {}
-        if not isinstance(loop, dict):
-            return
-        total = int(loop.get("total_channels") or 0)
-        if total <= 0:
-            return
-        cursor = int(loop.get("cursor") or 0)
-        completed_loops = int(loop.get("completed_loops") or 0)
-        self._resume_loop = {
-            "cursor": max(0, min(cursor, total)),
-            "completed_loops": max(0, completed_loops),
-        }
-
-
-def _estimated_channel_scan_seconds(config: AppConfig) -> float:
-    return max(15.0, min(90.0, float(config.scanner_channel_settle_seconds) + 18.0))
-
-
-def _estimated_loop_seconds(config: AppConfig, channel_count: int) -> float:
-    total = max(0, int(channel_count or 0))
-    if total <= 0:
-        return 0.0
-    per_channel = _estimated_channel_scan_seconds(config)
-    per_cycle = max(1, int(config.scanner_max_channels_per_cycle or 1))
-    cycle_count = math.ceil(total / per_cycle)
-    between_channel_delays = max(0, total - cycle_count)
-    average_delay = (
-        max(0.0, float(config.scanner_min_channel_delay_seconds))
-        + max(0.0, float(config.scanner_max_channel_delay_seconds))
-    ) / 2
-    return (
-        total * per_channel
-        + between_channel_delays * average_delay
-        + cycle_count * max(0.0, float(config.scanner_cycle_sleep_seconds))
-    )
-
-
-RUNTIME = RuntimeController()
-
-
-def _record_runtime_event(event_type: str, summary: str) -> None:
-    try:
-        config = load_config()
-        EventLog(config.state_dir / "events.json").add(
-            event_type=event_type,
-            server_id="",
-            channel_id="",
-            summary=_redact_secret_text(summary),
-        )
-    except Exception:
-        return
+RUNTIME = RuntimeController(DISCORD_SESSION_LOCK)
 
 
 def app_state() -> dict:
@@ -968,214 +556,6 @@ def usage_state() -> dict:
     return budget.summary()
 
 
-def model_catalog_state(config: AppConfig) -> dict:
-    cache = _read_json(config.state_dir / "openai_models.json", default={})
-    cached_models = cache.get("models") if isinstance(cache, dict) else None
-    live = bool(cached_models)
-    models = _merge_model_options(
-        config.openai_model,
-        cached_models if isinstance(cached_models, list) else OPENAI_MODEL_FALLBACKS,
-        include_fallbacks=not live,
-    )
-    source = "OpenAI /v1/models" if live else "fallback"
-    message = (
-        f"{len(models)} account model options cached from OpenAI."
-        if live
-        else "Fallback model suggestions shown. Add an API key and refresh models for this project."
-    )
-    return {
-        "live": live,
-        "source": source,
-        "message": message,
-        "fetched_at": str(cache.get("fetched_at") or "") if isinstance(cache, dict) else "",
-        "total_models": int(cache.get("total_models") or len(models)) if isinstance(cache, dict) else len(models),
-        "models": models,
-    }
-
-
-def fetch_openai_models() -> dict:
-    load_dotenv(override=True)
-    config = load_config()
-    fallback = model_catalog_state(config)
-    if not config.openai_api_key:
-        return {
-            "ok": False,
-            "live": False,
-            "source": fallback["source"],
-            "message": "OpenAI API key is missing. Save a key first, then refresh models.",
-            "models": fallback["models"],
-        }
-
-    request = urllib.request.Request(
-        "https://api.openai.com/v1/models",
-        headers={
-            "Authorization": f"Bearer {config.openai_api_key}",
-            "Content-Type": "application/json",
-        },
-        method="GET",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=20) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        return {
-            "ok": False,
-            "live": False,
-            "source": fallback["source"],
-            "message": _safe_openai_error(exc),
-            "models": fallback["models"],
-        }
-    except Exception as exc:
-        return {
-            "ok": False,
-            "live": False,
-            "source": fallback["source"],
-            "message": f"Could not fetch OpenAI models: {_redact_secret_text(str(exc))}",
-            "models": fallback["models"],
-        }
-
-    raw_models = payload.get("data", [])
-    fetched_options = []
-    if isinstance(raw_models, list):
-        for item in raw_models:
-            if not isinstance(item, dict):
-                continue
-            model_id = str(item.get("id") or "").strip()
-            if not _looks_like_text_model(model_id):
-                continue
-            fetched_options.append(
-                {
-                    "id": model_id,
-                    "label": model_id,
-                    "source": "openai",
-                    "owned_by": str(item.get("owned_by") or ""),
-                    "created": item.get("created"),
-                }
-            )
-
-    if not fetched_options:
-        models = _merge_model_options(
-            config.openai_model,
-            OPENAI_MODEL_FALLBACKS,
-            include_fallbacks=True,
-        )
-        message = "OpenAI returned models, but none matched Kabuki-Cord's text/reasoning filter."
-        return {
-            "ok": False,
-            "live": False,
-            "source": "fallback",
-            "message": message,
-            "models": models,
-            "total_models": len(raw_models) if isinstance(raw_models, list) else 0,
-        }
-
-    models = _merge_model_options(config.openai_model, fetched_options)
-    fetched_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    cache_payload = {
-        "live": True,
-        "source": "OpenAI /v1/models",
-        "fetched_at": fetched_at,
-        "models": models,
-        "total_models": len(raw_models) if isinstance(raw_models, list) else len(models),
-    }
-    cache_path = config.state_dir / "openai_models.json"
-    _write_json(cache_path, cache_payload)
-    return {
-        "ok": True,
-        **cache_payload,
-        "message": f"Loaded {len(models)} OpenAI text/reasoning model options for this key.",
-    }
-
-
-def _merge_model_options(
-    current_model: str,
-    model_options: list | tuple,
-    *,
-    include_fallbacks: bool = False,
-) -> list[dict]:
-    by_id: dict[str, dict] = {}
-    if include_fallbacks:
-        for option in OPENAI_MODEL_FALLBACKS:
-            by_id[option["id"]] = dict(option)
-    for option in model_options:
-        if isinstance(option, str):
-            model_id = option.strip()
-            payload = {"id": model_id, "label": model_id, "source": "openai"}
-        elif isinstance(option, dict):
-            model_id = str(option.get("id") or "").strip()
-            payload = dict(option)
-            payload["id"] = model_id
-            payload["label"] = str(payload.get("label") or model_id)
-        else:
-            continue
-        if model_id:
-            by_id[model_id] = payload
-    if current_model and current_model not in by_id:
-        by_id[current_model] = {
-            "id": current_model,
-            "label": f"{current_model} - current setting",
-            "source": "current",
-        }
-    return sorted(by_id.values(), key=_model_option_sort_key)
-
-
-def _model_option_sort_key(option: dict) -> tuple[int, str]:
-    model_id = str(option.get("id") or "")
-    preferred_order = {
-        "gpt-5.4-nano": 0,
-        "gpt-5.4-mini": 1,
-        "gpt-5.4": 2,
-        "gpt-5.5": 3,
-    }
-    return (preferred_order.get(model_id, 20), model_id)
-
-
-def _looks_like_text_model(model_id: str) -> bool:
-    if not model_id:
-        return False
-    lowered = model_id.lower()
-    excluded = (
-        "embedding",
-        "moderation",
-        "realtime",
-        "whisper",
-        "tts",
-        "transcribe",
-        "image",
-        "dall-e",
-        "audio",
-        "search",
-    )
-    if any(part in lowered for part in excluded):
-        return False
-    modern_gpt_prefixes = (
-        "gpt-5",
-        "gpt-4.5",
-        "gpt-4.1",
-        "gpt-4o",
-        "chatgpt-4o",
-    )
-    return lowered.startswith(modern_gpt_prefixes) or (
-        lowered.startswith("o") and len(lowered) > 1 and lowered[1].isdigit()
-    )
-
-
-def _safe_openai_error(exc: urllib.error.HTTPError) -> str:
-    detail = ""
-    try:
-        raw = exc.read().decode("utf-8", errors="replace")
-        payload = json.loads(raw)
-        detail = str(payload.get("error", {}).get("message") or raw)
-    except Exception:
-        detail = str(exc)
-    detail = _redact_secret_text(detail)
-    return f"OpenAI model fetch failed ({exc.code}): {detail}"
-
-
-def _redact_secret_text(value: str) -> str:
-    return re.sub(r"sk-[A-Za-z0-9_\-]{8,}", "sk-...redacted", value)
-
-
 def sync_discord_servers() -> dict:
     config = load_config()
     _acquire_discord_session_or_raise(pause_runtime=True)
@@ -1191,69 +571,29 @@ def sync_discord_servers() -> dict:
     finally:
         DISCORD_SESSION_LOCK.release()
     payload = _read_json(config.servers_file, default={"servers": []})
-    server_list = payload.get("servers")
-    if not isinstance(server_list, list):
-        server_list = []
-
-    by_id: dict[str, dict] = {}
-    for item in server_list:
-        if isinstance(item, dict) and item.get("server_id"):
-            by_id[str(item["server_id"])] = item
-
-    added = 0
-    added_server_ids: list[str] = []
-    updated = 0
-    channels_discovered = 0
-    channels_added = 0
-    channels_updated = 0
-    next_server_list: list[dict] = []
-    for server in discovered:
-        server_id = str(server["server_id"])
-        label = str(server.get("label") or "")
-        existing = by_id.get(server_id)
-        if existing is None:
-            existing = {
-                "server_id": server_id,
-                "label": label,
-                "character_card": None,
-                "safety_review_enabled": False,
-                "channels": [],
-            }
-            server_list.append(existing)
-            by_id[server_id] = existing
-            added += 1
-            added_server_ids.append(server_id)
-        if label and str(existing.get("label") or "").strip() != label:
-            existing["label"] = label
-            updated += 1
-        icon_url = str(server.get("icon_url") or "")
-        icon_path = _cache_server_icon(config.state_dir, server_id, icon_url)
-        if icon_path:
-            existing["icon_path"] = icon_path
-        channel_stats = _merge_channels(existing, server.get("channels", []))
-        channels_discovered += channel_stats["discovered"]
-        channels_added += channel_stats["added"]
-        channels_updated += channel_stats["updated"]
-        next_server_list.append(existing)
-
-    discovered_ids = {str(server["server_id"]) for server in discovered}
-    next_server_list.extend(
-        server
-        for server in server_list
-        if isinstance(server, dict) and str(server.get("server_id") or "") not in discovered_ids
+    next_payload, stats = merge_discovered_servers(
+        payload,
+        discovered,
+        icon_path_for_server=lambda server_id, icon_url: _cache_server_icon(
+            config.state_dir,
+            server_id,
+            icon_url,
+        ),
     )
-
-    next_payload = {**payload, "servers": next_server_list}
     _write_json(config.servers_file, next_payload)
+    if stats["removed"]:
+        EventLog(config.state_dir / "events.json").add(
+            event_type="discord_servers_removed",
+            server_id="",
+            channel_id="",
+            summary=(
+                f"Discord sync removed {stats['removed']} server(s) no longer visible "
+                f"to this account: {', '.join(stats['removed_server_ids'])}."
+            ),
+        )
     return {
         "ok": True,
-        "discovered": len(discovered),
-        "added": added,
-        "added_server_ids": added_server_ids,
-        "updated": updated,
-        "channels_discovered": channels_discovered,
-        "channels_added": channels_added,
-        "channels_updated": channels_updated,
+        **stats,
         "state": app_state(),
     }
 
@@ -1454,56 +794,7 @@ def _acquire_discord_session_or_raise(*, pause_runtime: bool = False) -> None:
 
 
 def _merge_channels(server: dict, discovered_channels: list[dict]) -> dict[str, int]:
-    existing_channels = server.get("channels")
-    if not isinstance(existing_channels, list):
-        existing_channels = []
-
-    by_id: dict[str, dict] = {}
-    for item in existing_channels:
-        if isinstance(item, dict) and item.get("channel_id"):
-            by_id[str(item["channel_id"])] = item
-
-    updated = 0
-    added = 0
-    next_channels: list[dict] = []
-    for channel in discovered_channels:
-        channel_id = str(channel.get("channel_id") or "")
-        if not channel_id:
-            continue
-        existing = by_id.get(channel_id)
-        if existing is None:
-            existing = {
-                "channel_id": channel_id,
-                "label": str(channel.get("label") or ""),
-                "channel_type": str(channel.get("channel_type") or "text"),
-                "category": str(channel.get("category") or ""),
-                "parent_channel_id": str(channel.get("parent_channel_id") or ""),
-                "scan_enabled": False,
-                "engage_enabled": False,
-                "react_enabled": False,
-                "auto_respond_enabled": False,
-            }
-            added += 1
-        else:
-            for key in ("label", "channel_type", "category", "parent_channel_id"):
-                value = str(channel.get(key) or "")
-                if value and str(existing.get(key) or "") != value:
-                    existing[key] = value
-                    updated += 1
-        next_channels.append(existing)
-
-    discovered_ids = {str(channel.get("channel_id") or "") for channel in discovered_channels}
-    next_channels.extend(
-        channel
-        for channel in existing_channels
-        if (
-            isinstance(channel, dict)
-            and str(channel.get("channel_id") or "") not in discovered_ids
-            and str(channel.get("label") or "").strip()
-        )
-    )
-    server["channels"] = next_channels
-    return {"discovered": len(discovered_channels), "added": added, "updated": updated}
+    return _merge_channels_impl(server, discovered_channels)
 
 
 async def _discover_discord_workspace(config: AppConfig) -> list[dict]:
@@ -1980,131 +1271,23 @@ def user_instruction_state(state_dir: Path) -> dict:
     return _read_json(path, default={"items": []})
 
 
-def approval_items_state(config: AppConfig) -> list[dict]:
-    queue = ApprovalQueue(config.state_dir / "approvals.json")
-    server_labels, channel_labels = _approval_config_indexes(config.servers_file)
-    memory_payload = _read_json(config.state_dir / "memory.json", default={"channels": {}})
-    channel_rows = {
-        str(channel_id): _sorted_message_rows(rows)
-        for channel_id, rows in memory_payload.get("channels", {}).items()
-    }
-    result: list[dict] = []
-    for item in queue.list():
-        payload = asdict(item)
-        channel_meta = channel_labels.get(item.channel_id, {})
-        source_ids = [str(value) for value in item.source_message_ids if str(value or "").strip()]
-        rows_by_id = {
-            str(row.get("message_id") or ""): row
-            for row in channel_rows.get(item.channel_id, [])
-            if str(row.get("message_id") or "")
-        }
-        source_messages = [
-            _message_preview(rows_by_id[source_id])
-            for source_id in source_ids
-            if source_id in rows_by_id
-        ]
-        payload.update(
-            {
-                "server_label": server_labels.get(item.server_id) or item.server_id,
-                "channel_label": channel_meta.get("label") or item.channel_id,
-                "channel_type": channel_meta.get("channel_type") or "text",
-                "channel_category": channel_meta.get("category") or "",
-                "source_messages": source_messages,
-                "source_missing_ids": [
-                    source_id for source_id in source_ids if source_id not in rows_by_id
-                ],
-            }
-        )
-        result.append(payload)
-    return result
-
-
-def _approval_config_indexes(servers_file: Path) -> tuple[dict[str, str], dict[str, dict]]:
-    payload = _read_json(servers_file, default={"servers": []})
-    server_labels: dict[str, str] = {}
-    channel_labels: dict[str, dict] = {}
-    for server in payload.get("servers", []):
-        server_id = str(server.get("server_id") or "").strip()
-        if not server_id:
-            continue
-        server_labels[server_id] = str(server.get("label") or server_id)
-        for channel in server.get("channels", []):
-            channel_id = str(channel.get("channel_id") or "").strip()
-            if not channel_id:
-                continue
-            channel_labels[channel_id] = {
-                "server_id": server_id,
-                "server_label": server_labels[server_id],
-                "label": str(channel.get("label") or channel_id),
-                "channel_type": str(channel.get("channel_type") or "text"),
-                "category": str(channel.get("category") or ""),
-            }
-    return server_labels, channel_labels
-
-
 def update_approval(body: dict) -> None:
     approval_id = str(body.get("approval_id") or "")
     draft = str(body.get("draft") or "").strip()
     if not approval_id or not draft:
         raise ValueError("Missing approval id or draft text.")
-    config = load_config()
-    item = ApprovalQueue(config.state_dir / "approvals.json").update_draft(approval_id, draft)
-    EventLog(config.state_dir / "events.json").add(
-        event_type="approval_updated",
-        server_id=item.server_id,
-        channel_id=item.channel_id,
-        summary="Approval draft edited by operator.",
-        draft=draft,
-    )
+    _update_approval_draft(load_config(), approval_id, draft)
 
 
 def discard_approval(body: dict) -> None:
     approval_id = str(body.get("approval_id") or "")
     if not approval_id:
         return
-    config = load_config()
-    queue = ApprovalQueue(config.state_dir / "approvals.json")
-    item = queue.get(approval_id)
-    if queue.remove(approval_id) and item:
-        DiscardedApprovalStore(config.state_dir / "discarded_approvals.json").record(
-            server_id=item.server_id,
-            channel_id=item.channel_id,
-            source_message_ids=item.source_message_ids,
-            draft=item.draft,
-            reason="discarded by operator",
-        )
-        EventLog(config.state_dir / "events.json").add(
-            event_type="approval_discarded",
-            server_id=item.server_id,
-            channel_id=item.channel_id,
-            summary="Approval draft discarded by operator.",
-            draft=item.draft,
-        )
+    _discard_approval(load_config(), approval_id)
 
 
 def clear_approvals() -> int:
-    config = load_config()
-    queue = ApprovalQueue(config.state_dir / "approvals.json")
-    items = queue.list()
-    count = queue.clear()
-    if count:
-        discarded = DiscardedApprovalStore(config.state_dir / "discarded_approvals.json")
-        for item in items:
-            discarded.record(
-                server_id=item.server_id,
-                channel_id=item.channel_id,
-                source_message_ids=item.source_message_ids,
-                draft=item.draft,
-                reason="cleared from approval queue by operator",
-            )
-        EventLog(config.state_dir / "events.json").add(
-            event_type="approvals_cleared",
-            server_id="",
-            channel_id="",
-            summary=f"Cleared {count} queued approval draft(s).",
-            draft="",
-        )
-    return count
+    return _clear_approval_queue(load_config())
 
 
 def send_approval(body: dict) -> None:
@@ -2301,41 +1484,11 @@ def _send_approval_locked(*, approval_id: str, draft: str, reply_to_message_id: 
 
 
 def _last_approval_source_message(config: AppConfig, item) -> dict:
-    source_ids = {
-        str(value)
-        for value in getattr(item, "source_message_ids", ())
-        if str(value or "").strip()
-    }
-    if not source_ids:
-        return {}
-    payload = _read_json(config.state_dir / "memory.json", default={"channels": {}})
-    rows = payload.get("channels", {}).get(str(getattr(item, "channel_id", "") or ""), [])
-    matches = [
-        row
-        for row in _sorted_message_rows(rows)
-        if str(row.get("message_id") or "") in source_ids
-    ]
-    if not matches:
-        return {}
-    return _message_preview(matches[-1])
+    return _last_approval_source_message_impl(config, item)
 
 
 def _approval_source_messages(config: AppConfig, item) -> list[MessageRecord]:
-    source_ids = {
-        str(value)
-        for value in getattr(item, "source_message_ids", ())
-        if str(value or "").strip()
-    }
-    if not source_ids:
-        return []
-    return [
-        message
-        for message in _memory_context(
-            config.state_dir / "memory.json",
-            str(getattr(item, "channel_id", "") or ""),
-        )
-        if message.message_id in source_ids
-    ]
+    return _approval_source_messages_impl(config, item)
 
 
 def _own_source_block_message(
@@ -2346,35 +1499,13 @@ def _own_source_block_message(
     source_messages: list[MessageRecord],
     context: list[MessageRecord] | None = None,
 ) -> str:
-    if not source_messages:
-        return ""
-    character = CharacterCardStore(config.character_dir, config.character_card).for_server(
-        server_id,
-        _server_character_card(config, server_id),
+    return _own_source_block_message_impl(
+        config,
+        server_id=server_id,
+        channel_id=channel_id,
+        source_messages=source_messages,
+        context=context,
     )
-    character_names = (character.name, *character.aliases)
-    ledger = ReplyLedger(config.state_dir / "sent_replies.json")
-    own_texts = ledger.own_texts_for_channel(channel_id=channel_id)
-    own_message_ids = ledger.own_message_ids_for_channel(channel_id=channel_id)
-    own_author_ids = own_identity.own_author_ids_from_messages(
-        context or source_messages,
-        character_names=character_names,
-        own_texts=own_texts,
-    )
-    for message in source_messages:
-        if own_identity.is_own_message(
-            message,
-            character_names=character_names,
-            own_author_ids=own_author_ids,
-            own_message_ids=own_message_ids,
-            own_texts=own_texts,
-        ):
-            return (
-                "Reply blocked: the selected/source message appears to be from this "
-                "Discord account or character. Discard the stale approval or select a "
-                "message from another user."
-            )
-    return ""
 
 
 def _friendly_discord_send_error(raw_error: str) -> str:
@@ -2654,139 +1785,12 @@ def create_manual_approval(body: dict) -> None:
     )
 
 
-def _message_preview(row: dict) -> dict:
-    return {
-        "server_id": str(row.get("server_id") or ""),
-        "channel_id": str(row.get("channel_id") or ""),
-        "message_id": str(row.get("message_id") or ""),
-        "author": clean_discord_display_name(str(row.get("author") or "unknown")),
-        "author_id": row.get("author_id"),
-        "user_key": _message_user_key(row),
-        "text": sanitize_outgoing_draft(str(row.get("text") or "")),
-        "observed_at": str(row.get("observed_at") or ""),
-    }
-
-
-def _reply_mention_prefix(author: str, author_id) -> str:
-    clean_id = str(author_id or "").strip()
-    if clean_id:
-        return f"<@{clean_id}>"
-    return ""
-
-
-def _draft_with_reply_mention(draft: str, source_messages: list[MessageRecord]) -> str:
-    draft = sanitize_outgoing_draft(str(draft or "").strip())
-    if not draft or not source_messages:
-        return draft
-    source = source_messages[-1]
-    prefix = _reply_mention_prefix(source.author, source.author_id)
-    if not prefix:
-        return draft
-    if draft.startswith(prefix) or re.match(r"^<@!?\d+>\s+", draft):
-        return draft
-    if source.author:
-        plain_prefix = f"@{clean_discord_display_name(source.author)}"
-        if draft.startswith(plain_prefix):
-            return f"{prefix}{draft[len(plain_prefix):]}"
-    return f"{prefix} {draft}"
-
-
-def _sorted_message_rows(rows: list[dict]) -> list[dict]:
-    return sorted(rows or [], key=_message_row_sort_key)
-
-
-def _message_row_sort_key(row: dict) -> tuple[int, str]:
-    message_id = str(row.get("message_id") or "")
-    try:
-        return (int(message_id.rsplit("-", 1)[-1]), message_id)
-    except ValueError:
-        return (0, message_id)
-
-
-def _message_user_key(row: dict) -> str:
-    author_id = row.get("author_id")
-    if author_id:
-        return f"discord:{author_id}"
-    author = " ".join(clean_discord_display_name(str(row.get("author") or "unknown")).lower().strip().split())
-    return f"name:{author or 'unknown'}"
-
-
-def _manual_source_messages(
-    context: list[MessageRecord],
-    target_user_key: str,
-    target_message_id: str = "",
-) -> list[MessageRecord]:
-    if not context:
-        return []
-    if target_message_id:
-        selected = [message for message in context if message.message_id == target_message_id]
-        return selected[-1:] if selected else []
-    if target_user_key:
-        targeted = [
-            message
-            for message in reversed(context)
-            if _message_record_user_key(message) == target_user_key
-        ]
-        return list(reversed(targeted[:2]))
-    return [context[-1]]
-
-
-def _message_record_user_key(message: MessageRecord) -> str:
-    if message.author_id:
-        return f"discord:{message.author_id}"
-    author = " ".join(clean_discord_display_name(str(message.author or "unknown")).lower().strip().split())
-    return f"name:{author or 'unknown'}"
-
-
-def _summarize_messages(texts: list[str]) -> str:
-    if not texts:
-        return "No recent readable message text."
-    terms: list[str] = []
-    ignored = {
-        "that",
-        "this",
-        "with",
-        "from",
-        "they",
-        "have",
-        "just",
-        "like",
-        "what",
-        "your",
-        "about",
-        "there",
-        "would",
-        "could",
-        "really",
-    }
-    for text in texts:
-        for raw in text.split():
-            term = raw.strip(".,!?;:()[]{}\"'").lower()
-            if len(term) >= 5 and term not in ignored and term not in terms:
-                terms.append(term)
-            if len(terms) >= 5:
-                break
-        if len(terms) >= 5:
-            break
-    topic_text = ", ".join(terms) if terms else "the current thread"
-    latest = texts[-1]
-    if len(latest) > 130:
-        latest = latest[:127].rstrip() + "..."
-    return f"Talking about {topic_text}. Latest: {latest}"
-
-
 def _memory_context(memory_path: Path, channel_id: str):
-    memory = ConversationMemory(memory_path)
-    memory.load()
-    return memory.context(channel_id, limit=80)
+    return _memory_context_impl(memory_path, channel_id)
 
 
 def _server_character_card(config: AppConfig, server_id: str) -> str | None:
-    payload = _read_json(config.servers_file, default={"servers": []})
-    for server in payload.get("servers", []):
-        if str(server.get("server_id") or "") == server_id:
-            return server.get("character_card") or None
-    return None
+    return _server_character_card_impl(config, server_id)
 
 
 async def _generate_manual_decision(

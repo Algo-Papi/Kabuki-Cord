@@ -24,11 +24,103 @@ let bootSoundPlayed = false;
 let kabukiAudioUnlocked = false;
 let serverPersistTimer = null;
 
-const runtimeModeClassNames = ["runtime-mode-dry", "runtime-mode-full-auto", "runtime-mode-semi-auto", "runtime-mode-live-fire"];
+const {
+  runtimeModeClassNames,
+  compactServerRailLabel,
+  isDiscordBlockedError,
+  filterRememberedUsers,
+  sortRememberedUsers,
+  userSortLabel,
+  formatUserLastSeen,
+  strBool,
+  runtimeModeLabel,
+  runtimeModeCssClass,
+  transitionModeCssClass,
+  runtimeModeTransitionCopy,
+  eventMatchesFilter,
+  emptyEventFilterMessage,
+  eventKey,
+  eventTypeLabel,
+  eventClass,
+  isNotifiableEvent,
+  truncateText,
+  userInstructionMatchesScope,
+  compareText,
+  formatTime,
+  formatRuntimeTime,
+  channelTypeLabel,
+  formatChannelName,
+  escapeHtml,
+  escapeAttr,
+  cssEscape,
+} = window.KabukiUiHelpers;
+
 const kabukiBootThemeSrc = "/assets/kabuki-launch-theme.wav?v=3";
 const onboardingStorageKey = "kabukiCordOnboardingDismissed.v1";
 
 const $ = (id) => document.getElementById(id);
+
+const formSectionFieldIds = Object.freeze({
+  server: Object.freeze([
+    "serverLabel",
+    "serverCharacter",
+    "serverSafetyReview",
+    "channelAutoRespond",
+  ]),
+  character: Object.freeze([
+    "cardName",
+    "systemPrompt",
+    "aliases",
+    "triggerKeywords",
+    "styleRules",
+    "engagementRules",
+    "approvalRequired",
+  ]),
+  settings: Object.freeze([
+    "discordEmail",
+    "discordPassword",
+    "headlessMode",
+    "scannerMaxChannels",
+    "scannerCycleSleep",
+    "scannerMinDelay",
+    "scannerMaxDelay",
+    "safetyReviewExclusive",
+    "safetyReviewHistoryLimit",
+    "safetyReviewScrollRounds",
+    "replyCooldownSeconds",
+    "replyWindowSeconds",
+    "replyMaxPerWindow",
+    "replyRequireInterveningUser",
+    "reactionMaxPerChannel",
+    "reactionThreshold",
+    "reactionSamplePercent",
+    "reactionForceLaughPercent",
+    "reactionEmojiOverride",
+    "apiKey",
+    "openaiModel",
+    "runtimeMode",
+    "llmEnabled",
+    "draftDryRun",
+    "conversationReply",
+    "dryRun",
+    "dailyBudget",
+    "sessionBudget",
+    "maxCalls",
+    "mistakeRate",
+    "writingQuirk",
+    "writingMisspellings",
+    "typingIndicatorEnabled",
+    "typingMinSeconds",
+    "typingMaxSeconds",
+    "typingCharsPerSecond",
+  ]),
+});
+
+const formSectionByFieldId = new Map(
+  Object.entries(formSectionFieldIds).flatMap(([section, ids]) => ids.map((id) => [id, section])),
+);
+const dirtyFormFieldIds = new Set();
+let focusedFormSection = null;
 
 async function loadSession() {
   const response = await fetch("/api/session");
@@ -77,7 +169,9 @@ async function loadState(options = {}) {
     if (selectedServer < 0) selectedServer = 0;
     selectedChannel = Math.min(selectedChannel, channels().length - 1);
     if (selectedChannel < 0) selectedChannel = 0;
-    render();
+    render({
+      preserveDirtyForms: Boolean(options.background || hasProtectedFormSections()),
+    });
     syncEventNotifications({
       previousEventKeys,
       notify: Boolean(options.notify && hadState),
@@ -106,6 +200,71 @@ function channel() {
   return channels()[selectedChannel] || null;
 }
 
+function formSectionForElement(element) {
+  const tag = element?.tagName?.toLowerCase();
+  if (!["input", "textarea", "select"].includes(tag)) return null;
+  return formSectionByFieldId.get(element.id) || null;
+}
+
+function formSectionHasDirtyFields(section) {
+  return (formSectionFieldIds[section] || []).some((id) => dirtyFormFieldIds.has(id));
+}
+
+function hasDirtyFormSections() {
+  return dirtyFormFieldIds.size > 0;
+}
+
+function hasProtectedFormSections() {
+  return Boolean(focusedFormSection || hasDirtyFormSections());
+}
+
+function shouldPreserveFormSection(section, options = {}) {
+  return Boolean(
+    options.preserveDirtyForms
+      && (focusedFormSection === section || formSectionHasDirtyFields(section)),
+  );
+}
+
+function clearDirtyFormSections(sections) {
+  sections.forEach((section) => {
+    (formSectionFieldIds[section] || []).forEach((id) => dirtyFormFieldIds.delete(id));
+  });
+  syncFocusedFormSection();
+}
+
+function clearDirtyFormFields(ids) {
+  ids.forEach((id) => dirtyFormFieldIds.delete(id));
+  syncFocusedFormSection();
+}
+
+function syncFocusedFormSection() {
+  focusedFormSection = formSectionForElement(document.activeElement);
+}
+
+function trackDirtyFormFields() {
+  document.addEventListener("focusin", (event) => {
+    focusedFormSection = formSectionForElement(event.target);
+  }, true);
+
+  document.addEventListener("focusout", (event) => {
+    const section = formSectionForElement(event.target);
+    if (!section) return;
+    setTimeout(() => {
+      if (focusedFormSection === section) {
+        focusedFormSection = formSectionForElement(document.activeElement);
+      }
+    }, 0);
+  }, true);
+
+  ["input", "change"].forEach((eventName) => {
+    document.addEventListener(eventName, (event) => {
+      const section = formSectionForElement(event.target);
+      if (!section) return;
+      dirtyFormFieldIds.add(event.target.id);
+    }, true);
+  });
+}
+
 function visibleChannels() {
   return channels()
     .map((chan, index) => ({ ...chan, __index: index }))
@@ -115,12 +274,12 @@ function visibleChannels() {
     });
 }
 
-function render() {
+function render(options = {}) {
   renderRail();
-  renderServerPanel();
+  renderServerPanel(options);
   renderCharacterCards();
-  renderCharacterEditor();
-  renderSettings();
+  renderCharacterEditor(options);
+  renderSettings(options);
   renderRuntime();
   renderGrowth();
   renderApprovals();
@@ -133,6 +292,10 @@ function render() {
   renderEventsPanel();
   renderPreviewTabs();
   renderOperationStatus();
+}
+
+function renderStateUpdate() {
+  render({ preserveDirtyForms: hasProtectedFormSections() });
 }
 
 function renderRail() {
@@ -162,23 +325,20 @@ function renderRail() {
   });
 }
 
-function compactServerRailLabel(label, index) {
-  const cleaned = String(label || "").replace(/\s+/g, " ").trim();
-  if (!cleaned) return `Server ${index + 1}`.slice(0, 10);
-  return Array.from(cleaned).slice(0, 10).join("");
-}
-
-function renderServerPanel() {
+function renderServerPanel(options = {}) {
   const srv = server();
+  const preserveServerForm = shouldPreserveFormSection("server", options);
   $("serverTitle").textContent = srv.label || srv.server_id || "No server";
-  $("serverLabel").value = srv.label || "";
-  $("serverCharacter").innerHTML =
-    `<option value="">Use global card</option>` +
-    appState.characters
-      .map((card) => `<option value="${escapeAttr(card.path)}">${escapeHtml(card.name)} (${escapeHtml(card.path)})</option>`)
-      .join("");
-  $("serverCharacter").value = srv.character_card || "";
-  $("serverSafetyReview").checked = Boolean(srv.safety_review_enabled);
+  if (!preserveServerForm) {
+    $("serverLabel").value = srv.label || "";
+    $("serverCharacter").innerHTML =
+      `<option value="">Use global card</option>` +
+      appState.characters
+        .map((card) => `<option value="${escapeAttr(card.path)}">${escapeHtml(card.name)} (${escapeHtml(card.path)})</option>`)
+        .join("");
+    $("serverCharacter").value = srv.character_card || "";
+    $("serverSafetyReview").checked = Boolean(srv.safety_review_enabled);
+  }
 
   $("channelList").innerHTML = visibleChannels()
     .map((chan) => {
@@ -241,7 +401,9 @@ function renderServerPanel() {
   });
 
   const current = channel();
-  $("channelAutoRespond").checked = Boolean(current?.auto_respond_enabled);
+  if (!preserveServerForm) {
+    $("channelAutoRespond").checked = Boolean(current?.auto_respond_enabled);
+  }
   $("approvalState").textContent = runtimeModeLabel(currentRuntimeMode());
 }
 
@@ -281,7 +443,8 @@ function readCardFromList(path) {
   };
 }
 
-function renderCharacterEditor() {
+function renderCharacterEditor(options = {}) {
+  if (shouldPreserveFormSection("character", options)) return;
   const card = appState.active_character.card;
   $("cardName").value = card.name || "";
   $("systemPrompt").value = card.system_prompt || "";
@@ -292,7 +455,7 @@ function renderCharacterEditor() {
   $("approvalRequired").checked = currentRuntimeMode() !== "full_auto";
 }
 
-function renderSettings() {
+function renderSettings(options = {}) {
   $("apiStatus").textContent = appState.app.api_key_set ? "API set" : "No API key";
   $("apiStatus").title = appState.app.api_key_set ? "OpenAI API key is configured" : "OpenAI API key is missing";
   $("apiStatus").className = `status-pill ${appState.app.api_key_set ? "ok" : ""}`;
@@ -302,12 +465,18 @@ function renderSettings() {
     : discord.email_set || discord.password_set
       ? "Partial Discord credentials are stored. Add the missing value or sign in manually."
       : "No stored Discord credentials. Enter them here or click Sign In and complete Discord manually.";
-  $("discordEmail").value = "";
-  $("discordPassword").value = "";
   const updates = appState.updates || {};
   $("updateStatus").textContent = updates.remote_allowed
     ? `Ready to update from ${updates.remote}.`
     : "GitHub origin is not configured yet. Update will be available after publishing.";
+  if (shouldPreserveFormSection("settings", options)) {
+    renderModelOptions();
+    syncRuntimeModeChrome($("runtimeMode")?.value || currentRuntimeMode());
+    updateReactionForceLaughLabel();
+    return;
+  }
+  $("discordEmail").value = "";
+  $("discordPassword").value = "";
   $("openaiModel").value = appState.env.OPENAI_MODEL || appState.app.openai_model || "";
   renderModelOptions();
   $("runtimeMode").value = currentRuntimeMode();
@@ -557,11 +726,6 @@ function finishFailedOperation(id, defaultLabel, error) {
   finishOperation(id, defaultLabel, "failed", "bi-exclamation-triangle");
 }
 
-function isDiscordBlockedError(value) {
-  return /discord/i.test(String(value || ""))
-    && /(password reset|security action|verification|verify|2fa|authentication code|login screen|not signed in|human|not a robot|account)/i.test(String(value || ""));
-}
-
 function renderGrowth() {
   const memory = appState.character_memory || {};
   const claims = memory.story_claims || [];
@@ -602,40 +766,12 @@ function renderGrowth() {
 }
 
 function filteredRememberedUsers(users) {
-  const query = userSearchQuery.trim().toLowerCase();
-  if (!query) return users;
   const noteTextByUser = userNotesByUserText();
-  return users.filter((user) => {
-    const haystack = [
-      user.user_key,
-      user.display_name,
-      user.stable_user_id,
-      user.summary,
-      ...(user.recent_topics || []),
-      noteTextByUser.get(user.user_key) || "",
-    ]
-      .join(" ")
-      .toLowerCase();
-    return haystack.includes(query);
-  });
+  return filterRememberedUsers(users, userSearchQuery, noteTextByUser);
 }
 
 function sortedRememberedUsers(users) {
-  const rows = [...users];
-  if (userSortMode === "name") {
-    return rows.sort((left, right) => userDisplayName(left).localeCompare(userDisplayName(right)));
-  }
-  if (userSortMode === "messages") {
-    return rows.sort((left, right) =>
-      Number(right.message_count || 0) - Number(left.message_count || 0)
-      || userDisplayName(left).localeCompare(userDisplayName(right))
-    );
-  }
-  return rows.sort((left, right) =>
-    userSeenMillis(right.last_seen_at) - userSeenMillis(left.last_seen_at)
-    || Number(right.message_count || 0) - Number(left.message_count || 0)
-    || userDisplayName(left).localeCompare(userDisplayName(right))
-  );
+  return sortRememberedUsers(users, userSortMode);
 }
 
 function userNotesByUserText() {
@@ -646,34 +782,6 @@ function userNotesByUserText() {
     grouped.set(key, `${grouped.get(key) || ""} ${item.note || ""}`);
   });
   return grouped;
-}
-
-function userDisplayName(user) {
-  return String(user.display_name || user.user_key || "").toLowerCase();
-}
-
-function userSeenMillis(value) {
-  const parsed = Date.parse(value || "");
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function userSortLabel(mode) {
-  return {
-    recent: "recently seen",
-    messages: "most messages",
-    name: "name",
-  }[mode] || "recently seen";
-}
-
-function formatUserLastSeen(value) {
-  const parsed = Date.parse(value || "");
-  if (!Number.isFinite(parsed)) return "never seen";
-  return new Date(parsed).toLocaleString([], {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
 }
 
 function renderSelectedUserDetails() {
@@ -855,13 +963,6 @@ function approvalSortValue(left, right, leftIndex, rightIndex) {
     || compareText(leftInfo.channelLabel, rightInfo.channelLabel)
     || compareText(right.created_at, left.created_at)
     || leftIndex - rightIndex;
-}
-
-function compareText(left, right) {
-  return String(left || "").localeCompare(String(right || ""), undefined, {
-    numeric: true,
-    sensitivity: "base",
-  });
 }
 
 function approvalChannelInfo(item) {
@@ -1253,7 +1354,7 @@ async function regenerateApproval(approvalId) {
     });
     delete approvalRegenerationState[approvalId];
     appState = result.state || (await api("/api/state"));
-    render();
+    renderStateUpdate();
     finishOperation(opId, "Draft regenerated", "done", "bi-check-circle");
     toast("Approval regenerated");
   } catch (error) {
@@ -1335,7 +1436,7 @@ async function clearApprovals() {
   }
   const result = await api("/api/approvals-clear", { method: "POST", body: JSON.stringify({}) });
   appState = result.state;
-  render();
+  renderStateUpdate();
   toast(`Cleared ${result.cleared || 0} queued approval${result.cleared === 1 ? "" : "s"}`);
 }
 
@@ -1412,7 +1513,7 @@ function renderEventFeed() {
   const events = filteredEvents().slice(0, 60);
   $("eventFeed").innerHTML =
     events.map(renderEventCard).join("") ||
-    `<div class="note-item">${escapeHtml(emptyEventFilterMessage())}</div>`;
+    `<div class="note-item">${escapeHtml(emptyEventFilterMessage(eventFilterMode))}</div>`;
 }
 
 function renderEventCard(event) {
@@ -1683,7 +1784,7 @@ async function suggestReactionForMessage(messageId) {
       }),
     });
     appState = result.state || appState;
-    render();
+    renderStateUpdate();
     await navigator.clipboard?.writeText(result.emoji).catch(() => {});
     await openObservedPosterMessage(messageId).catch(() => {});
     finishOperation(opId, `Suggested ${result.emoji}`, "done", "bi-check-circle");
@@ -1794,7 +1895,7 @@ async function createSuggestedApproval(userKey) {
       }),
     });
     appState = result.state || (await api("/api/state"));
-    render();
+    renderStateUpdate();
     finishOperation(opId, "Approval queued", "done", "bi-check-circle");
     toast("Suggested response queued for approval");
   } catch (error) {
@@ -1826,7 +1927,7 @@ async function createMessageApproval(messageId, userKey) {
       }),
     });
     appState = result.state || (await api("/api/state"));
-    render();
+    renderStateUpdate();
     finishOperation(opId, "Approval queued", "done", "bi-check-circle");
     toast("Response queued for approval");
   } catch (error) {
@@ -1857,7 +1958,7 @@ async function createTargetedMessageApproval({ serverId, channelId, messageId, u
     });
     appState = result.state || (await api("/api/state"));
     previewPanelMode = "preview";
-    render();
+    renderStateUpdate();
     finishOperation(opId, "Approval queued", "done", "bi-check-circle");
     toast("Response queued for approval");
   } catch (error) {
@@ -1944,6 +2045,7 @@ async function saveAll() {
     });
     await api("/api/settings", { method: "POST", body: JSON.stringify(settings) });
     $("apiKey").value = "";
+    clearDirtyFormSections(["server", "character", "settings"]);
     await loadState();
     finishOperation(opId, "Settings saved", "done", "bi-check-circle");
     toast("Settings saved");
@@ -1974,10 +2076,17 @@ async function syncDiscordServers() {
     if (selectedServer < 0) selectedServer = 0;
     selectedChannel = Math.min(selectedChannel, channels().length - 1);
     if (selectedChannel < 0) selectedChannel = 0;
-    render();
-    finishOperation(opId, addedIds.length ? "New server added" : "Discord synced", "done", "bi-check-circle");
+    renderStateUpdate();
+    const removedCount = Number(result.removed || 0);
+    finishOperation(
+      opId,
+      addedIds.length ? "New server added" : (removedCount ? "Stale server removed" : "Discord synced"),
+      "done",
+      "bi-check-circle",
+    );
     const addedText = addedIds.length ? `, added ${addedIds.length} new` : ", no new servers";
-    toast(`Synced ${result.discovered} servers${addedText}; ${result.channels_discovered || 0} channels checked`);
+    const removedText = removedCount ? `, removed ${removedCount} stale` : "";
+    toast(`Synced ${result.discovered} servers${addedText}${removedText}; ${result.channels_discovered || 0} channels checked`);
   } catch (error) {
     finishFailedOperation(opId, "Sync failed", error);
     throw error;
@@ -2005,7 +2114,7 @@ async function repairDiscordServer() {
     if (selectedServer < 0) selectedServer = 0;
     selectedChannel = Math.min(selectedChannel, channels().length - 1);
     if (selectedChannel < 0) selectedChannel = 0;
-    render();
+    renderStateUpdate();
     finishOperation(opId, "Channels repaired", "done", "bi-check-circle");
     toast(`Repair found ${result.discovered || 0} items, added ${result.added || 0}`);
   } catch (error) {
@@ -2027,6 +2136,7 @@ async function saveDiscordCredentials() {
   });
   $("discordEmail").value = "";
   $("discordPassword").value = "";
+  clearDirtyFormFields(["discordEmail", "discordPassword"]);
   await loadState();
   toast("Discord credentials saved locally");
 }
@@ -2041,6 +2151,7 @@ async function launchDiscordLogin() {
     });
     $("discordEmail").value = "";
     $("discordPassword").value = "";
+    clearDirtyFormFields(["discordEmail", "discordPassword"]);
   }
   await api("/api/discord-login", { method: "POST", body: JSON.stringify({}) });
   await loadState();
@@ -2065,11 +2176,12 @@ async function launchDiscordHandoff() {
     });
     $("discordEmail").value = "";
     $("discordPassword").value = "";
+    clearDirtyFormFields(["discordEmail", "discordPassword"]);
   }
   try {
     const result = await api("/api/runtime-start-signin", { method: "POST", body: JSON.stringify({}) });
     appState = result.state;
-    render();
+    renderStateUpdate();
     finishOperation(opId, "Discord handoff started", "done", "bi-check-circle");
     toast("Complete Discord sign-in in the visible browser. Scanner will continue in that same session.");
   } catch (error) {
@@ -2136,7 +2248,7 @@ async function backfillChannelHistory() {
       }),
     });
     appState = result.state;
-    render();
+    renderStateUpdate();
     finishOperation(opId, "History updated", "done", "bi-check-circle");
     toast(`Backfilled ${result.messages || 0} messages, ${result.new || 0} new`);
   } catch (error) {
@@ -2166,7 +2278,7 @@ async function refreshChannelLatest() {
       }),
     });
     appState = result.state;
-    render();
+    renderStateUpdate();
     finishOperation(opId, "Latest refreshed", "done", "bi-check-circle");
     toast(`Latest refresh found ${result.messages || 0}, ${result.new || 0} new`);
   } catch (error) {
@@ -2228,7 +2340,7 @@ async function toggleRuntime() {
   try {
     const result = await api(path, { method: "POST", body: JSON.stringify({}) });
     appState = result.state;
-    render();
+    renderStateUpdate();
     finishOperation(opId, appState.runtime.running ? "Scanner started" : "Scanner paused", "done", "bi-check-circle");
     toast(appState.runtime.running ? "Scanner started" : "Scanner paused");
   } catch (error) {
@@ -2277,7 +2389,7 @@ async function dismissUnrespondedReplies({ messageIds = [], serverId = "", chann
       }),
     });
     appState = result.state;
-    render();
+    renderStateUpdate();
     toast(all ? "Unresponded reply notices dismissed" : "Reply notice dismissed");
   } catch (error) {
     toast(error.message);
@@ -2298,7 +2410,7 @@ async function dismissSafetyReviews({ reviewIds = [], serverId = "", channelId =
       }),
     });
     appState = result.state;
-    render();
+    renderStateUpdate();
     toast(all ? "Dojo Sweep queue dismissed" : "Dojo Sweep item dismissed");
   } catch (error) {
     toast(error.message);
@@ -2322,22 +2434,8 @@ function lines(id) {
     .filter(Boolean);
 }
 
-function strBool(value, fallback) {
-  if (value === undefined || value === null || value === "") return fallback;
-  return String(value).toLowerCase() === "true";
-}
-
 function currentRuntimeMode() {
   return appState?.env?.NHI_ZUES_RUNTIME_MODE || appState?.app?.runtime_mode || $("runtimeMode")?.value || "dry";
-}
-
-function runtimeModeLabel(mode) {
-  return {
-    dry: "dry mode",
-    full_auto: "full auto",
-    semi_auto: "semi auto",
-    live_fire: "live fire",
-  }[mode] || "dry mode";
 }
 
 function updateReactionForceLaughLabel() {
@@ -2348,14 +2446,6 @@ function updateReactionForceLaughLabel() {
   label.textContent = `${Math.round(value)}%`;
 }
 
-function runtimeModeCssClass(mode) {
-  return `runtime-mode-${String(mode || "dry").replaceAll("_", "-")}`;
-}
-
-function transitionModeCssClass(mode) {
-  return `mode-${String(mode || "dry").replaceAll("_", "-")}`;
-}
-
 function syncRuntimeModeChrome(mode) {
   document.body.classList.remove(...runtimeModeClassNames);
   document.body.classList.add(runtimeModeCssClass(mode));
@@ -2364,13 +2454,7 @@ function syncRuntimeModeChrome(mode) {
 function showRuntimeModeTransition(mode) {
   if (window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches) return;
   document.querySelectorAll(".mode-transition").forEach((item) => item.remove());
-  const labels = {
-    dry: ["Dry Mode", "Scanning only. Sends are blocked."],
-    full_auto: ["Full Auto", "Eligible replies can send automatically."],
-    semi_auto: ["Semi Auto", "Regular replies can send; new starts need review."],
-    live_fire: ["Live Fire", "Every reply stays approval-gated."],
-  };
-  const [title, detail] = labels[mode] || labels.dry;
+  const [title, detail] = runtimeModeTransitionCopy(mode);
   const overlay = document.createElement("div");
   overlay.className = `mode-transition ${transitionModeCssClass(mode)}`;
   overlay.innerHTML = `
@@ -2420,102 +2504,8 @@ function allEvents() {
   return Array.isArray(appState.events?.items) ? appState.events.items : [];
 }
 
-function reactionEventTypes() {
-  return [
-    "reaction_added",
-    "reaction_already_present",
-    "reaction_failed",
-    "reaction_scan",
-    "reaction_skipped",
-    "reaction_suggested",
-  ];
-}
-
 function filteredEvents() {
-  const events = allEvents();
-  if (eventFilterMode === "reactions") {
-    const reactionTypes = new Set(reactionEventTypes());
-    return events.filter((event) => reactionTypes.has(event.event_type));
-  }
-  if (eventFilterMode === "reaction_added") {
-    return events.filter((event) => event.event_type === "reaction_added");
-  }
-  return events;
-}
-
-function emptyEventFilterMessage() {
-  if (eventFilterMode === "reactions") return "No reaction events recorded yet.";
-  if (eventFilterMode === "reaction_added") return "No reactions made yet.";
-  return "No runtime events recorded yet.";
-}
-
-function eventKey(event) {
-  return [
-    event.created_at || "",
-    event.event_type || "",
-    event.server_id || "",
-    event.channel_id || "",
-    event.summary || "",
-    event.draft || "",
-  ].join("|");
-}
-
-function eventTypeLabel(event) {
-  const labels = {
-    channel_checked: "Channel checked",
-    channel_unavailable: "Channel unavailable",
-    discord_account_challenge: "Discord account challenge",
-    approval_queued: "Approval queued",
-    manual_approval_created: "Draft queued",
-    approval_regenerated: "Draft regenerated",
-    approval_updated: "Draft edited",
-    approval_discarded: "Draft discarded",
-    approvals_cleared: "Approvals cleared",
-    approval_send_started: "Delivery started",
-    duplicate_reply_blocked: "Duplicate blocked",
-    reply_guard_blocked: "Auto reply blocked",
-    output_guard_blocked: "Output guard blocked",
-    approval_sent: "Approved response sent",
-    approval_send_failed: "Send failed",
-    message_sent: "Auto response sent",
-    dry_run: "Dry-run draft",
-    auto_respond_dry_run: "Auto dry-run draft",
-    discord_repair: "Discord repair",
-    channel_backfilled: "Channel backfilled",
-    channel_refreshed: "Channel refreshed",
-    reaction_suggested: "Reaction suggested",
-    reaction_added: "Reaction made",
-    reaction_already_present: "Reaction already present",
-    reaction_failed: "Reaction failed",
-    reaction_scan: "Reaction scan",
-    reaction_skipped: "Reaction skipped",
-    unresponded_reply_dismissed: "Reply notice dismissed",
-    safety_review_scan: "Dojo sweep scan",
-    safety_review_flagged: "Dojo sweep flagged",
-    safety_review_dismissed: "Dojo sweep dismissed",
-  };
-  return labels[event.event_type] || event.event_type || "Event";
-}
-
-function eventClass(event) {
-  if (["approval_send_failed", "channel_unavailable", "reaction_failed", "discord_account_challenge", "output_guard_blocked"].includes(event.event_type)) return "failed";
-  if (["message_sent", "approval_sent"].includes(event.event_type)) return "sent";
-  if (["reaction_added"].includes(event.event_type)) return "reaction";
-  if (["safety_review_flagged"].includes(event.event_type)) return "failed";
-  if ([
-    "approval_queued",
-    "manual_approval_created",
-    "approval_send_started",
-    "duplicate_reply_blocked",
-    "reply_guard_blocked",
-    "reaction_already_present",
-    "reaction_scan",
-    "reaction_skipped",
-    "reaction_suggested",
-    "safety_review_scan",
-    "safety_review_dismissed",
-  ].includes(event.event_type)) return "attention";
-  return "";
+  return allEvents().filter((event) => eventMatchesFilter(event, eventFilterMode));
 }
 
 function eventScope(event) {
@@ -2525,24 +2515,6 @@ function eventScope(event) {
   }
   if (event.server_id) return findServerLabel(event.server_id);
   return "All servers";
-}
-
-function isNotifiableEvent(event) {
-  return [
-    "approval_queued",
-    "manual_approval_created",
-    "approval_send_started",
-    "duplicate_reply_blocked",
-    "reply_guard_blocked",
-    "output_guard_blocked",
-    "approval_sent",
-    "approval_send_failed",
-    "message_sent",
-    "channel_unavailable",
-    "reaction_added",
-    "reaction_failed",
-    "safety_review_flagged",
-  ].includes(event.event_type);
 }
 
 function syncEventNotifications({ previousEventKeys, notify }) {
@@ -2598,17 +2570,12 @@ function startAutoRefresh() {
 }
 
 function isUserEditing() {
+  if (hasDirtyFormSections()) return true;
   if (Object.keys(approvalRegenerationState).length) return true;
   const active = document.activeElement;
   if (!active) return false;
   const tag = active.tagName?.toLowerCase();
   return active.isContentEditable || ["input", "textarea", "select"].includes(tag);
-}
-
-function truncateText(value, maxLength) {
-  const text = String(value || "").trim();
-  if (text.length <= maxLength) return text;
-  return `${text.slice(0, maxLength - 3)}...`;
 }
 
 function scopeLabel(item) {
@@ -2621,11 +2588,7 @@ function scopeLabel(item) {
 }
 
 function userInstructionAppliesNow(item) {
-  const currentServer = server();
-  const currentChannel = channel();
-  if (item.server_id && item.server_id !== currentServer?.server_id) return false;
-  if (item.channel_id && item.channel_id !== currentChannel?.channel_id) return false;
-  return true;
+  return userInstructionMatchesScope(item, server(), channel());
 }
 
 function findServerLabel(serverId) {
@@ -2652,55 +2615,6 @@ function userNoteScopePayload() {
     return { server_id: server().server_id };
   }
   return {};
-}
-
-function formatTime(value) {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
-}
-
-function formatRuntimeTime(value) {
-  if (!value) return "never";
-  const date = typeof value === "number" ? new Date(value * 1000) : new Date(value);
-  if (Number.isNaN(date.getTime())) return "unknown";
-  return date.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
-}
-
-function channelTypeLabel(type) {
-  if (type === "thread") return "discussion thread";
-  if (type === "forum") return "forum channel";
-  if (type === "announcement") return "announcement channel";
-  if (type === "voice") return "voice channel";
-  if (type === "stage") return "stage channel";
-  if (type === "text") return "text channel";
-  return "";
-}
-
-function formatChannelName(name, type) {
-  if (!name) return "";
-  if ((type === "text" || type === "forum" || type === "announcement" || type === "thread" || !type) && !String(name).startsWith("#")) {
-    return `# ${name}`;
-  }
-  return name;
-}
-
-function escapeHtml(value) {
-  return String(value ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
-}
-
-function escapeAttr(value) {
-  return escapeHtml(value).replaceAll("'", "&#39;");
-}
-
-function cssEscape(value) {
-  if (window.CSS?.escape) return CSS.escape(value || "");
-  return String(value || "").replaceAll('"', '\\"');
 }
 
 function toast(message) {
@@ -2892,6 +2806,8 @@ function activateTab(tabId) {
     item.classList.toggle("active", item.id === tabId);
   });
 }
+
+trackDirtyFormFields();
 
 document.querySelectorAll(".tab").forEach((tab) => {
   tab.addEventListener("click", () => activateTab(tab.dataset.tab));
