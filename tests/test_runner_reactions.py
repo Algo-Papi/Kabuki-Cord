@@ -555,10 +555,40 @@ class RunnerTargetRotationTests(unittest.TestCase):
         second = ChannelTarget(server_id="s", channel_id="2")
         third = ChannelTarget(server_id="s", channel_id="3")
         app = NhiZuesRunner.__new__(NhiZuesRunner)
-        app.config = SimpleNamespace(channels=(first, second, third))
+        app.config = SimpleNamespace(
+            scanner_max_channels_per_cycle=1,
+            channels=(first, second, third),
+        )
         app._target_cursor = 1
 
         self.assertEqual([second, third, first], app._planned_targets())
+
+    def test_runner_can_resume_from_saved_loop_cursor(self) -> None:
+        first = ChannelTarget(server_id="s", channel_id="1")
+        second = ChannelTarget(server_id="s", channel_id="2")
+        third = ChannelTarget(server_id="s", channel_id="3")
+        app = NhiZuesRunner.__new__(NhiZuesRunner)
+        app.config = SimpleNamespace(
+            scanner_max_channels_per_cycle=1,
+            channels=(first, second, third),
+        )
+        app._target_cursor = 2
+        app._completed_loop_count = 4
+
+        selected, completed_loop = app._select_targets(app._planned_targets())
+        loop_state = app._loop_state(
+            planned_targets=(third, first, second),
+            selected_targets=selected,
+            will_complete_loop=completed_loop,
+        )
+
+        resumed = NhiZuesRunner.__new__(NhiZuesRunner)
+        resumed.config = SimpleNamespace(channels=(first, second, third))
+        resumed._target_cursor = loop_state["cursor"]
+        resumed._completed_loop_count = loop_state["completed_loops"]
+
+        self.assertEqual([first, second, third], resumed._planned_targets())
+        self.assertEqual(4, resumed._completed_loop_count)
 
 
 class MemoryStub:

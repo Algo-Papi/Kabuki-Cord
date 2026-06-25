@@ -19,6 +19,8 @@ const deliveryEventTypes = new Set(["message_sent", "approval_sent"]);
 const responseEventTypes = new Set(["message_sent", "approval_sent"]);
 const reactionActionEventTypes = new Set(["reaction_added"]);
 const stageTransitionTypes = ["logo-swipe-left", "mask-zoom", "logo-swipe-right", "crest-iris"];
+const dismissedActionStorageKey = "kabukiScannerDismissedActions:v1";
+let dismissedActionKeys = loadDismissedActionKeys();
 
 async function loadSession() {
   const response = await fetch("/api/session");
@@ -291,8 +293,8 @@ function renderUpcoming(items) {
 }
 
 function renderActionHistory(state) {
-  renderActionColumn("responseActions", actionEvents(state, responseEventTypes), "response", state);
-  renderActionColumn("reactionActions", actionEvents(state, reactionActionEventTypes), "reaction", state);
+  renderActionColumn("responseActions", visibleActionEvents(state, responseEventTypes, "response"), "response", state);
+  renderActionColumn("reactionActions", visibleActionEvents(state, reactionActionEventTypes, "reaction"), "reaction", state);
 }
 
 function renderActionColumn(elementId, events, kind, state) {
@@ -327,6 +329,60 @@ function actionEvents(state, types) {
   return events
     .filter((event) => types.has(event.event_type))
     .sort((left, right) => String(right.created_at || "").localeCompare(String(left.created_at || "")));
+}
+
+function visibleActionEvents(state, types, kind) {
+  return actionEvents(state, types).filter((event) => !dismissedActionKeys[kind].has(eventKey(event)));
+}
+
+function setupActionClearButtons() {
+  $("clearResponseActions")?.addEventListener("click", () => clearActionColumn("response", responseEventTypes));
+  $("clearReactionActions")?.addEventListener("click", () => clearActionColumn("reaction", reactionActionEventTypes));
+}
+
+function clearActionColumn(kind, types) {
+  const events = visibleActionEvents(latestState || {}, types, kind);
+  if (!events.length) {
+    showMonitorNote(`No ${kind === "reaction" ? "reaction" : "response"} activity to clear`);
+    return;
+  }
+  events.forEach((event) => dismissedActionKeys[kind].add(eventKey(event)));
+  trimDismissedActionKeys(kind);
+  saveDismissedActionKeys();
+  renderActionHistory(latestState || {});
+  showMonitorNote(`${events.length} ${kind === "reaction" ? "reaction" : "response"} item${events.length === 1 ? "" : "s"} cleared`);
+}
+
+function loadDismissedActionKeys() {
+  const fallback = { response: new Set(), reaction: new Set() };
+  try {
+    const raw = window.localStorage?.getItem(dismissedActionStorageKey);
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw);
+    return {
+      response: new Set(Array.isArray(parsed.response) ? parsed.response : []),
+      reaction: new Set(Array.isArray(parsed.reaction) ? parsed.reaction : []),
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+function saveDismissedActionKeys() {
+  try {
+    window.localStorage?.setItem(dismissedActionStorageKey, JSON.stringify({
+      response: Array.from(dismissedActionKeys.response),
+      reaction: Array.from(dismissedActionKeys.reaction),
+    }));
+  } catch {
+    return;
+  }
+}
+
+function trimDismissedActionKeys(kind) {
+  const values = Array.from(dismissedActionKeys[kind]);
+  if (values.length <= 240) return;
+  dismissedActionKeys[kind] = new Set(values.slice(values.length - 240));
 }
 
 function renderActionCard(event, kind, state, index) {
@@ -645,6 +701,7 @@ function escapeAttr(value) {
 
 loadSpyAnimation();
 setupSoundToggle();
+setupActionClearButtons();
 refresh();
 refreshTimer = setInterval(refresh, 1800);
 countdownTimer = setInterval(() => {

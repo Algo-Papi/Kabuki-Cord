@@ -17,6 +17,7 @@ from .events import EventLog
 from .llm import ReplyPlanner
 from .memory import ConversationMemory
 from . import own_identity
+from .output_guard import outgoing_block_reason
 from .reaction_ledger import ReactionLedger
 from .reactions import should_auto_react
 from .reply_ledger import ReplyLedger, duplicate_reply_message
@@ -29,7 +30,13 @@ log = logging.getLogger(__name__)
 
 
 class NhiZuesRunner:
-    def __init__(self, config: AppConfig) -> None:
+    def __init__(
+        self,
+        config: AppConfig,
+        *,
+        start_cursor: int = 0,
+        completed_loop_count: int = 0,
+    ) -> None:
         self.config = config
         self.memory = ConversationMemory(config.state_dir / "memory.json")
         self.topics = TopicTracker()
@@ -62,8 +69,9 @@ class NhiZuesRunner:
         self.reaction_ledger = ReactionLedger(config.state_dir / "reactions.json")
         self.user_instructions = UserInstructionStore(config.state_dir / "user_instructions.json")
         self.events = EventLog(config.state_dir / "events.json")
-        self._target_cursor = 0
-        self._completed_loop_count = 0
+        channel_count = len(config.channels)
+        self._target_cursor = int(start_cursor or 0) % channel_count if channel_count else 0
+        self._completed_loop_count = max(0, int(completed_loop_count or 0))
         self._own_author_ids: set[str] = set()
 
     async def run_once(self) -> None:
@@ -481,6 +489,18 @@ class NhiZuesRunner:
                 ),
             )
             if decision.should_reply and decision.draft:
+                output_block = outgoing_block_reason(decision.draft)
+                if output_block:
+                    log.info("output guard blocked draft channel=%s", target.channel_id)
+                    self.events.add(
+                        event_type="output_guard_blocked",
+                        server_id=target.server_id,
+                        channel_id=target.channel_id,
+                        summary=output_block,
+                        draft=decision.draft,
+                    )
+                    self.memory.save()
+                    continue
                 source_ids = tuple(message.message_id for message in reply_fresh)
                 discarded_message = discarded_approval_message(
                     self.discarded_approvals.find_overlap(

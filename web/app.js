@@ -2363,6 +2363,7 @@ function eventTypeLabel(event) {
     approval_send_started: "Delivery started",
     duplicate_reply_blocked: "Duplicate blocked",
     reply_guard_blocked: "Auto reply blocked",
+    output_guard_blocked: "Output guard blocked",
     approval_sent: "Approved response sent",
     approval_send_failed: "Send failed",
     message_sent: "Auto response sent",
@@ -2383,7 +2384,7 @@ function eventTypeLabel(event) {
 }
 
 function eventClass(event) {
-  if (["approval_send_failed", "channel_unavailable", "reaction_failed", "discord_account_challenge"].includes(event.event_type)) return "failed";
+  if (["approval_send_failed", "channel_unavailable", "reaction_failed", "discord_account_challenge", "output_guard_blocked"].includes(event.event_type)) return "failed";
   if (["message_sent", "approval_sent"].includes(event.event_type)) return "sent";
   if (["reaction_added"].includes(event.event_type)) return "reaction";
   if ([
@@ -2416,6 +2417,7 @@ function isNotifiableEvent(event) {
     "approval_send_started",
     "duplicate_reply_blocked",
     "reply_guard_blocked",
+    "output_guard_blocked",
     "approval_sent",
     "approval_send_failed",
     "message_sent",

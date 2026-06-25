@@ -38,6 +38,7 @@ from .llm import ReplyPlanner
 from .memory import ConversationMemory
 from .models import MessageRecord
 from . import own_identity
+from .output_guard import outgoing_block_reason
 from .reactions import suggest_emoji_reaction
 from .reply_ledger import ReplyLedger, duplicate_reply_message
 from .runner import NhiZuesRunner
@@ -409,6 +410,7 @@ class RuntimeController:
         self._last_error: str = ""
         self._phase = "idle"
         self._scan = self._empty_scan()
+        self._resume_loop = {"cursor": 0, "completed_loops": 0}
 
     def start(self) -> None:
         with self._lock:
@@ -455,6 +457,7 @@ class RuntimeController:
             self._running = False
             self._stop.set()
             self._phase = "stopping"
+            self._remember_resume_loop_from_scan_locked()
             self._scan = self._empty_scan("stopping")
             thread = self._thread
         _record_runtime_event("runtime_paused", "Scanner pause requested.")
@@ -495,7 +498,7 @@ class RuntimeController:
             self._set_phase("running")
             try:
                 asyncio.run(
-                    NhiZuesRunner(config).run_until_stopped(
+                    self._runner(config).run_until_stopped(
                         self._stop,
                         on_cycle=self._mark_cycle_complete,
                         on_targets_planned=self._mark_targets_planned,
@@ -573,7 +576,7 @@ class RuntimeController:
             )
             if config.headless:
                 await session.hide_for_automation()
-            await NhiZuesRunner(config).run_until_stopped_in_session(
+            await self._runner(config).run_until_stopped_in_session(
                 session,
                 self._stop,
                 on_cycle=self._mark_cycle_complete,
@@ -601,6 +604,7 @@ class RuntimeController:
                 "loop": self._loop_payload(loop_state, status="resting"),
                 "updated_at": now,
             }
+            self._remember_resume_loop_locked(loop_state)
 
     def _mark_targets_planned(self, targets, loop_state: dict | None = None) -> None:
         planned = [self._target_payload(target) for target in targets]
@@ -619,6 +623,7 @@ class RuntimeController:
                 "loop": self._loop_payload(loop_state, status="queued"),
                 "updated_at": now,
             }
+            self._remember_resume_loop_locked(loop_state)
 
     def _mark_target_start(self, target, index: int, targets, loop_state: dict | None = None) -> None:
         remaining = [self._target_payload(item) for item in list(targets)[index + 1 : index + 6]]
@@ -637,6 +642,7 @@ class RuntimeController:
                 "loop": self._loop_payload(loop_state, status="scanning"),
                 "updated_at": now,
             }
+            self._remember_resume_loop_locked(loop_state)
 
     def _mark_target_complete(
         self,
@@ -661,6 +667,7 @@ class RuntimeController:
                 "loop": self._loop_payload(loop_state, status="completed_channel"),
                 "updated_at": time.time(),
             }
+            self._remember_resume_loop_locked(loop_state)
 
     def _copy_scan(self) -> dict:
         return json.loads(json.dumps(self._scan))
@@ -681,6 +688,7 @@ class RuntimeController:
                 "current_loop": 0,
                 "completed_loops": 0,
                 "total_channels": 0,
+                "cursor": 0,
                 "completed_in_loop": 0,
                 "remaining_channels": 0,
                 "estimated_loop_seconds": 0,
@@ -711,6 +719,7 @@ class RuntimeController:
         try:
             config = load_config()
             total = int((loop_state or {}).get("total_channels") or len(config.channels) or 0)
+            cursor = int((loop_state or {}).get("cursor") or 0)
             completed_in_loop = int((loop_state or {}).get("completed_in_loop") or 0)
             completed_in_loop = max(0, min(completed_in_loop, total))
             remaining = max(0, total - completed_in_loop)
@@ -726,6 +735,7 @@ class RuntimeController:
                 "current_loop": current_loop,
                 "completed_loops": completed_loops,
                 "total_channels": total,
+                "cursor": max(0, min(cursor, total)) if total else 0,
                 "position": int((loop_state or {}).get("position") or 0),
                 "completed_in_loop": completed_in_loop,
                 "remaining_channels": remaining,
@@ -735,6 +745,40 @@ class RuntimeController:
             }
         except Exception:
             return self._empty_scan()["loop"]
+
+    def _runner(self, config: AppConfig) -> NhiZuesRunner:
+        with self._lock:
+            resume = dict(self._resume_loop)
+        return NhiZuesRunner(
+            config,
+            start_cursor=int(resume.get("cursor") or 0),
+            completed_loop_count=int(resume.get("completed_loops") or 0),
+        )
+
+    def _remember_resume_loop_locked(self, loop_state: dict | None) -> None:
+        if not loop_state:
+            return
+        total = int((loop_state or {}).get("total_channels") or 0)
+        cursor = int((loop_state or {}).get("cursor") or 0)
+        completed_loops = int((loop_state or {}).get("completed_loops") or 0)
+        self._resume_loop = {
+            "cursor": max(0, min(cursor, total)) if total else 0,
+            "completed_loops": max(0, completed_loops),
+        }
+
+    def _remember_resume_loop_from_scan_locked(self) -> None:
+        loop = self._scan.get("loop") if isinstance(self._scan, dict) else {}
+        if not isinstance(loop, dict):
+            return
+        total = int(loop.get("total_channels") or 0)
+        if total <= 0:
+            return
+        cursor = int(loop.get("cursor") or 0)
+        completed_loops = int(loop.get("completed_loops") or 0)
+        self._resume_loop = {
+            "cursor": max(0, min(cursor, total)),
+            "completed_loops": max(0, completed_loops),
+        }
 
 
 def _estimated_channel_scan_seconds(config: AppConfig) -> float:
@@ -2054,6 +2098,16 @@ def _send_approval_locked(*, approval_id: str, draft: str, reply_to_message_id: 
         item = queue.update_draft(approval_id, draft)
     except KeyError as exc:
         raise RuntimeError("That approval was already cleared. Refresh the app before sending.") from exc
+    output_block = outgoing_block_reason(draft)
+    if output_block:
+        EventLog(config.state_dir / "events.json").add(
+            event_type="output_guard_blocked",
+            server_id=item.server_id,
+            channel_id=item.channel_id,
+            summary=output_block,
+            draft=draft,
+        )
+        raise RuntimeError(output_block)
 
     source_messages = _approval_source_messages(config, item)
     own_source_message = _own_source_block_message(
@@ -2408,6 +2462,17 @@ def _regenerate_approval_locked(
     if not decision.draft:
         raise RuntimeError(decision.reason)
     draft = _draft_with_reply_mention(decision.draft, source_messages)
+    output_block = outgoing_block_reason(draft)
+    if output_block:
+        EventLog(config.state_dir / "events.json").add(
+            event_type="output_guard_blocked",
+            server_id=item.server_id,
+            channel_id=item.channel_id,
+            summary=output_block,
+            draft=draft,
+            user_key=effective_target_user_key,
+        )
+        raise RuntimeError(output_block)
     queue.update_draft(approval_id, draft)
     EventLog(config.state_dir / "events.json").add(
         event_type="approval_regenerated",
@@ -2506,6 +2571,17 @@ def create_manual_approval(body: dict) -> None:
     if not decision.draft:
         raise RuntimeError(decision.reason)
     draft = _draft_with_reply_mention(decision.draft, source_messages)
+    output_block = outgoing_block_reason(draft)
+    if output_block:
+        EventLog(config.state_dir / "events.json").add(
+            event_type="output_guard_blocked",
+            server_id=server_id,
+            channel_id=channel_id,
+            summary=output_block,
+            draft=draft,
+            user_key=target_user_key,
+        )
+        raise RuntimeError(output_block)
     character = CharacterCardStore(config.character_dir, config.character_card).for_server(
         server_id,
         _server_character_card(config, server_id),
