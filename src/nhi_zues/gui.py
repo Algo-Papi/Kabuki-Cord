@@ -42,7 +42,6 @@ from .budget import BudgetManager
 from .character import CharacterCardStore
 from .character_memory import CharacterMemoryStore
 from .config import AppConfig, load_config
-from .discarded_approvals import DiscardedApprovalStore, discarded_approval_message
 from .discord_text import clean_discord_display_name, sanitize_outgoing_draft
 from .events import EventLog
 from .llm import ReplyPlanner
@@ -450,6 +449,7 @@ def app_state() -> dict:
             "reaction_threshold": config.reaction_threshold,
             "reaction_sample_percent": config.reaction_sample_percent,
             "reaction_force_laugh_percent": config.reaction_force_laugh_percent,
+            "reaction_cooldown_seconds": config.reaction_cooldown_seconds,
             "reaction_emoji_override": config.reaction_emoji_override,
             "typing_indicator_enabled": config.typing_indicator_enabled,
             "typing_min_seconds": config.typing_min_seconds,
@@ -517,10 +517,11 @@ def app_state() -> dict:
             "NHI_ZUES_REPLY_WINDOW_SECONDS": env.get("NHI_ZUES_REPLY_WINDOW_SECONDS", "3600"),
             "NHI_ZUES_REPLY_MAX_PER_WINDOW": env.get("NHI_ZUES_REPLY_MAX_PER_WINDOW", "3"),
             "NHI_ZUES_REPLY_REQUIRE_INTERVENING_USER": env.get("NHI_ZUES_REPLY_REQUIRE_INTERVENING_USER", "true"),
-            "NHI_ZUES_REACTION_MAX_PER_CHANNEL": env.get("NHI_ZUES_REACTION_MAX_PER_CHANNEL", "3"),
+            "NHI_ZUES_REACTION_MAX_PER_CHANNEL": env.get("NHI_ZUES_REACTION_MAX_PER_CHANNEL", "1"),
             "NHI_ZUES_REACTION_THRESHOLD": env.get("NHI_ZUES_REACTION_THRESHOLD", "normal"),
             "NHI_ZUES_REACTION_SAMPLE_PERCENT": env.get("NHI_ZUES_REACTION_SAMPLE_PERCENT", "0"),
-            "NHI_ZUES_REACTION_FORCE_LAUGH_PERCENT": env.get("NHI_ZUES_REACTION_FORCE_LAUGH_PERCENT", "20"),
+            "NHI_ZUES_REACTION_FORCE_LAUGH_PERCENT": env.get("NHI_ZUES_REACTION_FORCE_LAUGH_PERCENT", "0"),
+            "NHI_ZUES_REACTION_COOLDOWN_SECONDS": env.get("NHI_ZUES_REACTION_COOLDOWN_SECONDS", "900"),
             "NHI_ZUES_REACTION_EMOJI_OVERRIDE": env.get("NHI_ZUES_REACTION_EMOJI_OVERRIDE", ""),
         },
         "servers": _read_json(config.servers_file, default={"servers": []}),
@@ -1670,6 +1671,7 @@ def create_manual_approval(body: dict) -> None:
     target_user_key = str(body.get("target_user_key") or "")
     target_message_id = str(body.get("target_message_id") or "")
     operator_instruction = str(body.get("instruction") or "").strip()
+    force_manual = bool(body.get("force_manual") or body.get("force"))
     if not server_id or not channel_id:
         raise RuntimeError("Missing server or channel.")
     config = load_config()
@@ -1698,22 +1700,6 @@ def create_manual_approval(body: dict) -> None:
         )
         raise RuntimeError(own_source_message)
     source_ids = tuple(message.message_id for message in source_messages)
-    discarded_message = discarded_approval_message(
-        DiscardedApprovalStore(config.state_dir / "discarded_approvals.json").find_overlap(
-            channel_id=channel_id,
-            source_message_ids=source_ids,
-        )
-    )
-    if discarded_message:
-        EventLog(config.state_dir / "events.json").add(
-            event_type="discarded_approval_suppressed",
-            server_id=server_id,
-            channel_id=channel_id,
-            summary=discarded_message,
-            draft="",
-            user_key=target_user_key,
-        )
-        raise RuntimeError(discarded_message)
     ledger = ReplyLedger(config.state_dir / "sent_replies.json")
     duplicate_message = duplicate_reply_message(
         ledger.find_overlap(channel_id=channel_id, source_message_ids=source_ids)
@@ -1771,7 +1757,7 @@ def create_manual_approval(body: dict) -> None:
         channel_id=channel_id,
         character_name=character.name,
         engagement_type="manual",
-        reason=operator_instruction or decision.reason,
+        reason=_manual_approval_reason(operator_instruction or decision.reason, force_manual=force_manual),
         draft=draft,
         source_messages=source_messages,
     )
@@ -1779,10 +1765,17 @@ def create_manual_approval(body: dict) -> None:
         event_type="manual_approval_created",
         server_id=server_id,
         channel_id=channel_id,
-        summary=operator_instruction or decision.reason,
+        summary=_manual_approval_reason(operator_instruction or decision.reason, force_manual=force_manual),
         draft=item.draft,
         user_key=target_user_key,
     )
+
+
+def _manual_approval_reason(reason: str, *, force_manual: bool) -> str:
+    reason = str(reason or "manual approval draft").strip()
+    if not force_manual:
+        return reason
+    return f"Manual override: {reason}"
 
 
 def _memory_context(memory_path: Path, channel_id: str):
@@ -2084,6 +2077,7 @@ def update_env(values: dict) -> None:
         "NHI_ZUES_REACTION_THRESHOLD",
         "NHI_ZUES_REACTION_SAMPLE_PERCENT",
         "NHI_ZUES_REACTION_FORCE_LAUGH_PERCENT",
+        "NHI_ZUES_REACTION_COOLDOWN_SECONDS",
         "NHI_ZUES_REACTION_EMOJI_OVERRIDE",
     }
     for key, value in values.items():

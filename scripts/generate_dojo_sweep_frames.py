@@ -14,7 +14,7 @@ OUTPUT_DIR = ROOT / "web" / "assets" / "monitor_dojo_sweep_frames"
 FRAME_W = 960
 FRAME_H = 720
 FRAMES = 48
-FRAME_MS = 150
+FRAME_MS = 95
 KEYFRAME_NAMES = (
     "key_000.png",
     "key_001.png",
@@ -45,7 +45,7 @@ def main() -> None:
         "height": FRAME_H,
         "source": "../source/dojo_sweep_keyframes/key_000.png",
         "keyframes": list(KEYFRAME_NAMES),
-        "timing": "scanner-dwell-synced",
+        "timing": "looped-while-sweep-target-active",
         "animation": "five-pose-sweep-cycle-with-dust-vortex",
     }
     (OUTPUT_DIR / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
@@ -124,8 +124,8 @@ def pose_state(index: int) -> tuple[int, int, float, int, int]:
     end = POSE_SEQUENCE[(segment + 1) % segment_count]
     t = smoothstep(local)
     beat = math.sin((index / FRAMES) * math.tau * 2)
-    dx = int(round(2.0 * beat))
-    dy = int(round(1.5 * math.sin((index / FRAMES) * math.tau * 4)))
+    dx = int(round(6.0 * beat))
+    dy = int(round(3.0 * math.sin((index / FRAMES) * math.tau * 4)))
     return start, end, t, dx, dy
 
 
@@ -139,20 +139,20 @@ def draw_whirlwind(draw: ImageDraw.ImageDraw, index: int) -> None:
     cycle = index / FRAMES
     sweep = 0.5 - 0.5 * math.cos(cycle * math.tau)
     wind = math.sin(cycle * math.tau * 2)
-    base_alpha = 95 + int(55 * abs(wind))
-    for layer in range(5):
-        inset = layer * 25
+    base_alpha = 120 + int(72 * abs(wind))
+    for layer in range(7):
+        inset = layer * 21
         y_lift = int(layer * 12 + abs(wind) * 18)
         bbox = (
-            45 + inset,
-            508 - y_lift,
-            FRAME_W - 42 - inset,
-            760 - layer * 10,
+            20 + inset,
+            488 - y_lift,
+            FRAME_W - 20 - inset,
+            770 - layer * 9,
         )
-        start = 188 + int(sweep * 48) - layer * 8
-        end = 350 + int(sweep * 38) - layer * 5
+        start = 178 + int(sweep * 58) - layer * 9
+        end = 364 + int(sweep * 44) - layer * 4
         alpha = max(22, base_alpha - layer * 18)
-        width = max(2, 8 - layer)
+        width = max(2, 11 - layer)
         color = (231, 184, 107, alpha)
         draw.arc(bbox, start, end, fill=color, width=width)
         draw.arc(
@@ -218,9 +218,18 @@ def draw_broom_impact_flash(draw: ImageDraw.ImageDraw, index: int) -> None:
     cycle = index / FRAMES
     sweep_x = 120 + int((0.5 - 0.5 * math.cos(cycle * math.tau)) * 720)
     pulse = abs(math.sin(cycle * math.tau * 4))
-    if pulse < 0.28:
-        return
-    alpha = int(95 * pulse)
+    alpha = int(42 + 118 * pulse)
+    bristle_width = int(64 + 48 * pulse)
+    draw.line(
+        (
+            sweep_x - bristle_width,
+            642 - int(24 * pulse),
+            sweep_x + bristle_width,
+            612 + int(16 * pulse),
+        ),
+        fill=(255, 220, 138, min(190, alpha + 18)),
+        width=max(3, int(8 + 8 * pulse)),
+    )
     draw.polygon(
         (
             (sweep_x - 95, 646),

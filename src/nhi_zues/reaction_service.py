@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import math
+from datetime import datetime, timezone
 
 from . import own_identity
 from .reactions import should_auto_react
 from .reply_policy import is_own_message
+
+
+REACTION_FAILURE_BACKOFF_SECONDS = 1800.0
+REACTION_FAILURE_BACKOFF_THRESHOLD = 2
 
 
 async def process_reactions(
@@ -46,6 +51,45 @@ async def process_reactions(
             ),
         )
         return set()
+    failure_backoff_remaining = reaction_failure_backoff_remaining(
+        reaction_ledger,
+        channel_id=target.channel_id,
+        backoff_seconds=max(
+            REACTION_FAILURE_BACKOFF_SECONDS,
+            float(getattr(config, "reaction_cooldown_seconds", 0.0) or 0.0) * 2,
+        ),
+        failure_threshold=REACTION_FAILURE_BACKOFF_THRESHOLD,
+    )
+    if failure_backoff_remaining > 0:
+        events.add(
+            event_type="reaction_skipped",
+            server_id=target.server_id,
+            channel_id=target.channel_id,
+            summary=(
+                "React is temporarily backed off for this channel after repeated "
+                "Discord reaction UI failures. "
+                f"fresh={fresh_count}, candidates={len(candidates)}, "
+                f"backoff_remaining={math.ceil(failure_backoff_remaining)}s."
+            ),
+        )
+        return set()
+    cooldown_remaining = reaction_cooldown_remaining(
+        reaction_ledger,
+        channel_id=target.channel_id,
+        cooldown_seconds=getattr(config, "reaction_cooldown_seconds", 0.0),
+    )
+    if cooldown_remaining > 0:
+        events.add(
+            event_type="reaction_skipped",
+            server_id=target.server_id,
+            channel_id=target.channel_id,
+            summary=(
+                "React is enabled, but this channel is in reaction cooldown. "
+                f"fresh={fresh_count}, candidates={len(candidates)}, "
+                f"cooldown_remaining={math.ceil(cooldown_remaining)}s."
+            ),
+        )
+        return set()
 
     reacted_message_ids: set[str] = set()
     ledgered = 0
@@ -70,7 +114,8 @@ async def process_reactions(
         sum(
             1
             for message_id in force_laugh_ids
-            if reaction_ledger.has_reacted_to_message(
+            if _has_attempted_reaction(
+                reaction_ledger,
                 channel_id=target.channel_id,
                 message_id=message_id,
             )
@@ -95,7 +140,8 @@ async def process_reactions(
             own_skipped += 1
             last_reason = "message is from the configured character/account"
             continue
-        if reaction_ledger.has_reacted_to_message(
+        if _has_attempted_reaction(
+            reaction_ledger,
             channel_id=message.channel_id,
             message_id=message.message_id,
         ):
@@ -124,6 +170,13 @@ async def process_reactions(
             result = await session.add_reaction(message.message_id, emoji)
         except Exception as exc:
             failed += 1
+            reaction_ledger.record(
+                server_id=target.server_id,
+                message=message,
+                emoji=emoji,
+                reason=f"failed reaction attempt; {exc}",
+                verified=False,
+            )
             events.add(
                 event_type="reaction_failed",
                 server_id=target.server_id,
@@ -159,6 +212,13 @@ async def process_reactions(
             continue
         if not result.get("applied"):
             failed += 1
+            reaction_ledger.record(
+                server_id=target.server_id,
+                message=message,
+                emoji=emoji,
+                reason=f"unverified reaction attempt; path={result.get('path') or 'unverified'}",
+                verified=False,
+            )
             events.add(
                 event_type="reaction_failed",
                 server_id=target.server_id,
@@ -173,7 +233,7 @@ async def process_reactions(
                 target_author=message.author,
                 emoji=emoji,
             )
-            continue
+            return reacted_message_ids
 
         reaction_ledger.record(
             server_id=target.server_id,
@@ -311,6 +371,74 @@ def reaction_window_cap(percent: float, window_size: int) -> int:
     if percent <= 0.0 or window_size <= 0:
         return 0
     return min(window_size, max(1, math.ceil(window_size * (percent / 100.0))))
+
+
+def reaction_cooldown_remaining(
+    reaction_ledger,
+    *,
+    channel_id: str,
+    cooldown_seconds: float,
+    now: datetime | None = None,
+) -> float:
+    cooldown = max(0.0, float(cooldown_seconds or 0.0))
+    if cooldown <= 0:
+        return 0.0
+    latest = None
+    last_attempt_at = getattr(reaction_ledger, "last_attempt_at", None)
+    if callable(last_attempt_at):
+        latest = last_attempt_at(channel_id=channel_id)
+    last_reaction_at = getattr(reaction_ledger, "last_reaction_at", None)
+    if latest is None and callable(last_reaction_at):
+        latest = last_reaction_at(channel_id=channel_id)
+    if latest is None:
+        return 0.0
+    if latest.tzinfo is None:
+        latest = latest.replace(tzinfo=timezone.utc)
+    current = now or datetime.now(timezone.utc)
+    elapsed = max(0.0, (current - latest.astimezone(timezone.utc)).total_seconds())
+    return max(0.0, cooldown - elapsed)
+
+
+def reaction_failure_backoff_remaining(
+    reaction_ledger,
+    *,
+    channel_id: str,
+    backoff_seconds: float,
+    failure_threshold: int,
+    now: datetime | None = None,
+) -> float:
+    threshold = max(1, int(failure_threshold or 1))
+    backoff = max(0.0, float(backoff_seconds or 0.0))
+    if backoff <= 0:
+        return 0.0
+    recent_unverified_count = getattr(reaction_ledger, "recent_unverified_count", None)
+    if not callable(recent_unverified_count):
+        return 0.0
+    current = now or datetime.now(timezone.utc)
+    failures = recent_unverified_count(
+        channel_id=channel_id,
+        within_seconds=backoff,
+        now=current,
+    )
+    if failures < threshold:
+        return 0.0
+    last_attempt_at = getattr(reaction_ledger, "last_attempt_at", None)
+    if not callable(last_attempt_at):
+        return backoff
+    latest = last_attempt_at(channel_id=channel_id)
+    if latest is None:
+        return backoff
+    if latest.tzinfo is None:
+        latest = latest.replace(tzinfo=timezone.utc)
+    elapsed = max(0.0, (current - latest.astimezone(timezone.utc)).total_seconds())
+    return max(0.0, backoff - elapsed)
+
+
+def _has_attempted_reaction(reaction_ledger, *, channel_id: str, message_id: str) -> bool:
+    has_attempted = getattr(reaction_ledger, "has_attempted_to_message", None)
+    if callable(has_attempted):
+        return bool(has_attempted(channel_id=channel_id, message_id=message_id))
+    return bool(reaction_ledger.has_reacted_to_message(channel_id=channel_id, message_id=message_id))
 
 
 def force_window_fill_reason(reason: str, percent: float) -> str:

@@ -73,7 +73,7 @@ INTERPRETIVE_BRIDGES = (
 
 DEFAULT_RESPONSE_MOVES = (
     "plain pushback: challenge one word or assumption directly, then stop. No question.",
-    "grounded aside: connect the topic to one ordinary detail from work, music, home, or town life. No big theory.",
+    "grounded aside: only use an ordinary work, music, home, or town-life detail if the target directly makes it relevant. No big theory.",
     "half-remembered claim: mention something you heard/read imperfectly, with uncertainty instead of confidence.",
     "dry reaction: one blunt passing comment, casual and short. No metaphor stack.",
     "specific evidence ask: ask one concrete source/detail question. No broad what-do-you-think closer.",
@@ -209,8 +209,8 @@ def _clean_repeated_personal_filler(text: str) -> str:
 def _replace_stock_phrases(text: str, *, seed: str) -> str:
     rng = random.Random(int(hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16], 16))
     replacements = {
-        r"\blmao\b[, ]*": ("", "that is ugly, ", "gross, "),
-        r"\blol\b[, ]*": ("", "", "that is ugly, "),
+        r"\blmao\b[, ]*": ("", "", "haha "),
+        r"\blol\b[, ]*": ("", "", "haha "),
         r"\bngl\b[, ]*": ("", "honestly ", ""),
         r"\blowkey\b\s*": ("", "kinda "),
         r"\bnot gonna lie\b[, ]*": ("", "honestly "),

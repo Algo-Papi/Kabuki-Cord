@@ -233,6 +233,8 @@ def _has_enough_reaction_signal(text: str) -> bool:
     lowered = text.lower().strip()
     if lowered.startswith(("http://", "https://", "www.")):
         return False
+    if _looks_like_low_value_chatter(lowered):
+        return False
     return True
 
 
@@ -242,6 +244,8 @@ def _has_minimum_forced_reaction_signal(text: str) -> bool:
         return False
     lowered = cleaned.lower()
     if lowered.startswith(("http://", "https://", "www.")):
+        return False
+    if _looks_like_low_value_chatter(lowered):
         return False
     return bool(re.search(r"[a-zA-Z0-9]", cleaned))
 
@@ -268,6 +272,45 @@ def _looks_like_joke(lowered: str, markers: tuple[str, ...]) -> bool:
     return any(marker in lowered for marker in markers) or bool(
         re.search(r"\b(lol+|lmao+|haha+|hehe+)\b", lowered)
     )
+
+
+def _looks_like_low_value_chatter(lowered: str) -> bool:
+    normalized = re.sub(r"[^a-z0-9'? ]+", " ", str(lowered or "").lower())
+    normalized = " ".join(normalized.split()).strip(" ?!")
+    if not normalized:
+        return True
+    low_value_phrases = {
+        "hows life",
+        "how's life",
+        "how is life",
+        "what about you",
+        "how are you",
+        "how are u",
+        "hows it going",
+        "how's it going",
+        "pretty much",
+        "nothing much",
+        "nthn much",
+        "same",
+        "ok",
+        "okay",
+        "yeah",
+        "yea",
+        "yep",
+        "nah",
+        "nope",
+        "sup",
+        "wsg",
+        "wyd",
+        "can i though",
+    }
+    if normalized in low_value_phrases:
+        return True
+    if re.fullmatch(r"(yo+|hey+|hi+|hello+|sup|wsg)( chat| guys| yall| bro| dude)?", normalized):
+        return True
+    if len(normalized.split()) <= 3 and re.search(r"\b(how|what|wyd|sup|wsg)\b", normalized):
+        return True
+    return False
 
 
 def _normalize_threshold(value: str) -> str:

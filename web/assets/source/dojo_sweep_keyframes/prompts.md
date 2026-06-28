@@ -35,4 +35,4 @@ Polished late-16-bit/GBA-plus pixel art, crisp readable silhouette, 20-40% more 
 No text, no watermark, no UI, no logos, no gore, no weapon, no extra characters.
 ```
 
-The monitor maps the 48-frame loop to the current Dojo Sweep target's `current_started_at` -> `current_estimated_done_at` window, so the sweep animation lasts approximately as long as the scanner dwell.
+The monitor loops the 48-frame sweep cycle while the current scanner target is a Dojo Sweep target. The scan countdown still reports the dwell timing, but the actor continues sweeping at animation speed instead of stretching one broom stroke across the whole dwell.

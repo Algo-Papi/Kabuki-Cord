@@ -7,6 +7,8 @@ let spyFrames = ["/assets/monitor_spy_frames/frame_000.png"];
 let normalSpyFrames = ["/assets/monitor_spy_frames/frame_000.png"];
 let dojoSweepFrames = ["/assets/monitor_dojo_sweep_frames/frame_000.png"];
 let spyFrameMs = 180;
+let normalSpyFrameMs = 180;
+let dojoSweepFrameMs = 95;
 let activeFrameLayer = "A";
 let activeAnimationMode = "scan";
 let transitionIndex = 0;
@@ -60,14 +62,14 @@ async function refresh() {
 async function loadSpyAnimation() {
   const normal = await loadFrameSet("/assets/monitor_spy_frames", "/assets/monitor_spy_frames/frame_000.png");
   normalSpyFrames = normal.frames;
-  spyFrameMs = normal.frameMs;
+  normalSpyFrameMs = normal.frameMs;
+  spyFrameMs = normalSpyFrameMs;
   spyFrames = normalSpyFrames;
   const dojo = await loadFrameSet("/assets/monitor_dojo_sweep_frames", "/assets/monitor_dojo_sweep_frames/frame_000.png");
   dojoSweepFrames = dojo.frames;
+  dojoSweepFrameMs = dojo.frameMs || 95;
   preloadImages([...normalSpyFrames, ...dojoSweepFrames, pausedFrame]);
-  if (spyFrameTimer) clearInterval(spyFrameTimer);
-  spyFrameTimer = null;
-  if (!spyPaused) spyFrameTimer = setInterval(advanceSpyFrame, spyFrameMs);
+  restartSpyFrameTimer();
 }
 
 async function loadFrameSet(directory, fallbackFrame) {
@@ -98,10 +100,6 @@ function preloadImages(sources) {
 
 function advanceSpyFrame() {
   if (spyPaused) return;
-  if (activeAnimationMode === "dojo_sweep") {
-    syncDojoSweepFrame();
-    return;
-  }
   showSceneFrame((spyFrameIndex + 1) % spyFrames.length, { transition: true });
 }
 
@@ -138,6 +136,7 @@ function setAnimationMode(mode) {
   if (activeAnimationMode === nextMode) return;
   activeAnimationMode = nextMode;
   spyFrames = nextMode === "dojo_sweep" ? dojoSweepFrames : normalSpyFrames;
+  spyFrameMs = nextMode === "dojo_sweep" ? dojoSweepFrameMs : normalSpyFrameMs;
   spyFrameIndex = 0;
   const scene = document.querySelector(".spy-scene");
   scene?.classList.toggle("dojo-sweep", nextMode === "dojo_sweep");
@@ -150,23 +149,17 @@ function setAnimationMode(mode) {
     frameB.classList.remove("active");
     activeFrameLayer = "A";
   }
-}
-
-function syncDojoSweepFrame() {
-  const runtime = latestState?.runtime || {};
-  const scan = runtime.scan || {};
-  if (!runtime.running || scan.status !== "scanning" || !isDojoSweepTarget(scan.current)) return;
-  const startedAt = Number(scan.current_started_at || 0);
-  const doneAt = Number(scan.current_estimated_done_at || 0);
-  const now = Date.now() / 1000;
-  const duration = Math.max(4, doneAt - startedAt);
-  const progress = startedAt && doneAt ? Math.max(0, Math.min(1, (now - startedAt) / duration)) : 0;
-  const nextIndex = Math.min(spyFrames.length - 1, Math.floor(progress * spyFrames.length));
-  showSceneFrame(nextIndex, { transition: false });
+  restartSpyFrameTimer();
 }
 
 function isDojoSweepTarget(target) {
   return Boolean(target?.safety_review_enabled);
+}
+
+function restartSpyFrameTimer() {
+  if (spyFrameTimer) clearInterval(spyFrameTimer);
+  spyFrameTimer = null;
+  if (!spyPaused) spyFrameTimer = setInterval(advanceSpyFrame, spyFrameMs);
 }
 
 function setSpyPaused(paused) {
@@ -198,7 +191,7 @@ function setSpyPaused(paused) {
   frameA.classList.add("active");
   frameB.classList.remove("active");
   activeFrameLayer = "A";
-  if (!spyFrameTimer) spyFrameTimer = setInterval(advanceSpyFrame, spyFrameMs);
+  restartSpyFrameTimer();
 }
 
 function render(state) {
@@ -209,7 +202,6 @@ function render(state) {
   const sweepActive = runtime.running && status === "scanning" && isDojoSweepTarget(scan.current);
   setAnimationMode(sweepActive ? "dojo_sweep" : "scan");
   setSpyPaused(!runtime.running);
-  if (sweepActive) syncDojoSweepFrame();
   $("monitorStatus").className = `status-pill ${sweepActive ? "sweep" : runtime.running ? "running" : "paused"}`;
   $("monitorStatus").textContent = runtime.running ? (sweepActive ? "Dojo Sweep" : statusLabel(status)) : "Paused";
 
@@ -774,7 +766,6 @@ refreshTimer = setInterval(refresh, 1800);
 countdownTimer = setInterval(() => {
   renderCountdowns();
   renderLoopHud(latestState);
-  if (activeAnimationMode === "dojo_sweep") syncDojoSweepFrame();
 }, 1000);
 window.addEventListener("beforeunload", () => {
   if (refreshTimer) clearInterval(refreshTimer);

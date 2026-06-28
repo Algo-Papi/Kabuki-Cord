@@ -1331,6 +1331,7 @@ class DiscordWebSession:
             await message.scroll_into_view_if_needed(timeout=5_000)
             await message.hover(timeout=5_000)
             await self.page.wait_for_timeout(350)
+            await self._reveal_message_actions(message)
         except Exception as exc:
             raise RuntimeError("Discord could not find the selected message to react to.") from exc
 
@@ -1349,11 +1350,12 @@ class DiscordWebSession:
         if await self._click_add_reaction_action(message):
             await self.page.wait_for_timeout(450)
             if await self._select_emoji_from_picker(emoji):
-                if await self._wait_for_own_reaction(message, emoji, timeout_ms=4_000):
+                if await self._wait_for_own_reaction(message, emoji, timeout_ms=6_000):
                     return {"applied": True, "already_present": False, "emoji": emoji, "path": "picker"}
                 unverified_paths.append("picker")
 
         if unverified_paths:
+            await self._dismiss_open_popouts()
             return {
                 "applied": False,
                 "already_present": False,
@@ -1362,7 +1364,13 @@ class DiscordWebSession:
                 "path": "+".join(unverified_paths) + "-unverified",
             }
 
-        raise RuntimeError("Discord did not expose a usable Add Reaction control for the selected message.")
+        controls = await self._reaction_control_snapshot(message)
+        await self._dismiss_open_popouts()
+        detail = f" Visible controls near message: {controls}." if controls else ""
+        raise RuntimeError(
+            "Discord did not expose a usable Add Reaction control for the selected message."
+            f"{detail}"
+        )
 
     async def _wait_for_own_reaction(self, message, emoji: str, *, timeout_ms: int) -> bool:
         deadline = max(int(timeout_ms), 0)
@@ -1396,11 +1404,41 @@ class DiscordWebSession:
                         const queryMatch = (label) => (
                             query && label.toLowerCase().includes(String(query).toLowerCase())
                         );
-                        const labels = Array.from(messageNode.querySelectorAll('[aria-label], [title], button, [role="button"]'))
-                            .map((node) => `${node.getAttribute("aria-label") || ""} ${node.getAttribute("title") || ""} ${node.textContent || ""}`);
-                        return labels.some((label) => {
+                        const visible = (node) => {
+                            if (!node) return false;
+                            const rect = node.getBoundingClientRect();
+                            const style = window.getComputedStyle(node);
+                            return rect.width > 0
+                                && rect.height > 0
+                                && style.display !== "none"
+                                && style.visibility !== "hidden";
+                        };
+                        const messageRect = messageNode.getBoundingClientRect();
+                        const nearMessage = (node) => {
+                            const rect = node.getBoundingClientRect();
+                            return rect.bottom >= messageRect.top - 80
+                                && rect.top <= messageRect.bottom + 140
+                                && rect.left >= messageRect.left - 20;
+                        };
+                        const nodes = [
+                            ...Array.from(messageNode.querySelectorAll('[aria-label], [title], button, [role="button"]')),
+                            ...Array.from(document.querySelectorAll('[aria-label], [title], button, [role="button"]'))
+                                .filter((node) => visible(node) && nearMessage(node))
+                        ];
+                        return nodes.some((node) => {
+                            const label = [
+                                node.getAttribute("aria-label") || "",
+                                node.getAttribute("title") || "",
+                                node.getAttribute("data-list-item-id") || "",
+                                node.textContent || ""
+                            ].join(" ");
                             if (!label.includes(emoji) && !(emojiPattern && emojiPattern.test(label)) && !queryMatch(label)) return false;
-                            return /you reacted|your reaction|remove reaction|unreact|click to remove|press to remove|already reacted/i.test(label);
+                            const selected = /true|mixed/i.test(node.getAttribute("aria-pressed") || "")
+                                || /true/i.test(node.getAttribute("aria-selected") || "")
+                                || /selected|active|pressed/i.test(node.className || "");
+                            return selected
+                                || /you reacted|your reaction|remove(?: your)? reaction|unreact|click to remove|press to remove|already reacted/i.test(label)
+                                || /remove/i.test(label);
                         });
                     }
                     """,
@@ -1454,7 +1492,11 @@ class DiscordWebSession:
             return False
 
     async def _click_add_reaction_action(self, message) -> bool:
+        await self._dismiss_open_popouts()
+        await self._reveal_message_actions(message)
         if await self._click_visible_reaction_action(message):
+            return True
+        if await self._click_more_reaction_action(message):
             return True
         try:
             await message.click(button="right", timeout=5_000)
@@ -1480,11 +1522,111 @@ class DiscordWebSession:
                         };
                         const msgRect = messageNode.getBoundingClientRect();
                         const candidates = Array.from(document.querySelectorAll(
-                            'button[aria-label], [role="button"][aria-label], [aria-label]'
+                            'button, [role="button"], [aria-label], [title]'
                         )).filter((node) => {
-                            const label = `${node.getAttribute("aria-label") || ""} ${node.textContent || ""}`;
-                            if (!/add reaction|react/i.test(label) || !visible(node)) return false;
-                            if (/reply|forward|thread|more/i.test(label)) return false;
+                            const label = [
+                                node.getAttribute("aria-label") || "",
+                                node.getAttribute("title") || "",
+                                node.getAttribute("data-list-item-id") || "",
+                                node.textContent || ""
+                            ].join(" ");
+                            if (!/add\\s+reaction|\\breact\\b|emoji|smile|smiley/i.test(label) || !visible(node)) return false;
+                            if (/super|reply|forward|thread|more|copy|edit|delete|pin|mark unread/i.test(label)) return false;
+                            const rect = node.getBoundingClientRect();
+                            const nearVertically = rect.bottom >= msgRect.top - 90 && rect.top <= msgRect.bottom + 130;
+                            const toTheRight = rect.left >= msgRect.left;
+                            return nearVertically && toTheRight;
+                        }).sort((left, right) => {
+                            const score = (node) => {
+                                const label = `${node.getAttribute("aria-label") || ""} ${node.getAttribute("title") || ""} ${node.textContent || ""}`;
+                                if (/add\\s+reaction/i.test(label)) return 0;
+                                if (/\\breact\\b/i.test(label)) return 1;
+                                if (/emoji|smile|smiley/i.test(label)) return 2;
+                                return 3;
+                            };
+                            const scoreDiff = score(left) - score(right);
+                            if (scoreDiff) return scoreDiff;
+                            const a = left.getBoundingClientRect();
+                            const b = right.getBoundingClientRect();
+                            return Math.abs(a.top - msgRect.top) - Math.abs(b.top - msgRect.top);
+                        });
+                        if (!candidates.length) return false;
+                        candidates[0].click();
+                        return true;
+                    }
+                    """
+                )
+            )
+        except Exception:
+            return False
+
+    async def _reveal_message_actions(self, message) -> None:
+        try:
+            await message.hover(timeout=2_000)
+        except Exception:
+            pass
+        try:
+            box = await message.bounding_box(timeout=2_000)
+            if box:
+                x = max(box["x"] + 8, box["x"] + box["width"] - 72)
+                y = box["y"] + min(max(box["height"] * 0.3, 12), max(box["height"] - 8, 12))
+                await self.page.mouse.move(x, y)
+                await self.page.wait_for_timeout(200)
+        except Exception:
+            pass
+        try:
+            await message.evaluate(
+                """
+                (messageNode) => {
+                    const eventInit = { bubbles: true, cancelable: true, view: window };
+                    let node = messageNode;
+                    for (let index = 0; node && index < 8; index += 1) {
+                        for (const type of ["mouseover", "mouseenter", "mousemove"]) {
+                            node.dispatchEvent(new MouseEvent(type, eventInit));
+                        }
+                        node = node.parentElement;
+                    }
+                }
+                """
+            )
+            await self.page.wait_for_timeout(300)
+        except Exception:
+            pass
+
+    async def _click_more_reaction_action(self, message) -> bool:
+        if not await self._click_visible_more_action(message):
+            return False
+        await self.page.wait_for_timeout(350)
+        return await self._click_context_reaction_action()
+
+    async def _click_visible_more_action(self, message) -> bool:
+        try:
+            return bool(
+                await message.evaluate(
+                    """
+                    (messageNode) => {
+                        const visible = (node) => {
+                            if (!node) return false;
+                            const rect = node.getBoundingClientRect();
+                            const style = window.getComputedStyle(node);
+                            return rect.width > 0
+                                && rect.height > 0
+                                && style.display !== "none"
+                                && style.visibility !== "hidden";
+                        };
+                        const msgRect = messageNode.getBoundingClientRect();
+                        const candidates = Array.from(document.querySelectorAll(
+                            'button, [role="button"], [aria-label], [title]'
+                        )).filter((node) => {
+                            if (!visible(node)) return false;
+                            const label = [
+                                node.getAttribute("aria-label") || "",
+                                node.getAttribute("title") || "",
+                                node.getAttribute("data-list-item-id") || "",
+                                node.textContent || ""
+                            ].join(" ");
+                            if (!/more|additional|message actions|open menu|ellipsis|options/i.test(label)) return false;
+                            if (/server|channel|user settings|help|inbox|member/i.test(label)) return false;
                             const rect = node.getBoundingClientRect();
                             const nearVertically = rect.bottom >= msgRect.top - 90 && rect.top <= msgRect.bottom + 130;
                             const toTheRight = rect.left >= msgRect.left;
@@ -1520,10 +1662,25 @@ class DiscordWebSession:
                                 && style.visibility !== "hidden";
                         };
                         const candidates = Array.from(document.querySelectorAll(
-                            '[role="menuitem"], [role="menuitemradio"], [aria-label], [role="button"]'
+                            '[role="menuitem"], [role="menuitemradio"], [role="option"], button, [aria-label], [role="button"]'
                         )).filter((node) => {
-                            const label = `${node.getAttribute("aria-label") || ""} ${node.textContent || ""}`;
-                            return /add reaction|react/i.test(label) && !/reply/i.test(label) && visible(node);
+                            const label = [
+                                node.getAttribute("aria-label") || "",
+                                node.getAttribute("title") || "",
+                                node.getAttribute("data-list-item-id") || "",
+                                node.textContent || ""
+                            ].join(" ");
+                            return /add\\s+reaction|\\breact\\b/i.test(label)
+                                && !/super|reply|forward|thread|copy|edit|delete|pin|mark unread/i.test(label)
+                                && visible(node);
+                        }).sort((left, right) => {
+                            const score = (node) => {
+                                const label = `${node.getAttribute("aria-label") || ""} ${node.getAttribute("title") || ""} ${node.textContent || ""}`;
+                                if (/add\\s+reaction/i.test(label)) return 0;
+                                if (/\\breact\\b/i.test(label)) return 1;
+                                return 2;
+                            };
+                            return score(left) - score(right);
                         });
                         if (!candidates.length) return false;
                         candidates[0].click();
@@ -1534,6 +1691,51 @@ class DiscordWebSession:
             )
         except Exception:
             return False
+
+    async def _reaction_control_snapshot(self, message) -> list[str]:
+        try:
+            values = await message.evaluate(
+                """
+                (messageNode) => {
+                    const visible = (node) => {
+                        if (!node) return false;
+                        const rect = node.getBoundingClientRect();
+                        const style = window.getComputedStyle(node);
+                        return rect.width > 0
+                            && rect.height > 0
+                            && style.display !== "none"
+                            && style.visibility !== "hidden";
+                    };
+                    const msgRect = messageNode.getBoundingClientRect();
+                    return Array.from(document.querySelectorAll(
+                        'button, [role="button"], [role="menuitem"], [role="option"], [aria-label], [title]'
+                    )).filter((node) => {
+                        if (!visible(node)) return false;
+                        const rect = node.getBoundingClientRect();
+                        return rect.bottom >= msgRect.top - 120
+                            && rect.top <= msgRect.bottom + 160
+                            && rect.left >= msgRect.left - 20;
+                    }).map((node) => [
+                        node.getAttribute("aria-label") || "",
+                        node.getAttribute("title") || "",
+                        node.getAttribute("data-list-item-id") || "",
+                        (node.textContent || "").trim()
+                    ].filter(Boolean).join(" | ").replace(/\\s+/g, " ").trim())
+                    .filter(Boolean)
+                    .slice(0, 10);
+                }
+                """
+            )
+        except Exception:
+            return []
+        return [str(item) for item in values or [] if str(item).strip()]
+
+    async def _dismiss_open_popouts(self) -> None:
+        try:
+            await self.page.keyboard.press("Escape")
+            await self.page.wait_for_timeout(150)
+        except Exception:
+            pass
 
     async def _select_emoji_from_picker(self, emoji: str) -> bool:
         emoji_query = _emoji_search_query(emoji)

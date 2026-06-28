@@ -3,12 +3,16 @@ from __future__ import annotations
 import asyncio
 import argparse
 import logging
+from typing import TYPE_CHECKING
 
 from .approvals import ApprovalQueue
 from .budget import BudgetManager
 from .config import load_config
 from .character_memory import CharacterMemoryStore
 from .user_instructions import UserInstructionStore
+
+if TYPE_CHECKING:
+    from .browser import DiscordWebSession
 
 
 def main() -> None:

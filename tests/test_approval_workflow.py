@@ -66,6 +66,36 @@ class ApprovalWorkflowTests(unittest.TestCase):
             self.assertEqual(2, len(discarded["items"]))
             self.assertEqual(second.source_message_ids, tuple(discarded["items"][-1]["source_message_ids"]))
 
+    def test_long_lived_queue_does_not_resurrect_removed_approval(self) -> None:
+        with TemporaryDirectory() as tmp:
+            queue_file = Path(tmp) / "approvals.json"
+            long_lived = ApprovalQueue(queue_file)
+            first = long_lived.add(
+                server_id="server-1",
+                channel_id="channel-1",
+                character_name="NHI Zues",
+                engagement_type="conversation",
+                reason="first",
+                draft="bad stale draft",
+                source_messages=[_message("source-1")],
+            )
+
+            remover = ApprovalQueue(queue_file)
+            self.assertTrue(remover.remove(first.approval_id))
+
+            long_lived.add(
+                server_id="server-1",
+                channel_id="channel-1",
+                character_name="NHI Zues",
+                engagement_type="conversation",
+                reason="second",
+                draft="new draft",
+                source_messages=[_message("source-2")],
+            )
+
+            queued = ApprovalQueue(queue_file).list()
+            self.assertEqual(["new draft"], [item.draft for item in queued])
+
     def test_source_message_helpers_read_memory_snapshot(self) -> None:
         with TemporaryDirectory() as tmp:
             root = Path(tmp)

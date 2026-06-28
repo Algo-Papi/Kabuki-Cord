@@ -33,3 +33,4 @@ class DraftDecision:
     draft: str | None = None
     engagement_type: str = "none"
     requires_approval: bool = False
+    source_message_ids: tuple[str, ...] = ()

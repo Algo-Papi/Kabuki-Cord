@@ -42,6 +42,7 @@ class ApprovalQueue:
         draft: str,
         source_messages: list[MessageRecord],
     ) -> ApprovalItem:
+        self._reload()
         source_ids = tuple(message.message_id for message in source_messages)
         approval_id = _approval_id(channel_id=channel_id, draft=draft, source_ids=source_ids)
         existing = next((item for item in self._items if item.approval_id == approval_id), None)
@@ -65,9 +66,11 @@ class ApprovalQueue:
         return item
 
     def list(self) -> list[ApprovalItem]:
+        self._reload()
         return list(self._items)
 
     def get(self, approval_id: str) -> ApprovalItem | None:
+        self._reload()
         return next((item for item in self._items if item.approval_id == approval_id), None)
 
     def find_source_overlap(
@@ -89,6 +92,7 @@ class ApprovalQueue:
         )
 
     def update_draft(self, approval_id: str, draft: str) -> ApprovalItem:
+        self._reload()
         for index, item in enumerate(self._items):
             if item.approval_id != approval_id:
                 continue
@@ -109,6 +113,7 @@ class ApprovalQueue:
         raise KeyError(f"Unknown approval: {approval_id}")
 
     def remove(self, approval_id: str) -> bool:
+        self._reload()
         original_count = len(self._items)
         self._items = [item for item in self._items if item.approval_id != approval_id]
         changed = len(self._items) != original_count
@@ -117,6 +122,7 @@ class ApprovalQueue:
         return changed
 
     def clear(self) -> int:
+        self._reload()
         count = len(self._items)
         if count:
             self._items = []
@@ -146,6 +152,11 @@ class ApprovalQueue:
         self.queue_file.parent.mkdir(parents=True, exist_ok=True)
         payload = {"items": [asdict(item) for item in self._items]}
         write_json_file(self.queue_file, payload)
+
+    def _reload(self) -> None:
+        self._items = self._load()
+        if self._prune_oldest():
+            self._save()
 
     def _prune_oldest(self) -> bool:
         if self.max_items <= 0 or len(self._items) <= self.max_items:

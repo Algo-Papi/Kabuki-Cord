@@ -119,6 +119,19 @@ class ReactionSuggestionTests(unittest.TestCase):
         self.assertEqual(THUMBS_UP_EMOJI, emoji)
         self.assertIn("force reaction", reason)
 
+    def test_force_reaction_ignores_low_value_chatter(self) -> None:
+        for text in ("HOWS LIFE", "what about you???", "pretty much"):
+            with self.subTest(text=text):
+                should_react, emoji, reason = should_auto_react(
+                    text,
+                    force_laugh_percent=100,
+                    force_laugh_roll=0.0,
+                )
+
+                self.assertFalse(should_react)
+                self.assertEqual("", emoji)
+                self.assertIn("low-signal", reason)
+
     def test_force_reaction_keeps_laugh_for_obvious_joke(self) -> None:
         should_react, emoji, reason = should_auto_react(
             "that is such a dumb bit lmao",

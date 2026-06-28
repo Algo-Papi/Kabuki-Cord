@@ -189,7 +189,8 @@ h1 {
 
 .spy-scene.dojo-sweep .spy-frame {
   image-rendering: pixelated;
-  transition: opacity 130ms linear, transform 180ms linear;
+  transform: scale(1);
+  transition: opacity 45ms linear;
 }
 
 .spy-scene.dojo-sweep .stage-transition,

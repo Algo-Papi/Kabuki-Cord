@@ -768,7 +768,8 @@ class NhiZuesRunner:
             return
         if self._record_output_block_if_needed(target, decision):
             return
-        source_ids = tuple(message.message_id for message in reply_fresh)
+        source_ids = tuple(decision.source_message_ids or tuple(message.message_id for message in reply_fresh))
+        source_messages = _messages_by_ids(state.fresh_messages, source_ids) or _messages_by_ids(reply_fresh, source_ids) or reply_fresh
         if self._record_discarded_source_if_needed(target, decision, source_ids):
             return
         if self._record_duplicate_reply_if_needed(target, decision, source_ids):
@@ -781,9 +782,9 @@ class NhiZuesRunner:
             decision.engagement_type,
             auto_respond_enabled=target.auto_respond_enabled,
         ):
-            self._queue_approval_decision(target, state, decision, source_ids)
+            self._queue_approval_decision(target, state, decision, source_ids, source_messages)
             return
-        await self._send_auto_reply_decision(session, target, state, decision, source_ids, reply_fresh)
+        await self._send_auto_reply_decision(session, target, state, decision, source_ids, source_messages)
 
     def _record_output_block_if_needed(self, target, decision: DraftDecision) -> bool:
         output_block = outgoing_block_reason(decision.draft)
@@ -863,6 +864,7 @@ class NhiZuesRunner:
         state: ChannelScanState,
         decision: DraftDecision,
         source_ids: tuple[str, ...],
+        source_messages: list[MessageRecord],
     ) -> None:
         approval_reason = _approval_gate_reason(
             self.config.runtime_mode,
@@ -897,7 +899,7 @@ class NhiZuesRunner:
             engagement_type=decision.engagement_type,
             reason=approval_summary,
             draft=decision.draft,
-            source_messages=state.fresh_messages,
+            source_messages=source_messages,
         )
         log.info("queued approval=%s channel=%s", item.approval_id, target.channel_id)
         self.events.add(
@@ -915,7 +917,7 @@ class NhiZuesRunner:
         state: ChannelScanState,
         decision: DraftDecision,
         source_ids: tuple[str, ...],
-        reply_fresh: list[MessageRecord],
+        source_messages: list[MessageRecord],
     ) -> None:
         guard_reason = _auto_reply_guard_reason(
             self.config,
@@ -949,7 +951,7 @@ class NhiZuesRunner:
             typing_max_seconds=self.config.typing_max_seconds,
             typing_chars_per_second=self.config.typing_chars_per_second,
         )
-        target_message = reply_fresh[-1] if reply_fresh else None
+        target_message = source_messages[-1] if source_messages else None
         self.events.add(
             event_type="message_sent",
             server_id=target.server_id,
@@ -1019,6 +1021,13 @@ class NhiZuesRunner:
             own_message_ids=own_message_ids,
             own_texts=own_texts,
         )
+
+
+def _messages_by_ids(messages: list[MessageRecord], message_ids: tuple[str, ...]) -> list[MessageRecord]:
+    wanted = {str(message_id) for message_id in message_ids if str(message_id or "").strip()}
+    if not wanted:
+        return []
+    return [message for message in messages if message.message_id in wanted]
 
 
 def _stop_requested(stop_event) -> bool:

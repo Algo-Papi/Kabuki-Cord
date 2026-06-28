@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from nhi_zues.config import ChannelTarget
@@ -25,16 +26,38 @@ class EventSink:
 
 
 class ReactionLedgerStub:
-    def __init__(self, reacted_ids: set[str] | None = None) -> None:
+    def __init__(
+        self,
+        reacted_ids: set[str] | None = None,
+        *,
+        last_reaction_at: datetime | None = None,
+        last_attempt_at: datetime | None = None,
+        recent_unverified_count: int = 0,
+    ) -> None:
         self.reacted_ids = reacted_ids or set()
         self.records = []
+        self.last_reaction_at_value = last_reaction_at
+        self.last_attempt_at_value = last_attempt_at
+        self.recent_unverified_count_value = recent_unverified_count
 
     def has_reacted_to_message(self, *, channel_id: str, message_id: str) -> bool:
         return message_id in self.reacted_ids
 
+    def last_reaction_at(self, *, channel_id: str) -> datetime | None:
+        return self.last_reaction_at_value
+
+    def last_attempt_at(self, *, channel_id: str) -> datetime | None:
+        return self.last_attempt_at_value
+
+    def recent_unverified_count(self, *, channel_id: str, within_seconds: float, now=None) -> int:
+        return self.recent_unverified_count_value
+
     def record(self, **kwargs) -> None:
         self.records.append(kwargs)
         self.reacted_ids.add(kwargs["message"].message_id)
+        self.last_attempt_at_value = datetime.now(timezone.utc)
+        if not kwargs.get("verified", True):
+            self.recent_unverified_count_value += 1
 
 
 class ReplyLedgerStateStub:
@@ -211,7 +234,7 @@ class RunnerReactionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("reaction_already_present", app.events.items[0]["event_type"])
         self.assertEqual(1, len(app.reaction_ledger.records))
 
-    async def test_unverified_reaction_does_not_write_ledger(self) -> None:
+    async def test_unverified_reaction_records_unverified_attempt_without_success_event(self) -> None:
         app = runner()
         session = SessionStub(
             {
@@ -231,9 +254,76 @@ class RunnerReactionTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(set(), reacted)
-        self.assertEqual([], app.reaction_ledger.records)
+        self.assertEqual(1, len(app.reaction_ledger.records))
+        self.assertFalse(app.reaction_ledger.records[0]["verified"])
         self.assertEqual("reaction_failed", app.events.items[0]["event_type"])
         self.assertNotIn("reaction_added", [item["event_type"] for item in app.events.items])
+
+    async def test_recent_channel_reaction_cooldown_blocks_new_reaction(self) -> None:
+        app = runner(
+            ledger=ReactionLedgerStub(
+                last_reaction_at=datetime.now(timezone.utc),
+            )
+        )
+        app.config.reaction_cooldown_seconds = 900.0
+        session = SessionStub({"applied": True, "path": "quick"})
+        target = SimpleNamespace(server_id="server-1", channel_id="channel-1", react_enabled=True)
+
+        reacted = await app._process_reactions(
+            session,
+            target,
+            [message("1", "that is such a cursed meme lmao")],
+            fresh_count=1,
+        )
+
+        self.assertEqual(set(), reacted)
+        self.assertEqual([], session.calls)
+        self.assertEqual("reaction_skipped", app.events.items[-1]["event_type"])
+        self.assertIn("reaction cooldown", app.events.items[-1]["summary"])
+
+    async def test_recent_channel_reaction_cooldown_uses_failed_attempts(self) -> None:
+        app = runner(
+            ledger=ReactionLedgerStub(
+                last_attempt_at=datetime.now(timezone.utc),
+            )
+        )
+        app.config.reaction_cooldown_seconds = 900.0
+        session = SessionStub({"applied": True, "path": "quick"})
+        target = SimpleNamespace(server_id="server-1", channel_id="channel-1", react_enabled=True)
+
+        reacted = await app._process_reactions(
+            session,
+            target,
+            [message("1", "that is such a cursed meme lmao")],
+            fresh_count=1,
+        )
+
+        self.assertEqual(set(), reacted)
+        self.assertEqual([], session.calls)
+        self.assertEqual("reaction_skipped", app.events.items[-1]["event_type"])
+        self.assertIn("reaction cooldown", app.events.items[-1]["summary"])
+
+    async def test_repeated_reaction_failures_back_off_channel(self) -> None:
+        app = runner(
+            ledger=ReactionLedgerStub(
+                last_attempt_at=datetime.now(timezone.utc),
+                recent_unverified_count=2,
+            )
+        )
+        session = SessionStub({"applied": True, "path": "quick"})
+        target = SimpleNamespace(server_id="server-1", channel_id="channel-1", react_enabled=True)
+
+        reacted = await app._process_reactions(
+            session,
+            target,
+            [message("1", "that is such a cursed meme lmao")],
+            fresh_count=1,
+        )
+
+        self.assertEqual(set(), reacted)
+        self.assertEqual([], session.calls)
+        self.assertEqual("reaction_skipped", app.events.items[-1]["event_type"])
+        self.assertIn("temporarily backed off", app.events.items[-1]["summary"])
 
     async def test_force_laugh_percentage_cap_blocks_repeated_scans(self) -> None:
         app = runner(ledger=ReactionLedgerStub({"1", "2"}))

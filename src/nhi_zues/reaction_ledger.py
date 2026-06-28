@@ -43,6 +43,54 @@ class ReactionLedger:
             for record in self._records
         )
 
+    def has_attempted_to_message(self, *, channel_id: str, message_id: str) -> bool:
+        return any(
+            record.channel_id == channel_id
+            and record.message_id == message_id
+            for record in self._records
+        )
+
+    def last_reaction_at(self, *, channel_id: str) -> datetime | None:
+        matches = [
+            _parse_iso_datetime(record.created_at)
+            for record in self._records
+            if record.channel_id == channel_id and record.verified
+        ]
+        valid = [value for value in matches if value is not None]
+        return max(valid) if valid else None
+
+    def last_attempt_at(self, *, channel_id: str) -> datetime | None:
+        matches = [
+            _parse_iso_datetime(record.created_at)
+            for record in self._records
+            if record.channel_id == channel_id
+        ]
+        valid = [value for value in matches if value is not None]
+        return max(valid) if valid else None
+
+    def recent_unverified_count(
+        self,
+        *,
+        channel_id: str,
+        within_seconds: float,
+        now: datetime | None = None,
+    ) -> int:
+        current = now or datetime.now(timezone.utc)
+        window = max(0.0, float(within_seconds or 0.0))
+        count = 0
+        for record in self._records:
+            if record.channel_id != channel_id or record.verified:
+                continue
+            created = _parse_iso_datetime(record.created_at)
+            if created is None:
+                continue
+            if (current - created.astimezone(timezone.utc)).total_seconds() <= window:
+                count += 1
+        return count
+
+    def list(self) -> list[ReactionRecord]:
+        return list(self._records)
+
     def record(
         self,
         *,
@@ -115,3 +163,13 @@ class ReactionLedger:
     def _save(self) -> None:
         self.ledger_file.parent.mkdir(parents=True, exist_ok=True)
         write_json_file(self.ledger_file, {"items": [asdict(record) for record in self._records]})
+
+
+def _parse_iso_datetime(value: str) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)

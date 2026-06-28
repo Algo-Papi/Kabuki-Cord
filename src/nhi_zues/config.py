@@ -64,6 +64,7 @@ class AppConfig:
     reaction_threshold: str
     reaction_sample_percent: float
     reaction_force_laugh_percent: float
+    reaction_cooldown_seconds: float
     reaction_emoji_override: str
     typing_indicator_enabled: bool
     typing_min_seconds: float
@@ -129,13 +130,14 @@ def load_config() -> AppConfig:
             "NHI_ZUES_WRITING_MISSPELLINGS",
             "definitely:definately,because:becuase,probably:prolly",
         ),
-        reaction_max_per_channel=max(0, _env_int("NHI_ZUES_REACTION_MAX_PER_CHANNEL", 3)),
+        reaction_max_per_channel=max(0, _env_int("NHI_ZUES_REACTION_MAX_PER_CHANNEL", 1)),
         reaction_threshold=_reaction_threshold(),
         reaction_sample_percent=max(0.0, min(_env_float("NHI_ZUES_REACTION_SAMPLE_PERCENT", 0.0), 100.0)),
         reaction_force_laugh_percent=max(
             0.0,
-            min(_env_float("NHI_ZUES_REACTION_FORCE_LAUGH_PERCENT", 20.0), 100.0),
+            min(_env_float("NHI_ZUES_REACTION_FORCE_LAUGH_PERCENT", 0.0), 100.0),
         ),
+        reaction_cooldown_seconds=max(0.0, _env_float("NHI_ZUES_REACTION_COOLDOWN_SECONDS", 900.0)),
         reaction_emoji_override=_env("NHI_ZUES_REACTION_EMOJI_OVERRIDE", ""),
         typing_indicator_enabled=_env_bool("NHI_ZUES_TYPING_INDICATOR_ENABLED", default=True),
         typing_min_seconds=_env_float("NHI_ZUES_TYPING_MIN_SECONDS", 2.5),

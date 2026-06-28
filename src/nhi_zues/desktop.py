@@ -19,6 +19,7 @@ class DesktopBridge:
     def __init__(self, base_url: str) -> None:
         self.base_url = base_url.rstrip("/")
         self.monitor_window = None
+        self._monitor_lock = threading.Lock()
 
     def set_badge(self, active: bool) -> bool:
         return set_taskbar_badge(bool(active))
@@ -27,25 +28,56 @@ class DesktopBridge:
         try:
             import webview
 
-            if self.monitor_window is not None:
-                try:
-                    for method_name in ("show", "restore", "bring_to_front"):
-                        method = getattr(self.monitor_window, method_name, None)
-                        if callable(method):
-                            method()
+            with self._monitor_lock:
+                if self.monitor_window is not None and self._focus_monitor_window():
                     return True
-                except Exception:
-                    self.monitor_window = None
-            self.monitor_window = webview.create_window(
-                "Kabuki-Cord Scanner Monitor",
-                f"{self.base_url}/monitor.html",
-                width=860,
-                height=820,
-                min_size=(720, 620),
-            )
+                self.monitor_window = None
+                window = webview.create_window(
+                    "Kabuki-Cord Scanner Monitor",
+                    f"{self.base_url}/monitor.html",
+                    width=860,
+                    height=820,
+                    min_size=(720, 620),
+                )
+                self.monitor_window = window
+                self._watch_monitor_close(window)
             return True
         except Exception:
             return False
+
+    def _focus_monitor_window(self) -> bool:
+        window = self.monitor_window
+        if window is None:
+            return False
+        try:
+            evaluate_js = getattr(window, "evaluate_js", None)
+            if callable(evaluate_js):
+                evaluate_js("document.readyState")
+            focused = False
+            for method_name in ("show", "restore", "bring_to_front"):
+                method = getattr(window, method_name, None)
+                if callable(method):
+                    method()
+                    focused = True
+            return focused or callable(evaluate_js)
+        except Exception:
+            self.monitor_window = None
+            return False
+
+    def _watch_monitor_close(self, window) -> None:
+        events = getattr(window, "events", None)
+        closed = getattr(events, "closed", None)
+        if closed is None:
+            return
+        try:
+            closed += self._clear_monitor_window
+        except Exception:
+            return
+
+    def _clear_monitor_window(self, *args) -> None:
+        _ = args
+        with self._monitor_lock:
+            self.monitor_window = None
 
 
 class GUID(ctypes.Structure):

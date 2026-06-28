@@ -92,6 +92,7 @@ const formSectionFieldIds = Object.freeze({
     "replyMaxPerWindow",
     "replyRequireInterveningUser",
     "reactionMaxPerChannel",
+    "reactionCooldownSeconds",
     "reactionThreshold",
     "reactionSamplePercent",
     "reactionForceLaughPercent",
@@ -507,10 +508,11 @@ function renderSettings(options = {}) {
   $("replyWindowSeconds").value = appState.env.NHI_ZUES_REPLY_WINDOW_SECONDS || "3600";
   $("replyMaxPerWindow").value = appState.env.NHI_ZUES_REPLY_MAX_PER_WINDOW || "3";
   $("replyRequireInterveningUser").value = strBool(appState.env.NHI_ZUES_REPLY_REQUIRE_INTERVENING_USER, true) ? "true" : "false";
-  $("reactionMaxPerChannel").value = appState.env.NHI_ZUES_REACTION_MAX_PER_CHANNEL || "3";
+  $("reactionMaxPerChannel").value = appState.env.NHI_ZUES_REACTION_MAX_PER_CHANNEL || "1";
+  $("reactionCooldownSeconds").value = appState.env.NHI_ZUES_REACTION_COOLDOWN_SECONDS || "900";
   $("reactionThreshold").value = appState.env.NHI_ZUES_REACTION_THRESHOLD || "normal";
   $("reactionSamplePercent").value = appState.env.NHI_ZUES_REACTION_SAMPLE_PERCENT || "0";
-  $("reactionForceLaughPercent").value = appState.env.NHI_ZUES_REACTION_FORCE_LAUGH_PERCENT || "20";
+  $("reactionForceLaughPercent").value = appState.env.NHI_ZUES_REACTION_FORCE_LAUGH_PERCENT || "0";
   updateReactionForceLaughLabel();
   $("reactionEmojiOverride").value = appState.env.NHI_ZUES_REACTION_EMOJI_OVERRIDE || "";
 }
@@ -1710,6 +1712,7 @@ function renderObserved() {
             <button
               class="small-button"
               data-suggest-user="${escapeAttr(poster.user_key)}"
+              data-suggest-message="${escapeAttr(latestMessageId)}"
               title="Draft a suggested reply to this user's recent point."
             ><i class="bi bi-chat-left-text"></i><span>Suggest</span></button>
             <button
@@ -1729,7 +1732,7 @@ function renderObserved() {
     button.addEventListener("click", () => suggestReactionForMessage(button.dataset.reactionMessage).catch((error) => toast(error.message)));
   });
   document.querySelectorAll("[data-suggest-user]").forEach((button) => {
-    button.addEventListener("click", () => createSuggestedApproval(button.dataset.suggestUser));
+    button.addEventListener("click", () => createSuggestedApproval(button.dataset.suggestUser, button.dataset.suggestMessage || ""));
   });
   document.querySelectorAll("[data-guide-user]").forEach((button) => {
     button.addEventListener("click", () => openUserGuidance(button.dataset.guideUser));
@@ -1877,11 +1880,11 @@ function emptyHistoryMessage() {
     : `<div class="note-item">No channel history recorded yet. Enable Observe, then run Start or scan once.</div>`;
 }
 
-async function createSuggestedApproval(userKey) {
+async function createSuggestedApproval(userKey, messageId = "") {
   const currentServer = server();
   const currentChannel = channel();
   if (!currentServer || !currentChannel) return;
-  const opId = `suggest:${currentChannel.channel_id}:${userKey || "recent"}`;
+  const opId = `suggest:${currentChannel.channel_id}:${messageId || userKey || "recent"}`;
   startOperation(opId, "Drafting suggested reply", "Waiting for OpenAI response", "api", "bi-chat-left-text");
   toast("Generating suggested response...");
   try {
@@ -1891,6 +1894,8 @@ async function createSuggestedApproval(userKey) {
         server_id: currentServer.server_id,
         channel_id: currentChannel.channel_id,
         target_user_key: userKey,
+        target_message_id: messageId,
+        force_manual: true,
         instruction: "Suggest a natural response to this user's recent point using the selected character.",
       }),
     });
@@ -1923,6 +1928,7 @@ async function createMessageApproval(messageId, userKey) {
         channel_id: currentChannel.channel_id,
         target_user_key: userKey || "",
         target_message_id: messageId,
+        force_manual: true,
         instruction: "Suggest a natural response to this selected message using the selected character.",
       }),
     });
@@ -1953,6 +1959,7 @@ async function createTargetedMessageApproval({ serverId, channelId, messageId, u
         channel_id: channelId,
         target_user_key: userKey || "",
         target_message_id: messageId,
+        force_manual: true,
         instruction: instruction || "Suggest a natural response to this selected message using the selected character.",
       }),
     });
@@ -2032,6 +2039,7 @@ async function saveAll() {
       NHI_ZUES_REPLY_MAX_PER_WINDOW: $("replyMaxPerWindow").value,
       NHI_ZUES_REPLY_REQUIRE_INTERVENING_USER: $("replyRequireInterveningUser").value === "true",
       NHI_ZUES_REACTION_MAX_PER_CHANNEL: $("reactionMaxPerChannel").value,
+      NHI_ZUES_REACTION_COOLDOWN_SECONDS: $("reactionCooldownSeconds").value,
       NHI_ZUES_REACTION_THRESHOLD: $("reactionThreshold").value,
       NHI_ZUES_REACTION_SAMPLE_PERCENT: $("reactionSamplePercent").value,
       NHI_ZUES_REACTION_FORCE_LAUGH_PERCENT: $("reactionForceLaughPercent").value,

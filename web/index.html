@@ -374,6 +374,11 @@
                   <input id="reactionMaxPerChannel" type="number" min="0" max="10" step="1" />
                 </label>
                 <label class="field">
+                  <span>Reaction cooldown</span>
+                  <input id="reactionCooldownSeconds" type="number" min="0" max="21600" step="30" />
+                  <small class="field-hint">Minimum seconds between automatic reactions in the same channel.</small>
+                </label>
+                <label class="field">
                   <span>Reaction threshold</span>
                   <select id="reactionThreshold">
                     <option value="strict">Strict - only high-confidence cues</option>
