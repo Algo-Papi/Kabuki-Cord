@@ -52,6 +52,8 @@ class ChannelScanState:
     own_message_ids: set[str]
     own_texts: set[str]
     own_author_ids: set[str]
+    history_message_count: int = 0
+    history_fresh_count: int = 0
 
 
 @dataclass
@@ -491,6 +493,14 @@ class NhiZuesRunner:
     ) -> ChannelScanState:
         visible_messages = await session.read_visible_messages(target.server_id, target.channel_id)
         fresh_messages = self.memory.ingest(target.channel_id, visible_messages)
+        history_message_count = 0
+        history_fresh_count = 0
+        if self._scanner_history_backfill_enabled(target):
+            history_messages = await self._read_scan_history(session, target)
+            history_message_count = len(history_messages)
+            if history_messages:
+                history_fresh_count = len(self.memory.ingest(target.channel_id, history_messages))
+                await session.ensure_latest_messages_visible()
         self.memory.save()
         character = self.characters.for_server(target.server_id, target.character_card)
         character_names = (character.name, *character.aliases)
@@ -516,7 +526,41 @@ class NhiZuesRunner:
             own_message_ids=own_message_ids,
             own_texts=own_texts,
             own_author_ids=own_author_ids,
+            history_message_count=history_message_count,
+            history_fresh_count=history_fresh_count,
         )
+
+    def _scanner_history_backfill_enabled(self, target) -> bool:
+        if getattr(target, "safety_review_enabled", False):
+            return False
+        return int(getattr(self.config, "scanner_history_backfill_limit", 0) or 0) > 0
+
+    async def _read_scan_history(self, session: DiscordWebSession, target) -> list[MessageRecord]:
+        limit = max(0, int(getattr(self.config, "scanner_history_backfill_limit", 0) or 0))
+        if limit <= 0:
+            return []
+        scroll_rounds = max(1, int(getattr(self.config, "scanner_history_scroll_rounds", 8) or 8))
+        try:
+            return await session.read_channel_history(
+                target.server_id,
+                target.channel_id,
+                limit=limit,
+                scroll_rounds=scroll_rounds,
+            )
+        except Exception as exc:
+            log.warning(
+                "server=%s channel=%s scan_history_backfill_failed=%s",
+                target.server_id,
+                target.channel_id,
+                exc,
+            )
+            self.events.add(
+                event_type="channel_history_backfill_failed",
+                server_id=target.server_id,
+                channel_id=target.channel_id,
+                summary=f"Scanner could not refresh channel history during this visit: {exc}",
+            )
+            return []
 
     def _update_own_author_ids(
         self,
@@ -773,6 +817,7 @@ class NhiZuesRunner:
             summary=(
                 f"Reviewed {len(state.visible_messages)} visible message(s), "
                 f"{len(state.fresh_messages)} new; Engage is off."
+                f"{_scan_history_summary(state)}"
             ),
         )
 
@@ -801,6 +846,7 @@ class NhiZuesRunner:
             summary=(
                 f"Reviewed {len(state.visible_messages)} visible message(s), "
                 f"{len(state.fresh_messages)} new; {decision.reason}."
+                f"{_scan_history_summary(state)}"
             ),
         )
 
@@ -1076,6 +1122,14 @@ def _messages_by_ids(messages: list[MessageRecord], message_ids: tuple[str, ...]
     if not wanted:
         return []
     return [message for message in messages if message.message_id in wanted]
+
+
+def _scan_history_summary(state: ChannelScanState) -> str:
+    history_count = int(getattr(state, "history_message_count", 0) or 0)
+    if history_count <= 0:
+        return ""
+    fresh_count = int(getattr(state, "history_fresh_count", 0) or 0)
+    return f" Scanner history refresh read {history_count}, {fresh_count} new to memory."
 
 
 def _format_safety_review_dom_diagnostics(diagnostics: dict[str, object]) -> str:

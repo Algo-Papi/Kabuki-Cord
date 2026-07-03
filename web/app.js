@@ -84,6 +84,8 @@ const formSectionFieldIds = Object.freeze({
     "scannerCycleSleep",
     "scannerMinDelay",
     "scannerMaxDelay",
+    "scannerHistoryBackfillLimit",
+    "scannerHistoryScrollRounds",
     "safetyReviewExclusive",
     "safetyReviewHistoryLimit",
     "safetyReviewScrollRounds",
@@ -501,6 +503,8 @@ function renderSettings(options = {}) {
   $("scannerCycleSleep").value = appState.env.NHI_ZUES_SCANNER_CYCLE_SLEEP_SECONDS || "45";
   $("scannerMinDelay").value = appState.env.NHI_ZUES_SCANNER_MIN_CHANNEL_DELAY_SECONDS || "12";
   $("scannerMaxDelay").value = appState.env.NHI_ZUES_SCANNER_MAX_CHANNEL_DELAY_SECONDS || "35";
+  $("scannerHistoryBackfillLimit").value = appState.env.NHI_ZUES_SCANNER_HISTORY_BACKFILL_LIMIT || "80";
+  $("scannerHistoryScrollRounds").value = appState.env.NHI_ZUES_SCANNER_HISTORY_SCROLL_ROUNDS || "8";
   $("safetyReviewExclusive").value = strBool(appState.env.NHI_ZUES_SAFETY_REVIEW_EXCLUSIVE, true) ? "true" : "false";
   $("safetyReviewHistoryLimit").value = appState.env.NHI_ZUES_SAFETY_REVIEW_HISTORY_LIMIT || "420";
   $("safetyReviewScrollRounds").value = appState.env.NHI_ZUES_SAFETY_REVIEW_SCROLL_ROUNDS || "45";
@@ -2031,6 +2035,8 @@ async function saveAll() {
       NHI_ZUES_SCANNER_CYCLE_SLEEP_SECONDS: $("scannerCycleSleep").value,
       NHI_ZUES_SCANNER_MIN_CHANNEL_DELAY_SECONDS: $("scannerMinDelay").value,
       NHI_ZUES_SCANNER_MAX_CHANNEL_DELAY_SECONDS: $("scannerMaxDelay").value,
+      NHI_ZUES_SCANNER_HISTORY_BACKFILL_LIMIT: $("scannerHistoryBackfillLimit").value,
+      NHI_ZUES_SCANNER_HISTORY_SCROLL_ROUNDS: $("scannerHistoryScrollRounds").value,
       NHI_ZUES_SAFETY_REVIEW_EXCLUSIVE: $("safetyReviewExclusive").value,
       NHI_ZUES_SAFETY_REVIEW_HISTORY_LIMIT: $("safetyReviewHistoryLimit").value,
       NHI_ZUES_SAFETY_REVIEW_SCROLL_ROUNDS: $("safetyReviewScrollRounds").value,

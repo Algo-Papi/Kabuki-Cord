@@ -21,12 +21,70 @@ class NoOverlapStore:
         return []
 
 
+class ReplyLedgerStateStub:
+    def own_message_ids_for_channel(self, *, channel_id: str) -> set[str]:
+        return set()
+
+    def own_texts_for_channel(self, *, channel_id: str) -> set[str]:
+        return set()
+
+
+class CharacterStoreStub:
+    def for_server(self, server_id: str, card: str | None):
+        return SimpleNamespace(name="NHI Zues", aliases=())
+
+
+class MemoryRecorder:
+    def __init__(self) -> None:
+        self.seen = set()
+        self.ingested = []
+        self.saved = False
+
+    def ingest(self, channel_id: str, messages: list[MessageRecord]) -> list[MessageRecord]:
+        self.ingested.append((channel_id, [message.message_id for message in messages]))
+        fresh = []
+        for item in messages:
+            if item.message_id in self.seen:
+                continue
+            self.seen.add(item.message_id)
+            fresh.append(item)
+        return fresh
+
+    def save(self) -> None:
+        self.saved = True
+
+
 class UnavailableSession:
     async def account_blocker_state(self) -> dict[str, object]:
         return {"blocked": False}
 
     async def navigate_channel(self, server_id: str, channel_id: str) -> str:
         return f"https://discord.com/channels/{server_id}/redirected"
+
+
+class ScanHistorySession:
+    def __init__(self) -> None:
+        self.visible = [message("visible-1")]
+        self.history = [message("older-1"), message("visible-1")]
+        self.history_calls = []
+        self.latest_restores = 0
+
+    async def read_visible_messages(self, server_id: str, channel_id: str) -> list[MessageRecord]:
+        return self.visible
+
+    async def read_channel_history(
+        self,
+        server_id: str,
+        channel_id: str,
+        *,
+        limit: int,
+        scroll_rounds: int,
+    ) -> list[MessageRecord]:
+        self.history_calls.append((server_id, channel_id, limit, scroll_rounds))
+        return self.history
+
+    async def ensure_latest_messages_visible(self) -> None:
+        self.latest_restores += 1
 
 
 def message(message_id: str = "message-1") -> MessageRecord:
@@ -116,6 +174,53 @@ class RunnerScanFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual("dry_run", app.events.items[-1]["event_type"])
         self.assertEqual("i would answer that", app.events.items[-1]["draft"])
+
+    async def test_scan_visit_backfills_history_without_treating_old_rows_as_reply_fresh(self) -> None:
+        app = bare_runner()
+        app.config.scanner_history_backfill_limit = 80
+        app.config.scanner_history_scroll_rounds = 8
+        app.memory = MemoryRecorder()
+        app.characters = CharacterStoreStub()
+        app.reply_ledger = ReplyLedgerStateStub()
+        session = ScanHistorySession()
+        target = ChannelTarget(server_id="server-1", channel_id="channel-1")
+
+        state = await app._capture_channel_state(session, target)
+
+        self.assertEqual([("server-1", "channel-1", 80, 8)], session.history_calls)
+        self.assertEqual(
+            [
+                ("channel-1", ["visible-1"]),
+                ("channel-1", ["older-1", "visible-1"]),
+            ],
+            app.memory.ingested,
+        )
+        self.assertTrue(app.memory.saved)
+        self.assertEqual(["visible-1"], [item.message_id for item in state.fresh_messages])
+        self.assertEqual(2, state.history_message_count)
+        self.assertEqual(1, state.history_fresh_count)
+        self.assertEqual(1, session.latest_restores)
+
+    async def test_scan_history_backfill_is_skipped_for_safety_review_targets(self) -> None:
+        app = bare_runner()
+        app.config.scanner_history_backfill_limit = 80
+        app.config.scanner_history_scroll_rounds = 8
+        app.memory = MemoryRecorder()
+        app.characters = CharacterStoreStub()
+        app.reply_ledger = ReplyLedgerStateStub()
+        session = ScanHistorySession()
+        target = ChannelTarget(
+            server_id="server-1",
+            channel_id="channel-1",
+            safety_review_enabled=True,
+        )
+
+        state = await app._capture_channel_state(session, target)
+
+        self.assertEqual([], session.history_calls)
+        self.assertEqual([("channel-1", ["visible-1"])], app.memory.ingested)
+        self.assertEqual(0, state.history_message_count)
+        self.assertEqual(0, state.history_fresh_count)
 
 
 if __name__ == "__main__":
