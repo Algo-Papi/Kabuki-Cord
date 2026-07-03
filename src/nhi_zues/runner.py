@@ -563,6 +563,11 @@ class NhiZuesRunner:
             findings=findings,
         )
         event_type = "safety_review_flagged" if added else "safety_review_scan"
+        sweep_scope = (
+            "other servers are skipped"
+            if getattr(self.config, "safety_review_exclusive", True)
+            else "other observed channels stay in rotation"
+        )
         self.events.add(
             event_type=event_type,
             server_id=target.server_id,
@@ -570,7 +575,7 @@ class NhiZuesRunner:
             summary=(
                 f"Dojo Sweep scanned {len(review_messages)} non-own {review_source_label} message(s), "
                 f"{len(fresh_messages)} new; queued {len(added)} new review item(s). "
-                "Replies/reactions are disabled and other servers are skipped while Dojo Sweep is on."
+                f"Replies/reactions are disabled for this sweep target; {sweep_scope}."
             ),
             draft="\n".join(item.text for item in added[:3]),
         )
@@ -617,6 +622,33 @@ class NhiZuesRunner:
             )
             return state.visible_messages, state.fresh_messages, "visible"
 
+        if not review_source:
+            diagnostics = await self._message_dom_diagnostics(session, target)
+            diagnostic_summary = _format_safety_review_dom_diagnostics(diagnostics)
+            if state.visible_messages:
+                self.events.add(
+                    event_type="safety_review_scan",
+                    server_id=target.server_id,
+                    channel_id=target.channel_id,
+                    summary=(
+                        "Dojo Sweep found no extractable back-scroll history rows "
+                        f"({diagnostic_summary}), so it fell back to "
+                        f"{len(state.visible_messages)} currently visible message(s)."
+                    ),
+                )
+                return state.visible_messages, state.fresh_messages, "visible"
+            self.events.add(
+                event_type="safety_review_scan",
+                server_id=target.server_id,
+                channel_id=target.channel_id,
+                summary=(
+                    "Dojo Sweep found no extractable history or visible message rows "
+                    f"({diagnostic_summary}). Discord may not have loaded readable "
+                    "message rows for this channel yet."
+                ),
+            )
+            return [], [], "history-empty"
+
         fresh_messages = self.memory.ingest(target.channel_id, review_source)
         state.own_author_ids = self._update_own_author_ids(
             review_source,
@@ -624,6 +656,22 @@ class NhiZuesRunner:
             own_texts=state.own_texts,
         )
         return review_source, fresh_messages, "history"
+
+    async def _message_dom_diagnostics(self, session: DiscordWebSession, target) -> dict[str, object]:
+        diagnostics = getattr(session, "message_dom_diagnostics", None)
+        if not callable(diagnostics):
+            return {}
+        try:
+            result = await diagnostics()
+        except Exception as exc:
+            log.warning(
+                "server=%s channel=%s safety_review_dom_diagnostics_failed=%s",
+                target.server_id,
+                target.channel_id,
+                exc,
+            )
+            return {"diagnostic_error": str(exc)}
+        return result if isinstance(result, dict) else {}
 
     async def _process_regular_channel(
         self,
@@ -1028,6 +1076,33 @@ def _messages_by_ids(messages: list[MessageRecord], message_ids: tuple[str, ...]
     if not wanted:
         return []
     return [message for message in messages if message.message_id in wanted]
+
+
+def _format_safety_review_dom_diagnostics(diagnostics: dict[str, object]) -> str:
+    if not diagnostics:
+        return "no DOM diagnostics available"
+    if diagnostics.get("diagnostic_error"):
+        return f"diagnostics failed: {diagnostics.get('diagnostic_error')}"
+    fields = (
+        ("raw_chat_nodes", "raw"),
+        ("valid_message_id_nodes", "valid"),
+        ("text_rows", "text"),
+        ("empty_text_rows", "empty"),
+        ("first_id", "first"),
+        ("last_id", "last"),
+    )
+    parts = [
+        f"{label}={diagnostics.get(key)}"
+        for key, label in fields
+        if diagnostics.get(key) not in (None, "")
+    ]
+    url = str(diagnostics.get("url") or "").strip()
+    if url:
+        parts.append(f"url={url[:120]}")
+    preview = " ".join(str(diagnostics.get("body_preview") or "").split())
+    if preview:
+        parts.append(f"body={preview[:120]}")
+    return ", ".join(parts) or "no DOM diagnostics available"
 
 
 def _stop_requested(stop_event) -> bool:

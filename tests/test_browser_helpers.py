@@ -88,6 +88,7 @@ class BrowserHelperTests(unittest.TestCase):
         self.assertEqual("thumbsup", _emoji_search_query("\U0001f44d"))
         self.assertEqual("pray", _emoji_search_query("\U0001f64f"))
         self.assertEqual("eyes", _emoji_search_query("\U0001f440"))
+        self.assertEqual("thinking", _emoji_search_query("\U0001f914"))
         self.assertEqual("heart", _emoji_search_query("\u2764\ufe0f"))
         self.assertEqual("heart", _emoji_search_query("\u2764"))
 

@@ -22,7 +22,12 @@ const $ = (id) => document.getElementById(id);
 const pausedFrame = "/assets/monitor-paused-lounge.png";
 const deliveryEventTypes = new Set(["message_sent", "approval_sent"]);
 const responseEventTypes = new Set(["message_sent", "approval_sent"]);
-const reactionActionEventTypes = new Set(["reaction_added"]);
+const reactionActionEventTypes = new Set([
+  "reaction_added",
+  "reaction_already_present",
+  "reaction_failed",
+  "reaction_skipped",
+]);
 const stageTransitionTypes = ["logo-swipe-left", "mask-zoom", "logo-swipe-right", "crest-iris"];
 const dismissedActionStorageKey = "kabukiScannerDismissedActions:v1";
 let dismissedActionKeys = loadDismissedActionKeys();
@@ -362,7 +367,7 @@ function renderActionColumn(elementId, events, kind, state) {
   const items = events.slice(0, 12);
   host.innerHTML = items.length
     ? items.map((event, index) => renderActionCard(event, kind, state, index)).join("")
-    : `<div class="action-empty">No ${kind === "reaction" ? "reactions" : "responses"} recorded yet.</div>`;
+    : `<div class="action-empty">No ${kind === "reaction" ? "reaction activity" : "responses"} recorded yet.</div>`;
   host.querySelectorAll("[data-action-open]").forEach((button) => {
     button.addEventListener("click", () => {
       const url = button.getAttribute("data-action-open") || "";
@@ -525,6 +530,15 @@ function responseBadge(event) {
 }
 
 function reactionActionBody(event) {
+  if (event.event_type === "reaction_failed") {
+    return truncate(event.summary || "Reaction failed.", 260);
+  }
+  if (event.event_type === "reaction_skipped") {
+    return truncate(event.summary || "Reaction skipped.", 260);
+  }
+  if (event.event_type === "reaction_already_present") {
+    return truncate(event.summary || "Reaction already present.", 260);
+  }
   const emoji = reactionBadge(event);
   const text = truncate(event.draft || "", 220);
   const reason = truncate(event.summary || "", 180);
@@ -534,6 +548,9 @@ function reactionActionBody(event) {
 }
 
 function reactionBadge(event) {
+  if (event.event_type === "reaction_failed") return "failed";
+  if (event.event_type === "reaction_skipped") return "skip";
+  if (event.event_type === "reaction_already_present") return "exists";
   const emoji = cleanEmoji(event.emoji) || cleanEmoji(parseEmoji(event.summary));
   return emoji || "react";
 }
