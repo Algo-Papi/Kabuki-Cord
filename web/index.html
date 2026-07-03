@@ -336,6 +336,15 @@
                   <input id="scannerMaxDelay" type="number" min="0" max="600" step="1" />
                 </label>
                 <label class="field">
+                  <span>Scan history limit</span>
+                  <input id="scannerHistoryBackfillLimit" type="number" min="0" max="500" step="20" />
+                  <small class="field-hint">Messages to refresh into local history on each channel visit; 0 disables scan backfill.</small>
+                </label>
+                <label class="field">
+                  <span>Scan history scroll rounds</span>
+                  <input id="scannerHistoryScrollRounds" type="number" min="1" max="45" step="1" />
+                </label>
+                <label class="field">
                   <span>Dojo Sweep exclusive</span>
                   <select id="safetyReviewExclusive">
                     <option value="true">Yes - pause other servers</option>

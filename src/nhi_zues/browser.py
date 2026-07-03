@@ -912,6 +912,40 @@ class DiscordWebSession:
         await self.ensure_latest_messages_visible()
         return await self._read_message_records_from_dom(server_id, channel_id)
 
+    async def message_dom_diagnostics(self) -> dict[str, object]:
+        return await self.page.evaluate(
+            """
+            () => {
+                const rawNodes = Array.from(document.querySelectorAll('[id^="chat-messages-"]'));
+                const validNodes = rawNodes.filter((node) => /^chat-messages-\\d{5,}-\\d{5,}$/.test(node.id || ""));
+                const ownMessageText = (node) => {
+                    const candidates = Array.from(node.querySelectorAll('[class*="messageContent"]'));
+                    return candidates.find((candidate) => {
+                        const quoted = candidate.closest(
+                            '[class*="repliedMessage"], [class*="repliedTextContent"], [class*="threadMessageAccessory"]'
+                        );
+                        return !quoted;
+                    }) || candidates.at(-1) || null;
+                };
+                const textRows = validNodes.filter((node) => (ownMessageText(node)?.textContent || "").trim());
+                const bodyPreview = (document.body?.innerText || "")
+                    .replace(/\\s+/g, " ")
+                    .trim()
+                    .slice(0, 240);
+                return {
+                    url: window.location.href,
+                    raw_chat_nodes: rawNodes.length,
+                    valid_message_id_nodes: validNodes.length,
+                    text_rows: textRows.length,
+                    empty_text_rows: Math.max(0, validNodes.length - textRows.length),
+                    first_id: validNodes[0]?.id || "",
+                    last_id: validNodes.at(-1)?.id || "",
+                    body_preview: bodyPreview,
+                };
+            }
+            """
+        )
+
     async def read_channel_history(
         self,
         server_id: str,
@@ -1943,6 +1977,7 @@ def _emoji_search_query(emoji: str) -> str:
         "👍": "thumbsup",
         "🙏": "pray",
         "👀": "eyes",
+        "\U0001f914": "thinking",
         "❤️": "heart",
         "❤": "heart",
     }.get(str(emoji or "").strip(), str(emoji or "joy").strip() or "joy")

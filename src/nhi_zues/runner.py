@@ -52,6 +52,8 @@ class ChannelScanState:
     own_message_ids: set[str]
     own_texts: set[str]
     own_author_ids: set[str]
+    history_message_count: int = 0
+    history_fresh_count: int = 0
 
 
 @dataclass
@@ -491,6 +493,14 @@ class NhiZuesRunner:
     ) -> ChannelScanState:
         visible_messages = await session.read_visible_messages(target.server_id, target.channel_id)
         fresh_messages = self.memory.ingest(target.channel_id, visible_messages)
+        history_message_count = 0
+        history_fresh_count = 0
+        if self._scanner_history_backfill_enabled(target):
+            history_messages = await self._read_scan_history(session, target)
+            history_message_count = len(history_messages)
+            if history_messages:
+                history_fresh_count = len(self.memory.ingest(target.channel_id, history_messages))
+                await session.ensure_latest_messages_visible()
         self.memory.save()
         character = self.characters.for_server(target.server_id, target.character_card)
         character_names = (character.name, *character.aliases)
@@ -516,7 +526,41 @@ class NhiZuesRunner:
             own_message_ids=own_message_ids,
             own_texts=own_texts,
             own_author_ids=own_author_ids,
+            history_message_count=history_message_count,
+            history_fresh_count=history_fresh_count,
         )
+
+    def _scanner_history_backfill_enabled(self, target) -> bool:
+        if getattr(target, "safety_review_enabled", False):
+            return False
+        return int(getattr(self.config, "scanner_history_backfill_limit", 0) or 0) > 0
+
+    async def _read_scan_history(self, session: DiscordWebSession, target) -> list[MessageRecord]:
+        limit = max(0, int(getattr(self.config, "scanner_history_backfill_limit", 0) or 0))
+        if limit <= 0:
+            return []
+        scroll_rounds = max(1, int(getattr(self.config, "scanner_history_scroll_rounds", 8) or 8))
+        try:
+            return await session.read_channel_history(
+                target.server_id,
+                target.channel_id,
+                limit=limit,
+                scroll_rounds=scroll_rounds,
+            )
+        except Exception as exc:
+            log.warning(
+                "server=%s channel=%s scan_history_backfill_failed=%s",
+                target.server_id,
+                target.channel_id,
+                exc,
+            )
+            self.events.add(
+                event_type="channel_history_backfill_failed",
+                server_id=target.server_id,
+                channel_id=target.channel_id,
+                summary=f"Scanner could not refresh channel history during this visit: {exc}",
+            )
+            return []
 
     def _update_own_author_ids(
         self,
@@ -563,6 +607,11 @@ class NhiZuesRunner:
             findings=findings,
         )
         event_type = "safety_review_flagged" if added else "safety_review_scan"
+        sweep_scope = (
+            "other servers are skipped"
+            if getattr(self.config, "safety_review_exclusive", True)
+            else "other observed channels stay in rotation"
+        )
         self.events.add(
             event_type=event_type,
             server_id=target.server_id,
@@ -570,7 +619,7 @@ class NhiZuesRunner:
             summary=(
                 f"Dojo Sweep scanned {len(review_messages)} non-own {review_source_label} message(s), "
                 f"{len(fresh_messages)} new; queued {len(added)} new review item(s). "
-                "Replies/reactions are disabled and other servers are skipped while Dojo Sweep is on."
+                f"Replies/reactions are disabled for this sweep target; {sweep_scope}."
             ),
             draft="\n".join(item.text for item in added[:3]),
         )
@@ -617,6 +666,33 @@ class NhiZuesRunner:
             )
             return state.visible_messages, state.fresh_messages, "visible"
 
+        if not review_source:
+            diagnostics = await self._message_dom_diagnostics(session, target)
+            diagnostic_summary = _format_safety_review_dom_diagnostics(diagnostics)
+            if state.visible_messages:
+                self.events.add(
+                    event_type="safety_review_scan",
+                    server_id=target.server_id,
+                    channel_id=target.channel_id,
+                    summary=(
+                        "Dojo Sweep found no extractable back-scroll history rows "
+                        f"({diagnostic_summary}), so it fell back to "
+                        f"{len(state.visible_messages)} currently visible message(s)."
+                    ),
+                )
+                return state.visible_messages, state.fresh_messages, "visible"
+            self.events.add(
+                event_type="safety_review_scan",
+                server_id=target.server_id,
+                channel_id=target.channel_id,
+                summary=(
+                    "Dojo Sweep found no extractable history or visible message rows "
+                    f"({diagnostic_summary}). Discord may not have loaded readable "
+                    "message rows for this channel yet."
+                ),
+            )
+            return [], [], "history-empty"
+
         fresh_messages = self.memory.ingest(target.channel_id, review_source)
         state.own_author_ids = self._update_own_author_ids(
             review_source,
@@ -624,6 +700,22 @@ class NhiZuesRunner:
             own_texts=state.own_texts,
         )
         return review_source, fresh_messages, "history"
+
+    async def _message_dom_diagnostics(self, session: DiscordWebSession, target) -> dict[str, object]:
+        diagnostics = getattr(session, "message_dom_diagnostics", None)
+        if not callable(diagnostics):
+            return {}
+        try:
+            result = await diagnostics()
+        except Exception as exc:
+            log.warning(
+                "server=%s channel=%s safety_review_dom_diagnostics_failed=%s",
+                target.server_id,
+                target.channel_id,
+                exc,
+            )
+            return {"diagnostic_error": str(exc)}
+        return result if isinstance(result, dict) else {}
 
     async def _process_regular_channel(
         self,
@@ -725,6 +817,7 @@ class NhiZuesRunner:
             summary=(
                 f"Reviewed {len(state.visible_messages)} visible message(s), "
                 f"{len(state.fresh_messages)} new; Engage is off."
+                f"{_scan_history_summary(state)}"
             ),
         )
 
@@ -753,6 +846,7 @@ class NhiZuesRunner:
             summary=(
                 f"Reviewed {len(state.visible_messages)} visible message(s), "
                 f"{len(state.fresh_messages)} new; {decision.reason}."
+                f"{_scan_history_summary(state)}"
             ),
         )
 
@@ -1028,6 +1122,41 @@ def _messages_by_ids(messages: list[MessageRecord], message_ids: tuple[str, ...]
     if not wanted:
         return []
     return [message for message in messages if message.message_id in wanted]
+
+
+def _scan_history_summary(state: ChannelScanState) -> str:
+    history_count = int(getattr(state, "history_message_count", 0) or 0)
+    if history_count <= 0:
+        return ""
+    fresh_count = int(getattr(state, "history_fresh_count", 0) or 0)
+    return f" Scanner history refresh read {history_count}, {fresh_count} new to memory."
+
+
+def _format_safety_review_dom_diagnostics(diagnostics: dict[str, object]) -> str:
+    if not diagnostics:
+        return "no DOM diagnostics available"
+    if diagnostics.get("diagnostic_error"):
+        return f"diagnostics failed: {diagnostics.get('diagnostic_error')}"
+    fields = (
+        ("raw_chat_nodes", "raw"),
+        ("valid_message_id_nodes", "valid"),
+        ("text_rows", "text"),
+        ("empty_text_rows", "empty"),
+        ("first_id", "first"),
+        ("last_id", "last"),
+    )
+    parts = [
+        f"{label}={diagnostics.get(key)}"
+        for key, label in fields
+        if diagnostics.get(key) not in (None, "")
+    ]
+    url = str(diagnostics.get("url") or "").strip()
+    if url:
+        parts.append(f"url={url[:120]}")
+    preview = " ".join(str(diagnostics.get("body_preview") or "").split())
+    if preview:
+        parts.append(f"body={preview[:120]}")
+    return ", ".join(parts) or "no DOM diagnostics available"
 
 
 def _stop_requested(stop_event) -> bool:

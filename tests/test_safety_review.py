@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 from nhi_zues.config import ChannelTarget, _load_channels
 from nhi_zues.models import MessageRecord
-from nhi_zues.runner import NhiZuesRunner
+from nhi_zues.runner import ChannelScanState, NhiZuesRunner
 from nhi_zues.safety_review import SafetyReviewQueue, detect_safety_review_findings
 
 
@@ -152,6 +152,36 @@ class SafetyReviewTests(unittest.TestCase):
         self.assertEqual([normal, sweep], runner._planned_targets())
 
 
+class EmptySafetyReviewHistoryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_empty_history_read_records_dom_diagnostics(self) -> None:
+        runner = NhiZuesRunner.__new__(NhiZuesRunner)
+        runner.config = SimpleNamespace(safety_review_history_limit=10, safety_review_scroll_rounds=1)
+        runner.events = EventSink()
+        target = SimpleNamespace(server_id="server", channel_id="channel")
+        state = ChannelScanState(
+            visible_messages=[],
+            fresh_messages=[],
+            character=SimpleNamespace(name="NHI Zues", aliases=()),
+            character_names=("NHI Zues",),
+            own_message_ids=set(),
+            own_texts=set(),
+            own_author_ids=set(),
+        )
+
+        review_source, fresh_messages, source_label = await runner._read_safety_review_source(
+            EmptyHistorySession(),
+            target,
+            state,
+        )
+
+        self.assertEqual([], review_source)
+        self.assertEqual([], fresh_messages)
+        self.assertEqual("history-empty", source_label)
+        self.assertEqual("safety_review_scan", runner.events.items[0]["event_type"])
+        self.assertIn("raw=0", runner.events.items[0]["summary"])
+        self.assertIn("Discord may not have loaded", runner.events.items[0]["summary"])
+
+
 def record(message_id: str, author: str, text: str) -> MessageRecord:
     return MessageRecord(
         server_id="server",
@@ -162,3 +192,26 @@ def record(message_id: str, author: str, text: str) -> MessageRecord:
         text=text,
         observed_at=datetime.now(timezone.utc),
     )
+
+
+class EventSink:
+    def __init__(self) -> None:
+        self.items = []
+
+    def add(self, **kwargs) -> None:
+        self.items.append(kwargs)
+
+
+class EmptyHistorySession:
+    async def read_channel_history(self, server_id: str, channel_id: str, *, limit: int, scroll_rounds: int):
+        return []
+
+    async def message_dom_diagnostics(self) -> dict[str, object]:
+        return {
+            "url": "https://discord.com/channels/server/channel",
+            "raw_chat_nodes": 0,
+            "valid_message_id_nodes": 0,
+            "text_rows": 0,
+            "empty_text_rows": 0,
+            "body_preview": "No Messages",
+        }
