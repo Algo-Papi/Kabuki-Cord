@@ -8,7 +8,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-OUTPUT = ROOT / "web" / "assets" / "kabuki-launch-theme.wav"
+OUTPUT = ROOT / "src" / "nhi_zues" / "web" / "assets" / "kabuki-launch-theme.wav"
 SAMPLE_RATE = 44_100
 BPM = 150
 BEAT = 60 / BPM

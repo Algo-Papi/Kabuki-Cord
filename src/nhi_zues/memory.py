@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-import json
 from collections import defaultdict, deque
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 from .discord_text import clean_discord_display_name
 from .models import MessageRecord, UserMemory
-from .state_io import try_write_json_file
+from .state_io import mutate_json_file, read_json_file
 
 
 class ConversationMemory:
@@ -22,10 +21,10 @@ class ConversationMemory:
         self._users: dict[str, UserMemory] = {}
 
     def load(self) -> None:
-        if not self.state_file.exists():
-            return
-
-        payload = json.loads(self.state_file.read_text(encoding="utf-8"))
+        payload = read_json_file(
+            self.state_file,
+            default={"seen_ids": [], "channels": {}, "users": {}},
+        )
         self._seen_ids = set(payload.get("seen_ids", []))
         for channel_id, rows in payload.get("channels", {}).items():
             bucket = deque(maxlen=self.max_messages_per_channel)
@@ -74,7 +73,15 @@ class ConversationMemory:
                 for user_key, user in sorted(self._users.items())
             },
         }
-        try_write_json_file(self.state_file, payload)
+        mutate_json_file(
+            self.state_file,
+            default={"seen_ids": [], "channels": {}, "users": {}},
+            mutator=lambda latest: _merge_memory_payload(
+                latest,
+                payload,
+                max_messages_per_channel=self.max_messages_per_channel,
+            ),
+        )
 
     def ingest(self, channel_id: str, messages: list[MessageRecord]) -> list[MessageRecord]:
         fresh: list[MessageRecord] = []
@@ -276,3 +283,51 @@ def _extract_lightweight_topics(text: str) -> list[str]:
     ]
     ignored = {"that", "this", "with", "from", "they", "have", "just", "like", "what", "your"}
     return [term for term in terms if term not in ignored][:8]
+
+
+def _merge_memory_payload(
+    latest: dict,
+    incoming: dict,
+    *,
+    max_messages_per_channel: int,
+) -> None:
+    latest["seen_ids"] = sorted(
+        set(latest.get("seen_ids", [])).union(incoming.get("seen_ids", []))
+    )
+    channels = latest.setdefault("channels", {})
+    for channel_id, rows in incoming.get("channels", {}).items():
+        by_id = {
+            str(row.get("message_id") or ""): row
+            for row in channels.get(channel_id, [])
+            if str(row.get("message_id") or "")
+        }
+        by_id.update(
+            {
+                str(row.get("message_id") or ""): row
+                for row in rows
+                if str(row.get("message_id") or "")
+            }
+        )
+        channels[channel_id] = sorted(
+            by_id.values(),
+            key=lambda row: (str(row.get("observed_at") or ""), str(row.get("message_id") or "")),
+        )[-max_messages_per_channel:]
+
+    users = latest.setdefault("users", {})
+    for user_key, row in incoming.get("users", {}).items():
+        existing = users.get(user_key, {})
+        topics = list(existing.get("recent_topics", []))
+        for topic in row.get("recent_topics", []):
+            if topic not in topics:
+                topics.append(topic)
+        newest = row if str(row.get("last_seen_at") or "") >= str(existing.get("last_seen_at") or "") else existing
+        users[user_key] = {
+            **existing,
+            **newest,
+            "message_count": max(
+                int(existing.get("message_count", 0)),
+                int(row.get("message_count", 0)),
+            ),
+            "recent_topics": topics[-12:],
+            "summary": str(row.get("summary") or existing.get("summary") or ""),
+        }

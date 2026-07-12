@@ -675,9 +675,14 @@ class DiscordWebSession:
         try:
             await self.page.wait_for_function(
                 """
-                () => location.href.includes("/channels/")
-                    && !location.href.includes("/login")
-                    && !document.querySelector('input[name="email"], input[type="email"]')
+                () => {
+                    const authenticatedShell = document.querySelector('[aria-label="User Settings"]')
+                        || document.querySelector('[data-list-id="guildsnav"]');
+                    return location.href.includes("/channels/")
+                        && !location.href.includes("/login")
+                        && !document.querySelector('input[name="email"], input[type="email"]')
+                        && Boolean(authenticatedShell);
+                }
                 """,
                 timeout=timeout_seconds * 1000,
             )
@@ -1921,11 +1926,31 @@ class DiscordWebSession:
         if not self.page.url.startswith("https://discord.com/channels/"):
             return False
         try:
-            return not await self.page.locator('input[name="email"], input[type="email"]').first.is_visible(
-                timeout=500
+            return bool(
+                await self.page.evaluate(
+                    """
+                    () => {
+                        const visible = (node) => {
+                            if (!node) return false;
+                            const rect = node.getBoundingClientRect();
+                            const style = window.getComputedStyle(node);
+                            return rect.width > 0
+                                && rect.height > 0
+                                && style.display !== "none"
+                                && style.visibility !== "hidden";
+                        };
+                        const loginVisible = Array.from(document.querySelectorAll(
+                            'input[name="email"], input[type="email"]'
+                        )).some(visible);
+                        const authenticatedShell = document.querySelector('[aria-label="User Settings"]')
+                            || document.querySelector('[data-list-id="guildsnav"]');
+                        return !loginVisible && Boolean(authenticatedShell);
+                    }
+                    """
+                )
             )
         except Exception:
-            return True
+            return False
 
 
 def _typing_duration(

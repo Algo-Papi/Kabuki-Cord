@@ -13,6 +13,7 @@ from .memory import ConversationMemory
 from .message_view import message_preview, sorted_message_rows
 from .models import MessageRecord
 from .reply_ledger import ReplyLedger
+from .state_io import read_json_file
 
 
 def update_approval_draft(config: AppConfig, approval_id: str, draft: str) -> ApprovalItem:
@@ -147,7 +148,11 @@ def memory_context(memory_path: Path, channel_id: str, *, limit: int = 80) -> li
 
 
 def server_character_card(config: AppConfig, server_id: str) -> str | None:
-    payload = _read_json(config.servers_file, default={"servers": []})
+    payload = (
+        json.loads(config.servers_file.read_text(encoding="utf-8-sig"))
+        if config.servers_file.exists()
+        else {"servers": []}
+    )
     for server in payload.get("servers", []):
         if str(server.get("server_id") or "") == server_id:
             return server.get("character_card") or None
@@ -163,6 +168,4 @@ def _source_ids(item: ApprovalItem) -> set[str]:
 
 
 def _read_json(path: Path, *, default: dict) -> dict:
-    if not path.exists():
-        return default
-    return json.loads(path.read_text(encoding="utf-8-sig"))
+    return read_json_file(path, default=default)

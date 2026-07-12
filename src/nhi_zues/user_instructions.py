@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .state_io import write_json_file
+from .state_io import mutate_json_file, read_json_file, write_json_file
 
 
 @dataclass(frozen=True)
@@ -37,8 +36,17 @@ class UserInstructionStore:
             server_id=server_id or None,
             channel_id=channel_id or None,
         )
-        self._items.append(item)
-        self._save()
+        def append_item(payload: dict) -> None:
+            rows = list(payload.get("items", []))
+            rows.append(item.__dict__)
+            payload["items"] = rows
+
+        mutate_json_file(
+            self.instruction_file,
+            default={"items": []},
+            mutator=append_item,
+        )
+        self._items = self._load()
         return item
 
     def for_users(
@@ -48,6 +56,7 @@ class UserInstructionStore:
         server_id: str | None = None,
         channel_id: str | None = None,
     ) -> dict[str, list[UserInstruction]]:
+        self._items = self._load()
         wanted = set(user_keys)
         results: dict[str, list[UserInstruction]] = {key: [] for key in user_keys}
         for item in self._items:
@@ -56,9 +65,7 @@ class UserInstructionStore:
         return results
 
     def _load(self) -> list[UserInstruction]:
-        if not self.instruction_file.exists():
-            return []
-        payload = json.loads(self.instruction_file.read_text(encoding="utf-8"))
+        payload = read_json_file(self.instruction_file, default={"items": []})
         return [UserInstruction(**row) for row in payload.get("items", [])]
 
     def _save(self) -> None:

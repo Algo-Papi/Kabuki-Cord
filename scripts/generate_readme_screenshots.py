@@ -8,9 +8,10 @@ from playwright.sync_api import sync_playwright
 
 
 ROOT = Path(__file__).resolve().parents[1]
-STYLE_PATH = ROOT / "web" / "styles.css"
-MONITOR_STYLE_PATH = ROOT / "web" / "monitor.css"
-ASSET_DIR = ROOT / "web" / "assets"
+WEB_ROOT = ROOT / "src" / "nhi_zues" / "web"
+STYLE_PATH = WEB_ROOT / "styles.css"
+MONITOR_STYLE_PATH = WEB_ROOT / "monitor.css"
+ASSET_DIR = WEB_ROOT / "assets"
 OUTPUT_DIR = ROOT / "docs" / "screenshots"
 VIEWPORT = {"width": 1440, "height": 900}
 
@@ -244,7 +245,7 @@ def rail(active: str = "Signal Lab") -> str:
             </button>
             """
         )
-    return f"""
+    return """
       <aside class="server-rail">
         <div class="brand-mark"><span class="fixture-icon">KC</span></div>
         <div class="server-list">{''.join(bubbles)}</div>
@@ -318,7 +319,7 @@ def server_panel() -> str:
 
 
 def workspace() -> str:
-    return f"""
+    return """
       <main class="workspace">
         <header class="topbar">
           <div class="topbar-title">

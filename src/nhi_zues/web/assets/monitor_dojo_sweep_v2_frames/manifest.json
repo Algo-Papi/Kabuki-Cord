@@ -1,0 +1,9 @@
+{
+  "frame_count": 8,
+  "frame_ms": 300,
+  "width": 640,
+  "height": 480,
+  "extension": "webp",
+  "timing": "looped-while-sweep-target-active",
+  "animation": "eight-pose-fixed-camera-evidence-sweep"
+}

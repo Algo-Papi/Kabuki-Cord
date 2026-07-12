@@ -1,0 +1,9 @@
+{
+  "frame_count": 48,
+  "frame_ms": 95,
+  "width": 640,
+  "height": 480,
+  "extension": "webp",
+  "timing": "looped-while-sweep-target-active",
+  "animation": "five-pose-sweep-cycle-with-dust-vortex"
+}

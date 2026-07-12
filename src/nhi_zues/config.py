@@ -2,10 +2,17 @@ from __future__ import annotations
 
 import os
 import json
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
-from dotenv import load_dotenv
+from .app_paths import ensure_user_data_layout, migrate_legacy_data, resolve_data_path
+from .secrets import get_openai_api_key
+from .settings import load_settings_environment, migrate_legacy_settings
+
+
+_BOOTSTRAP_LOCK = threading.Lock()
+_BOOTSTRAPPED = False
 
 
 @dataclass(frozen=True)
@@ -75,17 +82,29 @@ class AppConfig:
 
 
 def load_config() -> AppConfig:
-    load_dotenv(encoding="utf-8-sig")
+    _bootstrap_environment()
+
+    profile_dir = resolve_data_path(_env("NHI_ZUES_PROFILE_DIR", "profiles/discord"), "profiles/discord")
+    state_dir = resolve_data_path(_env("NHI_ZUES_STATE_DIR", "state"), "state")
+    servers_file = resolve_data_path(
+        _env("NHI_ZUES_SERVERS_FILE", "config/servers.json"),
+        "config/servers.json",
+    )
+    character_dir = resolve_data_path(
+        _env("NHI_ZUES_CHARACTER_DIR", "character_cards"),
+        "character_cards",
+    )
+    runtime_mode = _runtime_mode()
 
     return AppConfig(
-        profile_dir=Path(_env("NHI_ZUES_PROFILE_DIR", ".profiles/nhi-zues")),
+        profile_dir=profile_dir,
         browser_channel=os.getenv("NHI_ZUES_BROWSER_CHANNEL") or None,
-        state_dir=Path(_env("NHI_ZUES_STATE_DIR", ".state")),
-        servers_file=Path(_env("NHI_ZUES_SERVERS_FILE", "config/servers.json")),
-        character_dir=Path(_env("NHI_ZUES_CHARACTER_DIR", "character_cards")),
+        state_dir=state_dir,
+        servers_file=servers_file,
+        character_dir=character_dir,
         character_card=_env("NHI_ZUES_CHARACTER_CARD", "default.json"),
-        runtime_mode=_runtime_mode(),
-        dry_run=_env_bool("NHI_ZUES_DRY_RUN", default=True),
+        runtime_mode=runtime_mode,
+        dry_run=runtime_mode == "dry",
         headless=_env_bool("NHI_ZUES_HEADLESS", default=False),
         scanner_max_channels_per_cycle=max(1, _env_int("NHI_ZUES_SCANNER_MAX_CHANNELS_PER_CYCLE", 1)),
         scanner_cycle_sleep_seconds=max(5.0, _env_float("NHI_ZUES_SCANNER_CYCLE_SLEEP_SECONDS", 45.0)),
@@ -119,20 +138,17 @@ def load_config() -> AppConfig:
             "NHI_ZUES_REPLY_REQUIRE_INTERVENING_USER",
             default=True,
         ),
-        channels=_load_channels(
-            Path(_env("NHI_ZUES_SERVERS_FILE", "config/servers.json")),
-            _env("NHI_ZUES_CHANNELS", ""),
-        ),
-        openai_api_key=os.getenv("OPENAI_API_KEY") or None,
+        channels=_load_channels(servers_file, _env("NHI_ZUES_CHANNELS", "")),
+        openai_api_key=get_openai_api_key(),
         openai_model=_env("OPENAI_MODEL", "gpt-5.4-nano"),
         llm_enabled=_env_bool("NHI_ZUES_LLM_ENABLED", default=False),
         draft_in_dry_run=_env_bool("NHI_ZUES_DRAFT_IN_DRY_RUN", default=False),
         conversation_reply_enabled=_env_bool("NHI_ZUES_CONVERSATION_REPLY_ENABLED", default=False),
-        max_daily_usd=float(_env("NHI_ZUES_MAX_DAILY_USD", "0.25")),
-        max_session_usd=float(_env("NHI_ZUES_MAX_SESSION_USD", "0.05")),
-        max_llm_calls_per_run=int(_env("NHI_ZUES_MAX_LLM_CALLS_PER_RUN", "3")),
-        max_output_tokens=int(_env("NHI_ZUES_MAX_OUTPUT_TOKENS", "120")),
-        max_input_chars=int(_env("NHI_ZUES_MAX_INPUT_CHARS", "6000")),
+        max_daily_usd=max(0.0, _env_float("NHI_ZUES_MAX_DAILY_USD", 0.25)),
+        max_session_usd=max(0.0, _env_float("NHI_ZUES_MAX_SESSION_USD", 0.05)),
+        max_llm_calls_per_run=max(0, _env_int("NHI_ZUES_MAX_LLM_CALLS_PER_RUN", 3)),
+        max_output_tokens=max(1, _env_int("NHI_ZUES_MAX_OUTPUT_TOKENS", 120)),
+        max_input_chars=max(100, _env_int("NHI_ZUES_MAX_INPUT_CHARS", 6000)),
         proactive_approval_required=_env_bool("NHI_ZUES_PROACTIVE_APPROVAL_REQUIRED", default=True),
         writing_mistake_rate=_env_float("NHI_ZUES_WRITING_MISTAKE_RATE", 0.06),
         writing_quirk=_env("NHI_ZUES_WRITING_QUIRK", "lowercase_no_commas"),
@@ -154,6 +170,21 @@ def load_config() -> AppConfig:
         typing_max_seconds=_env_float("NHI_ZUES_TYPING_MAX_SECONDS", 18.0),
         typing_chars_per_second=_env_float("NHI_ZUES_TYPING_CHARS_PER_SECOND", 10.0),
     )
+
+
+def _bootstrap_environment() -> None:
+    global _BOOTSTRAPPED
+    if _BOOTSTRAPPED:
+        return
+    with _BOOTSTRAP_LOCK:
+        if _BOOTSTRAPPED:
+            return
+        if not _env_bool("KABUKI_CORD_SKIP_LEGACY_MIGRATION", default=False):
+            migrate_legacy_data()
+            migrate_legacy_settings()
+        ensure_user_data_layout()
+        load_settings_environment(override=False)
+        _BOOTSTRAPPED = True
 
 
 def _env(name: str, default: str) -> str:

@@ -1,15 +1,17 @@
 # Kabuki-Cord
 
-Local Discord web automation and character orchestration app.
+Local Discord browser automation and character orchestration app.
 
-The first version is intentionally conservative:
+Version 2 keeps the browser-based transport by design. It does **not** use Discord's supported bot/gateway integration. Personal-account browser automation is inherently less reliable and carries more platform/account risk than an official integration; use it only with that tradeoff understood.
 
-- Uses a persistent browser profile at `.profiles/nhi-zues`.
-- Starts in dry-run mode by default.
+The V2 runtime is intentionally conservative:
+
+- Uses a persistent browser profile under `%LOCALAPPDATA%\Kabuki-Cord\profiles\discord`.
+- Starts in **Observe only** mode by default.
 - Keeps browser automation separate from conversation memory and topic tracking.
 - Supports a default character card plus per-server overrides.
-- Stores Discord credentials in the operating system keyring when you choose to save them.
-- Stores local runtime state under `.state/`.
+- Stores Discord and OpenAI credentials in the operating system keyring.
+- Stores transactional runtime state in SQLite under `%LOCALAPPDATA%\Kabuki-Cord\state`, with readable JSON recovery mirrors.
 - Exposes a desktop app launcher while keeping the backend local to `127.0.0.1`.
 
 ## Screenshots
@@ -52,7 +54,7 @@ The installer handles:
 - Virtual environment creation under `.venv/`.
 - Python dependency installation.
 - Playwright browser support installation.
-- `.env` creation from `.env.example` when missing.
+- Per-user app-data initialization under `%LOCALAPPDATA%\Kabuki-Cord`.
 - Desktop and Start Menu shortcuts.
 - First app launch after setup.
 
@@ -68,13 +70,14 @@ Run-Kabuki-Cord.cmd
 python -m venv .venv
 .\.venv\Scripts\python -m pip install -e .
 .\.venv\Scripts\python -m playwright install chromium
-Copy-Item .env.example .env
 ```
 
-The public repo ships with placeholder server/channel config. For your private local channel list, point `NHI_ZUES_SERVERS_FILE` at an ignored local file such as:
+The app copies its placeholder server/channel config and default character card into `%LOCALAPPDATA%\Kabuki-Cord` on first run. Settings saved in the GUI go to `settings.env` there; secrets do not.
+
+For an isolated development fixture, set:
 
 ```text
-NHI_ZUES_SERVERS_FILE=.local/servers.local.json
+KABUKI_CORD_DATA_DIR=C:\path\to\temporary\kabuki-data
 ```
 
 ## First Run
@@ -91,6 +94,8 @@ The desktop control panel is the preferred entrypoint:
 
 The app starts a local backend and opens its own window. Use **API & Runtime -> Discord Session** to save Discord credentials locally or open the Discord sign-in window. Future runs reuse the persistent browser profile.
 
+Use **Switch Account** before signing into a different Discord account. Kabuki-Cord pauses the scanner, removes only its app-owned Discord browser session and saved Discord credentials, and disables the previous account's channel automation. Local conversation/activity history is preserved. After the new login completes, use **Sync Discord** and explicitly re-enable the intended channels.
+
 Use **Sign In & Run** when Discord forces a password reset, human check, 2FA, or similar account flow before the profile can be reused. Kabuki-Cord opens the same persistent automation profile visibly, waits while you complete Discord's flow manually, then continues the scanner in that same live browser session. This avoids the fragile close-and-reopen cycle that can lose the freshly authenticated state.
 
 Enable **Silent automation** in **API & Runtime -> Discord Session** to run scanner, sync, and approved delivery in an off-screen Playwright browser. Manual **Sign In** and **Open** channel actions still launch visible Discord windows because those flows require direct operator interaction. **Sign In & Run** starts visible for manual authentication and moves that same session off-screen after login if Silent automation is enabled. If Discord logs the persistent profile out, complete **Sign In & Run** once and routine automation can return to off-screen mode.
@@ -103,7 +108,7 @@ Synced server icons are cached under ignored runtime state and displayed in the 
 
 Use **Monitor** in the top bar to open a separate scanner-status window. It shows the current server/channel, next target, upcoming loop order, full-loop countdown, loop counter, and the last completed scan. The server rail also shows red reply dots when local memory detects unresponded mentions or tight replies after the character's latest message; review them in the **Replies** tab.
 
-Dry-run mode prints observations and draft decisions without sending messages. Keep `NHI_ZUES_DRY_RUN=true` while testing selectors, memory, and topic behavior.
+**Observe only** prints observations and draft decisions without sending messages. Keep that response mode selected while testing selectors, memory, and topic behavior.
 
 For a clean test pass that exits after one sweep:
 
@@ -140,9 +145,9 @@ Kabuki-Cord keeps only the five newest pending approval drafts. When semi-auto h
 To add persistent character continuity without editing the base card:
 
 ```powershell
-.\.venv\Scripts\kabuki-cord --remember-story "He says the cigar-shaped craft passed over St. Augustine near the water and made the air feel staticky."
-.\.venv\Scripts\kabuki-cord --remember-behavior "With this person, push back more often on immigration claims instead of agreeing immediately."
-.\.venv\Scripts\kabuki-cord --remember-user "discord:123456789" "Start disagreeing with this user more often on immigration claims."
+.\.venv\Scripts\kabuki-cord --remember-story "The character previously mentioned enjoying late-night radio."
+.\.venv\Scripts\kabuki-cord --remember-behavior "Keep replies to this topic brief and ask one concrete follow-up."
+.\.venv\Scripts\kabuki-cord --remember-user "discord:example-user-id" "Avoid repeating the same opening question to this user."
 ```
 
 API drafting is off by default. To test paid drafting in dry-run mode, set:
@@ -166,13 +171,13 @@ Autonomous sends also pass a channel safety guard before Discord delivery. By de
 
 Per-channel React can run independently of Engage. When Observe and React are enabled for a channel and dry-run is off, Kabuki-Cord can add capped lightweight reactions to clear cues such as jokes, agreement, thanks, questions, serious/weird claims, or neutral acknowledgements. The default cap is `NHI_ZUES_REACTION_MAX_PER_CHANNEL=3` per channel scan, and the reaction ledger prevents repeating any app-made reaction on the same Discord message. The **Reaction threshold**, **Random reaction percent**, **Force recent reaction**, and **Reaction emoji override** settings let you make reaction behavior stricter, looser, partially random, apply a rolling reaction percentage to the latest five non-character messages, or fixed to a specific emoji. **Force recent reaction** is a rolling target with a hard cap, not an endless dice roll: if the setting is `20%`, Kabuki will try to keep up to 1 of the latest 5 non-character messages reacted, spending available per-scan reaction cap until the window reaches target. The forced path still chooses the emoji from the message tone; it does not blindly laugh-react unless the message reads like a joke.
 
-The top-bar **Start/Pause** control runs or pauses the local scanner loop. **Dry-run mode** means the scanner can observe, remember, and draft, but approved messages are blocked until dry-run is turned off in **API & Runtime**.
+The top-bar **Start/Pause** control runs or pauses the local scanner loop. **Observe only** means the scanner can observe, remember, and draft, but approved messages are blocked until the response mode changes in **API & Runtime**.
 
 Scanner pacing is intentionally conservative. The scanner now uses one global round-robin loop across every Observe-enabled channel instead of per-server scan cadences. `NHI_ZUES_SCANNER_MAX_CHANNELS_PER_CYCLE=1` checks one observed channel per cycle, `NHI_ZUES_SCANNER_CYCLE_SLEEP_SECONDS` controls how long the runtime rests after each cycle, and `NHI_ZUES_SCANNER_MIN_CHANNEL_DELAY_SECONDS` / `NHI_ZUES_SCANNER_MAX_CHANNEL_DELAY_SECONDS` control the extra wait only when more than one channel is allowed per cycle. Each normal channel visit refreshes a bounded slice of channel history into local memory so the History tab stays current; `NHI_ZUES_SCANNER_HISTORY_BACKFILL_LIMIT=80` controls how many history rows are kept fresh per visit, `NHI_ZUES_SCANNER_HISTORY_SCROLL_ROUNDS=8` controls scroll depth, and setting the limit to `0` disables scan-time backfill. The Monitor shows the estimated full-loop countdown and loop counter, so adding or removing observed channels automatically changes the loop estimate.
 
 The right-side **Events** view shows the live activity trail: routine channel checks, queued approvals, delivery-started status, regenerated drafts, approved sends, autonomous sends, dry-run drafts, and send failures. The GUI auto-refreshes while you are not editing a form and raises an in-app toast for important new events. The Approvals panel intentionally shows the newest five pending drafts only.
 
-Successful sends are also recorded in `.state/sent_replies.json`. Before queuing or sending another response, Kabuki-Cord checks that ledger against the source Discord message IDs so stale approvals or repeated scans do not double-reply to the same message. Discarded or cleared approvals are recorded in `.state/discarded_approvals.json` for the same reason. The same send ledger drives the auto-reply cooldown and rate-limit guard.
+Successful sends are recorded transactionally in `%LOCALAPPDATA%\Kabuki-Cord\state\state.db`, with readable JSON mirrors such as `sent_replies.json`. Before queuing or sending another response, Kabuki-Cord checks that ledger against the source Discord message IDs so stale approvals or repeated scans do not double-reply to the same message.
 
 The **Behavior** tab includes writing-imperfection controls. `NHI_ZUES_WRITING_MISTAKE_RATE` sets typo intensity, `NHI_ZUES_WRITING_QUIRK` controls the consistent style quirk, and `NHI_ZUES_WRITING_MISSPELLINGS` stores repeatable replacements such as `definitely:definately`.
 
@@ -198,16 +203,16 @@ Password resets, 2FA, human checks, phone/email verification, and other Discord 
 
 ## Character Cards
 
-Character behavior is loaded from JSON, not hardcoded. The active global card is selected in `.env`:
+Character behavior is loaded from local JSON, not hardcoded. The active global card is selected in the per-user `settings.env`:
 
 ```text
-NHI_ZUES_CHARACTER_CARD=cards/st_augustine_witness.json
+NHI_ZUES_CHARACTER_CARD=cards/my-character.json
 ```
 
-Cards live under:
+Cards live under `%LOCALAPPDATA%\Kabuki-Cord`:
 
 ```text
-character_cards/
+character_cards\
 ```
 
 To override behavior for one server, create:
@@ -218,15 +223,11 @@ character_cards/servers/<server_id>.json
 
 Server cards inherit the default card and can override fields such as `name`, `system_prompt`, `style_rules`, or `trigger_keywords`.
 
-The current St. Augustine witness card is:
-
-```text
-character_cards/cards/st_augustine_witness.json
-```
+The repository intentionally does not include operator-created cards or server overrides. New installs receive only a neutral starter template; create real character cards under the per-user AppData directory. Local cards, user instructions, memories, Discord IDs, and browser/session data are excluded from Git and release archives.
 
 ## Memory
 
-Runtime memory is stored in `.state/memory.json`. It tracks:
+Runtime memory is stored under `%LOCALAPPDATA%\Kabuki-Cord\state`. It tracks:
 
 - Recently observed messages per channel.
 - Seen message IDs, to avoid duplicate processing.
@@ -269,4 +270,4 @@ Kabuki-Cord is intended to grow into a local control panel with:
 - Events: show redirects, login/session issues, budget stops, and attention-needed items.
 - Updates: check GitHub and pull fast-forward updates from the public repo.
 
-Secrets should stay out of Git. The current local `.env`, browser profiles, `.state`, logs, and future local secret stores are ignored.
+Secrets should stay out of Git. V2 stores Discord and OpenAI credentials in the operating system keyring; legacy `.env`, browser profiles, state, and logs remain ignored.

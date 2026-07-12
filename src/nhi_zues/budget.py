@@ -1,11 +1,28 @@
 from __future__ import annotations
 
-import json
+import uuid
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .state_io import write_json_file
+from .state_io import mutate_json_file, read_json_file, write_json_file
+
+
+_SESSION_LOCK = threading.Lock()
+_SESSION_ID = uuid.uuid4().hex
+
+
+def begin_budget_session() -> str:
+    global _SESSION_ID
+    with _SESSION_LOCK:
+        _SESSION_ID = uuid.uuid4().hex
+        return _SESSION_ID
+
+
+def current_budget_session_id() -> str:
+    with _SESSION_LOCK:
+        return _SESSION_ID
 
 
 MODEL_PRICES_PER_MILLION: dict[str, tuple[float, float]] = {
@@ -31,6 +48,7 @@ class UsageRecord:
     output_tokens: int
     cost_usd: float
     kind: str
+    session_id: str = ""
 
 
 class BudgetManager:
@@ -48,15 +66,18 @@ class BudgetManager:
         self.max_daily_usd = max_daily_usd
         self.max_session_usd = max_session_usd
         self.max_calls_per_run = max_calls_per_run
-        self.session_spend = 0.0
-        self.session_calls = 0
+        self.session_id = current_budget_session_id()
         self._records = self._load()
 
     def check(self, *, estimated_input_tokens: int, max_output_tokens: int) -> BudgetCheck:
-        estimated_cost = self.estimate_cost(
-            input_tokens=estimated_input_tokens,
-            output_tokens=max_output_tokens,
-        )
+        try:
+            estimated_cost = self.estimate_cost(
+                input_tokens=estimated_input_tokens,
+                output_tokens=max_output_tokens,
+            )
+        except ValueError as exc:
+            return BudgetCheck(False, str(exc), 0.0)
+        self._records = self._load()
         if self.session_calls >= self.max_calls_per_run:
             return BudgetCheck(False, "max LLM calls for this run reached", estimated_cost)
         if self.session_spend + estimated_cost > self.max_session_usd:
@@ -66,10 +87,10 @@ class BudgetManager:
         return BudgetCheck(True, "within budget", estimated_cost)
 
     def estimate_cost(self, *, input_tokens: int, output_tokens: int) -> float:
-        input_rate, output_rate = MODEL_PRICES_PER_MILLION.get(
-            self.model,
-            MODEL_PRICES_PER_MILLION["gpt-5.4-mini"],
-        )
+        prices = MODEL_PRICES_PER_MILLION.get(self.model)
+        if prices is None:
+            raise ValueError(f"No verified pricing is configured for model {self.model!r}.")
+        input_rate, output_rate = prices
         return ((input_tokens / 1_000_000) * input_rate) + (
             (output_tokens / 1_000_000) * output_rate
         )
@@ -83,11 +104,19 @@ class BudgetManager:
             output_tokens=output_tokens,
             cost_usd=cost,
             kind=kind,
+            session_id=self.session_id,
         )
-        self.session_calls += 1
-        self.session_spend += cost
-        self._records.append(record)
-        self._save()
+        def append_record(payload: dict) -> None:
+            rows = list(payload.get("records", []))
+            rows.append(record.__dict__)
+            payload["records"] = rows
+
+        mutate_json_file(
+            self.usage_file,
+            default={"records": []},
+            mutator=append_record,
+        )
+        self._records = self._load()
         return record
 
     def daily_spend(self) -> float:
@@ -97,6 +126,18 @@ class BudgetManager:
             if datetime.fromisoformat(record.created_at).date() == today:
                 total += record.cost_usd
         return total
+
+    @property
+    def session_spend(self) -> float:
+        return sum(
+            record.cost_usd
+            for record in self._records
+            if record.session_id == self.session_id
+        )
+
+    @property
+    def session_calls(self) -> int:
+        return sum(1 for record in self._records if record.session_id == self.session_id)
 
     def summary(self) -> dict[str, float | int | str]:
         total = sum(record.cost_usd for record in self._records)
@@ -116,9 +157,7 @@ class BudgetManager:
         return max(1, len(text) // 4)
 
     def _load(self) -> list[UsageRecord]:
-        if not self.usage_file.exists():
-            return []
-        payload = json.loads(self.usage_file.read_text(encoding="utf-8"))
+        payload: dict = read_json_file(self.usage_file, default={"records": []})
         return [UsageRecord(**row) for row in payload.get("records", [])]
 
     def _save(self) -> None:

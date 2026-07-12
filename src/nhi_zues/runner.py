@@ -19,7 +19,7 @@ from .output_guard import outgoing_block_reason
 from .reaction_ledger import ReactionLedger
 from .reaction_service import (
     process_reactions as _process_reactions_service,
-    reaction_window_cap as _reaction_window_cap,
+    reaction_window_cap as _reaction_window_cap,  # noqa: F401 - compatibility export
     recent_non_own_message_ids as _recent_non_own_message_ids,
     recent_reaction_candidates as _recent_reaction_candidates,
     without_own_messages as _without_own_messages,
@@ -27,7 +27,6 @@ from .reaction_service import (
 from .reply_policy import (
     approval_gate_reason as _approval_gate_reason,
     auto_reply_guard_reason as _auto_reply_guard_reason,
-    is_own_message as _is_own_message,
     own_author_ids_from_messages as _own_author_ids_from_messages,
     requires_approval as _requires_approval,
 )
@@ -38,6 +37,7 @@ from .secrets import get_discord_credentials
 from .topics import TopicTracker
 from .user_instructions import UserInstructionStore
 from .models import DraftDecision, MessageRecord
+from .transport import ChatTransport, TransportFactory
 
 
 log = logging.getLogger(__name__)
@@ -72,8 +72,10 @@ class NhiZuesRunner:
         *,
         start_cursor: int = 0,
         completed_loop_count: int = 0,
+        transport_factory: TransportFactory = DiscordWebSession,
     ) -> None:
         self.config = config
+        self.transport_factory = transport_factory
         self.memory = ConversationMemory(config.state_dir / "memory.json")
         self.topics = TopicTracker()
         self.budget = BudgetManager(
@@ -137,7 +139,7 @@ class NhiZuesRunner:
 
     async def run_until_stopped_in_session(
         self,
-        session: DiscordWebSession,
+        session: ChatTransport,
         stop_event,
         *,
         on_cycle=None,
@@ -166,7 +168,7 @@ class NhiZuesRunner:
         on_target_start=None,
         on_target_complete=None,
     ) -> None:
-        async with DiscordWebSession(
+        async with self.transport_factory(
             self.config.profile_dir,
             browser_channel=self.config.browser_channel,
             headless=self.config.headless,
@@ -184,7 +186,7 @@ class NhiZuesRunner:
 
     async def _run_in_session(
         self,
-        session: DiscordWebSession,
+        session: ChatTransport,
         *,
         loop: bool,
         stop_event=None,
@@ -212,7 +214,7 @@ class NhiZuesRunner:
 
     async def _prepare_discord_session(
         self,
-        session: DiscordWebSession,
+        session: ChatTransport,
         *,
         verify_login: bool,
     ) -> None:
@@ -233,7 +235,7 @@ class NhiZuesRunner:
 
     async def _run_scan_cycles(
         self,
-        session: DiscordWebSession,
+        session: ChatTransport,
         *,
         loop: bool,
         stop_event=None,
@@ -286,7 +288,7 @@ class NhiZuesRunner:
         targets, will_complete_loop = self._select_targets(planned_targets)
         return planned_targets, targets, will_complete_loop, completed_in_loop
 
-    async def _remember_current_account_id(self, session: DiscordWebSession) -> None:
+    async def _remember_current_account_id(self, session: ChatTransport) -> None:
         try:
             account_id = await session.current_user_id()
         except Exception:
@@ -349,7 +351,7 @@ class NhiZuesRunner:
 
     async def _process_channels(
         self,
-        session: DiscordWebSession,
+        session: ChatTransport,
         targets,
         *,
         planned_targets=None,
@@ -465,7 +467,7 @@ class NhiZuesRunner:
 
     async def _open_channel_or_record_unavailable(
         self,
-        session: DiscordWebSession,
+        session: ChatTransport,
         target,
     ) -> bool:
         await self._raise_if_account_blocked(session, target)
@@ -488,7 +490,7 @@ class NhiZuesRunner:
 
     async def _capture_channel_state(
         self,
-        session: DiscordWebSession,
+        session: ChatTransport,
         target,
     ) -> ChannelScanState:
         visible_messages = await session.read_visible_messages(target.server_id, target.channel_id)
@@ -535,7 +537,7 @@ class NhiZuesRunner:
             return False
         return int(getattr(self.config, "scanner_history_backfill_limit", 0) or 0) > 0
 
-    async def _read_scan_history(self, session: DiscordWebSession, target) -> list[MessageRecord]:
+    async def _read_scan_history(self, session: ChatTransport, target) -> list[MessageRecord]:
         limit = max(0, int(getattr(self.config, "scanner_history_backfill_limit", 0) or 0))
         if limit <= 0:
             return []
@@ -582,7 +584,7 @@ class NhiZuesRunner:
 
     async def _process_safety_review_channel(
         self,
-        session: DiscordWebSession,
+        session: ChatTransport,
         target,
         state: ChannelScanState,
     ) -> tuple[int, int]:
@@ -637,7 +639,7 @@ class NhiZuesRunner:
 
     async def _read_safety_review_source(
         self,
-        session: DiscordWebSession,
+        session: ChatTransport,
         target,
         state: ChannelScanState,
     ) -> tuple[list[MessageRecord], list[MessageRecord], str]:
@@ -701,7 +703,7 @@ class NhiZuesRunner:
         )
         return review_source, fresh_messages, "history"
 
-    async def _message_dom_diagnostics(self, session: DiscordWebSession, target) -> dict[str, object]:
+    async def _message_dom_diagnostics(self, session: ChatTransport, target) -> dict[str, object]:
         diagnostics = getattr(session, "message_dom_diagnostics", None)
         if not callable(diagnostics):
             return {}
@@ -719,7 +721,7 @@ class NhiZuesRunner:
 
     async def _process_regular_channel(
         self,
-        session: DiscordWebSession,
+        session: ChatTransport,
         target,
         state: ChannelScanState,
     ) -> None:
@@ -751,7 +753,7 @@ class NhiZuesRunner:
 
     async def _process_channel_reactions(
         self,
-        session: DiscordWebSession,
+        session: ChatTransport,
         target,
         state: ChannelScanState,
     ) -> set[str]:
@@ -852,7 +854,7 @@ class NhiZuesRunner:
 
     async def _handle_reply_decision(
         self,
-        session: DiscordWebSession,
+        session: ChatTransport,
         target,
         state: ChannelScanState,
         decision: DraftDecision,
@@ -1006,7 +1008,7 @@ class NhiZuesRunner:
 
     async def _send_auto_reply_decision(
         self,
-        session: DiscordWebSession,
+        session: ChatTransport,
         target,
         state: ChannelScanState,
         decision: DraftDecision,
@@ -1075,7 +1077,7 @@ class NhiZuesRunner:
     async def _channel_settle_delay(self, stop_event=None) -> bool:
         return await _sleep_interruptible(stop_event, self.config.scanner_channel_settle_seconds)
 
-    async def _raise_if_account_blocked(self, session: DiscordWebSession, target) -> None:
+    async def _raise_if_account_blocked(self, session: ChatTransport, target) -> None:
         state = await session.account_blocker_state()
         if not state.get("blocked"):
             return
@@ -1090,7 +1092,7 @@ class NhiZuesRunner:
 
     async def _process_reactions(
         self,
-        session: DiscordWebSession,
+        session: ChatTransport,
         target,
         candidates,
         *,

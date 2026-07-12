@@ -7,6 +7,7 @@ import json
 import mimetypes
 import os
 import secrets as token_secrets
+import shutil
 import subprocess
 import sys
 import threading
@@ -20,8 +21,7 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-from dotenv import load_dotenv
-
+from .app_paths import app_data_root, asset_root, legacy_root, web_root
 from .approval_state import (
     approval_config_indexes as _approval_config_indexes,
     approval_items_state,
@@ -63,20 +63,30 @@ from .output_guard import outgoing_block_reason
 from .reactions import suggest_emoji_reaction
 from .redaction import redact_secret_text as _redact_secret_text
 from .reply_ledger import ReplyLedger, duplicate_reply_message
+from .state_io import read_json_file, write_text_file
 from .runtime_controller import RuntimeController
 from .safety_review import SafetyReviewQueue
 from .scan_estimates import (
-    estimated_channel_scan_seconds as _estimated_channel_scan_seconds,
-    estimated_loop_seconds as _estimated_loop_seconds,
+    estimated_channel_scan_seconds as _estimated_channel_scan_seconds,  # noqa: F401
+    estimated_loop_seconds as _estimated_loop_seconds,  # noqa: F401
 )
-from .secrets import discord_credential_status, get_discord_credentials, set_discord_credentials
+from .secrets import (
+    clear_discord_credentials,
+    clear_openai_api_key,
+    discord_credential_status,
+    get_discord_credentials,
+    set_discord_credentials,
+    set_openai_api_key,
+)
 from .server_sync import merge_channels as _merge_channels_impl
 from .server_sync import merge_discovered_servers
+from .settings import read_settings, update_settings
 from .user_instructions import UserInstructionStore
 
 
-ROOT = Path.cwd()
-WEB_ROOT = ROOT / "web"
+ROOT = legacy_root()
+WEB_ROOT = web_root()
+ASSET_ROOT = asset_root()
 SESSION_TOKEN = token_secrets.token_urlsafe(32)
 DISCORD_SESSION_LOCK = threading.Lock()
 DISCORD_LOCK_WAIT_SECONDS = 45.0
@@ -123,6 +133,9 @@ class GuiHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/state":
             self._json(app_state())
             return
+        if parsed.path == "/api/monitor-state":
+            self._json(monitor_state())
+            return
         if parsed.path == "/api/usage":
             self._json(usage_state())
             return
@@ -136,10 +149,16 @@ class GuiHandler(BaseHTTPRequestHandler):
         if not self._authorized_api(require_json=True):
             self._json({"ok": False, "error": "Forbidden."}, status=403)
             return
-        body = self._read_json()
+        try:
+            body = self._read_json()
+        except ValueError as exc:
+            self._json({"ok": False, "error": str(exc)}, status=400)
+            return
         if parsed.path == "/api/servers":
             config = load_config()
+            previous = _read_config_json(config.servers_file, default={"servers": []})
             _write_json(config.servers_file, body)
+            _log_channel_autonomy_changes(config, previous, body)
             self._json({"ok": True, "state": app_state()})
             return
         if parsed.path == "/api/discord-sync-servers":
@@ -175,8 +194,9 @@ class GuiHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/unresponded-dismiss":
             try:
                 dismissed = dismiss_unresponded_replies(body)
-            except ValueError as exc:
-                self._json({"ok": False, "error": str(exc)}, status=400)
+            except (ValueError, RuntimeError) as exc:
+                status = 400 if isinstance(exc, ValueError) else 500
+                self._json({"ok": False, "error": str(exc)}, status=status)
                 return
             self._json({"ok": True, "dismissed": dismissed, "state": app_state()})
             return
@@ -189,15 +209,27 @@ class GuiHandler(BaseHTTPRequestHandler):
             self._json({"ok": True, "dismissed": dismissed, "state": app_state()})
             return
         if parsed.path == "/api/settings":
+            previous_config = load_config()
             try:
                 update_env(body)
-            except ValueError as exc:
-                self._json({"ok": False, "error": str(exc)}, status=400)
+            except (ValueError, RuntimeError) as exc:
+                status = 400 if isinstance(exc, ValueError) else 500
+                self._json({"ok": False, "error": str(exc)}, status=status)
                 return
+            _log_settings_security_changes(previous_config, load_config(), body)
             self._json({"ok": True, "state": app_state()})
             return
         if parsed.path == "/api/openai-models":
             self._json(fetch_openai_models())
+            return
+        if parsed.path == "/api/openai-key-clear":
+            try:
+                clear_openai_api_key()
+            except RuntimeError as exc:
+                self._json({"ok": False, "error": str(exc)}, status=500)
+                return
+            _record_security_event("openai_key_cleared", "Stored OpenAI API key was cleared.")
+            self._json({"ok": True, "state": app_state()})
             return
         if parsed.path == "/api/discord-credentials":
             try:
@@ -206,6 +238,44 @@ class GuiHandler(BaseHTTPRequestHandler):
                     password=str(body.get("password") or "") or None,
                 )
             except RuntimeError as exc:
+                self._json({"ok": False, "error": str(exc)}, status=500)
+                return
+            _record_security_event("discord_credentials_saved", "Discord credentials were saved to the OS keyring.")
+            self._json({"ok": True, "state": app_state()})
+            return
+        if parsed.path == "/api/discord-credentials-clear":
+            try:
+                clear_discord_credentials()
+            except RuntimeError as exc:
+                self._json({"ok": False, "error": str(exc)}, status=500)
+                return
+            _record_security_event("discord_credentials_cleared", "Stored Discord credentials were cleared.")
+            self._json({"ok": True, "state": app_state()})
+            return
+        if parsed.path == "/api/discord-session-reset":
+            if str(body.get("confirmation") or "") != "SWITCH_DISCORD_ACCOUNT":
+                self._json({"ok": False, "error": "Confirmation phrase did not match."}, status=400)
+                return
+            try:
+                reset_discord_session()
+            except (OSError, RuntimeError) as exc:
+                self._json({"ok": False, "error": str(exc)}, status=500)
+                return
+            self._json(
+                {
+                    "ok": True,
+                    "state": app_state(),
+                    "message": "Discord session reset. Sign in with the new account.",
+                }
+            )
+            return
+        if parsed.path == "/api/local-state-clear":
+            if str(body.get("confirmation") or "") != "CLEAR_LOCAL_STATE":
+                self._json({"ok": False, "error": "Confirmation phrase did not match."}, status=400)
+                return
+            try:
+                clear_local_state()
+            except (OSError, RuntimeError) as exc:
                 self._json({"ok": False, "error": str(exc)}, status=500)
                 return
             self._json({"ok": True, "state": app_state()})
@@ -300,12 +370,13 @@ class GuiHandler(BaseHTTPRequestHandler):
             self._json(check_update(apply_update=True))
             return
         if parsed.path == "/api/character":
+            config = load_config()
             card_path = str(body.get("path") or "")
             payload = body.get("card")
             if not card_path or not isinstance(payload, dict):
                 self._json({"ok": False, "error": "Missing character card payload."}, status=400)
                 return
-            target = _safe_character_path(card_path)
+            target = _safe_character_path(card_path, card_dir=config.character_dir)
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(json.dumps(payload, indent=2), encoding="utf-8")
             self._json({"ok": True, "state": app_state()})
@@ -348,13 +419,22 @@ class GuiHandler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", "0"))
         if length == 0:
             return {}
-        return json.loads(self.rfile.read(length).decode("utf-8"))
+        if length < 0 or length > 2_000_000:
+            raise ValueError("JSON request body is too large.")
+        try:
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("Request body must be valid UTF-8 JSON.") from exc
+        if not isinstance(payload, dict):
+            raise ValueError("Request body must be a JSON object.")
+        return payload
 
     def _json(self, payload: dict, *, status: int = 200) -> None:
         data = json.dumps(payload).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
+        self._security_headers(cache_control="no-store")
         self.end_headers()
         self.wfile.write(data)
 
@@ -372,8 +452,26 @@ class GuiHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
+        cache_control = (
+            "public, max-age=86400"
+            if path.suffix.lower() in {".png", ".jpg", ".jpeg", ".svg", ".ico", ".wav", ".webp"}
+            else "no-cache"
+        )
+        self._security_headers(cache_control=cache_control)
         self.end_headers()
         self.wfile.write(data)
+
+    def _security_headers(self, *, cache_control: str) -> None:
+        self.send_header("Cache-Control", cache_control)
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
+            "script-src 'self'; connect-src 'self'; font-src 'self'; object-src 'none'; "
+            "base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
+        )
 
     def _static_path(self, raw_path: str) -> Path | None:
         relative = unquote(raw_path.lstrip("/"))
@@ -418,7 +516,6 @@ RUNTIME = RuntimeController(DISCORD_SESSION_LOCK)
 
 
 def app_state() -> dict:
-    load_dotenv(override=True, encoding="utf-8-sig")
     config = load_config()
     env = read_env()
     model_catalog = model_catalog_state(config)
@@ -438,7 +535,7 @@ def app_state() -> dict:
             "dry_run": config.dry_run,
             "proactive_approval_required": config.proactive_approval_required,
             "openai_model": config.openai_model,
-            "api_key_set": bool(os.getenv("OPENAI_API_KEY")),
+            "api_key_set": bool(config.openai_api_key),
             "max_daily_usd": config.max_daily_usd,
             "max_session_usd": config.max_session_usd,
             "max_llm_calls_per_run": config.max_llm_calls_per_run,
@@ -528,7 +625,7 @@ def app_state() -> dict:
             "NHI_ZUES_REACTION_COOLDOWN_SECONDS": env.get("NHI_ZUES_REACTION_COOLDOWN_SECONDS", "900"),
             "NHI_ZUES_REACTION_EMOJI_OVERRIDE": env.get("NHI_ZUES_REACTION_EMOJI_OVERRIDE", ""),
         },
-        "servers": _read_json(config.servers_file, default={"servers": []}),
+        "servers": _read_config_json(config.servers_file, default={"servers": []}),
         "characters": character_cards(config.character_dir),
         "active_character": read_character(config.character_dir, config.character_card),
         "character_memory": character_memory_state(config.state_dir, config.character_card),
@@ -549,6 +646,38 @@ def app_state() -> dict:
     }
 
 
+def monitor_state() -> dict:
+    config = load_config()
+    servers_payload = _read_config_json(config.servers_file, default={"servers": []})
+    servers = []
+    for server in servers_payload.get("servers", []):
+        servers.append(
+            {
+                "server_id": str(server.get("server_id") or ""),
+                "label": str(server.get("label") or ""),
+                "channels": [
+                    {
+                        "channel_id": str(channel.get("channel_id") or ""),
+                        "label": str(channel.get("label") or ""),
+                    }
+                    for channel in server.get("channels", [])
+                ],
+            }
+        )
+    return {
+        "app": {
+            "scanner_max_channels_per_cycle": config.scanner_max_channels_per_cycle,
+            "scanner_cycle_sleep_seconds": config.scanner_cycle_sleep_seconds,
+            "scanner_channel_settle_seconds": config.scanner_channel_settle_seconds,
+            "scanner_min_channel_delay_seconds": config.scanner_min_channel_delay_seconds,
+            "scanner_max_channel_delay_seconds": config.scanner_max_channel_delay_seconds,
+        },
+        "runtime": RUNTIME.state(),
+        "events": events_state(config.state_dir / "events.json"),
+        "servers": {"servers": servers},
+    }
+
+
 def usage_state() -> dict:
     config = load_config()
     budget = BudgetManager(
@@ -559,6 +688,106 @@ def usage_state() -> dict:
         max_calls_per_run=config.max_llm_calls_per_run,
     )
     return budget.summary()
+
+
+def clear_local_state() -> None:
+    config = load_config()
+    target = config.state_dir.expanduser().resolve()
+    drive_root = Path(target.anchor).resolve()
+    if target in {drive_root, Path.home().resolve()} or len(target.parts) < 3:
+        raise RuntimeError("Refusing to clear an unsafe state directory.")
+    RUNTIME.pause(wait=True, timeout=15.0)
+    if target.exists():
+        for child in target.iterdir():
+            if child.is_dir():
+                shutil.rmtree(child)
+            else:
+                child.unlink(missing_ok=True)
+    target.mkdir(parents=True, exist_ok=True)
+
+
+def reset_discord_session() -> None:
+    """Remove the app-owned Discord browser session before changing accounts."""
+    config = load_config()
+    target = config.profile_dir.expanduser().resolve()
+    configured_root = app_data_root().resolve()
+    if configured_root != target and configured_root not in target.parents:
+        raise RuntimeError(
+            "Refusing to reset a Discord profile outside the Kabuki-Cord app-data directory."
+        )
+    drive_root = Path(target.anchor).resolve()
+    if target in {drive_root, Path.home().resolve(), configured_root} or len(target.parts) < 4:
+        raise RuntimeError("Refusing to reset an unsafe Discord profile directory.")
+
+    RUNTIME.pause(wait=True, timeout=15.0)
+    from .browser import _close_profile_browsers
+
+    _close_profile_browsers(target)
+    if target.exists():
+        shutil.rmtree(target)
+    target.mkdir(parents=True, exist_ok=True)
+    clear_discord_credentials()
+
+    payload = _read_config_json(config.servers_file, default={"servers": []})
+    for server in payload.get("servers", []):
+        for channel in server.get("channels", []):
+            for key in ("scan_enabled", "engage_enabled", "react_enabled", "auto_respond_enabled"):
+                channel[key] = False
+    _write_json(config.servers_file, payload)
+    _record_security_event(
+        "discord_session_reset",
+        "Discord browser session and stored credentials were cleared for an account switch. "
+        "All existing channel automation was disabled.",
+    )
+
+
+def _record_security_event(event_type: str, summary: str) -> None:
+    config = load_config()
+    EventLog(config.state_dir / "events.json").add(
+        event_type=event_type,
+        server_id="",
+        channel_id="",
+        summary=summary,
+    )
+
+
+def _log_settings_security_changes(before: AppConfig, after: AppConfig, values: dict) -> None:
+    if str(values.get("OPENAI_API_KEY") or "").strip():
+        _record_security_event("openai_key_saved", "OpenAI API key was saved to the OS keyring.")
+    if before.runtime_mode != after.runtime_mode:
+        _record_security_event(
+            "runtime_mode_changed",
+            f"Response mode changed from {before.runtime_mode} to {after.runtime_mode}.",
+        )
+    if before.llm_enabled != after.llm_enabled:
+        _record_security_event(
+            "llm_drafting_changed",
+            f"AI drafting {'enabled' if after.llm_enabled else 'disabled'}.",
+        )
+
+
+def _log_channel_autonomy_changes(config: AppConfig, before: dict, after: dict) -> None:
+    previous = _autonomous_channel_keys(before)
+    current = _autonomous_channel_keys(after)
+    enabled = current - previous
+    disabled = previous - current
+    if not enabled and not disabled:
+        return
+    EventLog(config.state_dir / "events.json").add(
+        event_type="channel_autonomy_changed",
+        server_id="",
+        channel_id="",
+        summary=f"Autonomous channel permission changed: {len(enabled)} enabled, {len(disabled)} disabled.",
+    )
+
+
+def _autonomous_channel_keys(payload: dict) -> set[tuple[str, str]]:
+    return {
+        (str(server.get("server_id") or ""), str(channel.get("channel_id") or ""))
+        for server in payload.get("servers", [])
+        for channel in server.get("channels", [])
+        if bool(channel.get("auto_respond_enabled", False))
+    }
 
 
 def sync_discord_servers() -> dict:
@@ -575,7 +804,7 @@ def sync_discord_servers() -> dict:
             ) from exc
     finally:
         DISCORD_SESSION_LOCK.release()
-    payload = _read_json(config.servers_file, default={"servers": []})
+    payload = _read_config_json(config.servers_file, default={"servers": []})
     next_payload, stats = merge_discovered_servers(
         payload,
         discovered,
@@ -621,7 +850,7 @@ def repair_discord_server(body: dict) -> dict:
     finally:
         DISCORD_SESSION_LOCK.release()
 
-    payload = _read_json(config.servers_file, default={"servers": []})
+    payload = _read_config_json(config.servers_file, default={"servers": []})
     server_list = payload.get("servers")
     if not isinstance(server_list, list):
         server_list = []
@@ -2034,23 +2263,11 @@ def start_discord_channel(body: dict) -> None:
 
 
 def read_env() -> dict[str, str]:
-    env_path = ROOT / ".env"
-    values: dict[str, str] = {}
-    if not env_path.exists():
-        return values
-    for line in env_path.read_text(encoding="utf-8-sig").splitlines():
-        if "=" not in line or line.strip().startswith("#"):
-            continue
-        key, value = line.split("=", 1)
-        values[key.strip()] = value.strip()
-    return values
+    return read_settings()
 
 
 def update_env(values: dict) -> None:
-    env_path = ROOT / ".env"
-    existing = read_env()
     allowed = {
-        "OPENAI_API_KEY",
         "OPENAI_MODEL",
         "NHI_ZUES_LLM_ENABLED",
         "NHI_ZUES_RUNTIME_MODE",
@@ -2079,6 +2296,10 @@ def update_env(values: dict) -> None:
         "NHI_ZUES_SAFETY_REVIEW_EXCLUSIVE",
         "NHI_ZUES_SAFETY_REVIEW_HISTORY_LIMIT",
         "NHI_ZUES_SAFETY_REVIEW_SCROLL_ROUNDS",
+        "NHI_ZUES_REPLY_COOLDOWN_SECONDS",
+        "NHI_ZUES_REPLY_WINDOW_SECONDS",
+        "NHI_ZUES_REPLY_MAX_PER_WINDOW",
+        "NHI_ZUES_REPLY_REQUIRE_INTERVENING_USER",
         "NHI_ZUES_REACTION_MAX_PER_CHANNEL",
         "NHI_ZUES_REACTION_THRESHOLD",
         "NHI_ZUES_REACTION_SAMPLE_PERCENT",
@@ -2086,14 +2307,18 @@ def update_env(values: dict) -> None:
         "NHI_ZUES_REACTION_COOLDOWN_SECONDS",
         "NHI_ZUES_REACTION_EMOJI_OVERRIDE",
     }
+    cleaned_values = {}
     for key, value in values.items():
+        if key == "OPENAI_API_KEY":
+            cleaned_key = _clean_env_value(key, value)
+            if cleaned_key:
+                set_openai_api_key(cleaned_key)
+            continue
         if key not in allowed:
             continue
         cleaned = _clean_env_value(key, value)
-        if key == "OPENAI_API_KEY" and not cleaned:
-            continue
-        existing[key] = cleaned
-    env_path.write_text("\n".join(f"{key}={value}" for key, value in existing.items()) + "\n", encoding="utf-8")
+        cleaned_values[key] = cleaned
+    update_settings(cleaned_values, allowed=allowed)
 
 
 def _clean_env_value(key: str, value) -> str:
@@ -2106,6 +2331,52 @@ def _clean_env_value(key: str, value) -> str:
         raise ValueError("Reaction threshold must be strict, normal, or loose.")
     if key == "NHI_ZUES_REACTION_EMOJI_OVERRIDE":
         return cleaned[:8]
+    numeric_ranges = {
+        "NHI_ZUES_MAX_DAILY_USD": (0.0, 1000.0),
+        "NHI_ZUES_MAX_SESSION_USD": (0.0, 1000.0),
+        "NHI_ZUES_MAX_LLM_CALLS_PER_RUN": (0.0, 10000.0),
+        "NHI_ZUES_WRITING_MISTAKE_RATE": (0.0, 0.35),
+        "NHI_ZUES_TYPING_MIN_SECONDS": (0.0, 30.0),
+        "NHI_ZUES_TYPING_MAX_SECONDS": (1.0, 60.0),
+        "NHI_ZUES_TYPING_CHARS_PER_SECOND": (1.0, 40.0),
+        "NHI_ZUES_SCANNER_MAX_CHANNELS_PER_CYCLE": (1.0, 10.0),
+        "NHI_ZUES_SCANNER_CYCLE_SLEEP_SECONDS": (5.0, 600.0),
+        "NHI_ZUES_SCANNER_MIN_CHANNEL_DELAY_SECONDS": (0.0, 300.0),
+        "NHI_ZUES_SCANNER_MAX_CHANNEL_DELAY_SECONDS": (0.0, 600.0),
+        "NHI_ZUES_SCANNER_HISTORY_BACKFILL_LIMIT": (0.0, 500.0),
+        "NHI_ZUES_SCANNER_HISTORY_SCROLL_ROUNDS": (1.0, 45.0),
+        "NHI_ZUES_SAFETY_REVIEW_HISTORY_LIMIT": (20.0, 5000.0),
+        "NHI_ZUES_SAFETY_REVIEW_SCROLL_ROUNDS": (1.0, 100.0),
+        "NHI_ZUES_REPLY_COOLDOWN_SECONDS": (0.0, 86400.0),
+        "NHI_ZUES_REPLY_WINDOW_SECONDS": (60.0, 604800.0),
+        "NHI_ZUES_REPLY_MAX_PER_WINDOW": (0.0, 1000.0),
+        "NHI_ZUES_REACTION_MAX_PER_CHANNEL": (0.0, 100.0),
+        "NHI_ZUES_REACTION_SAMPLE_PERCENT": (0.0, 100.0),
+        "NHI_ZUES_REACTION_FORCE_LAUGH_PERCENT": (0.0, 100.0),
+        "NHI_ZUES_REACTION_COOLDOWN_SECONDS": (0.0, 86400.0),
+    }
+    if key in numeric_ranges:
+        try:
+            number = float(cleaned)
+        except ValueError as exc:
+            raise ValueError(f"{key} must be numeric.") from exc
+        minimum, maximum = numeric_ranges[key]
+        if not minimum <= number <= maximum:
+            raise ValueError(f"{key} must be between {minimum:g} and {maximum:g}.")
+        integer_keys = {
+            "NHI_ZUES_MAX_LLM_CALLS_PER_RUN",
+            "NHI_ZUES_SCANNER_MAX_CHANNELS_PER_CYCLE",
+            "NHI_ZUES_SCANNER_HISTORY_BACKFILL_LIMIT",
+            "NHI_ZUES_SCANNER_HISTORY_SCROLL_ROUNDS",
+            "NHI_ZUES_SAFETY_REVIEW_HISTORY_LIMIT",
+            "NHI_ZUES_SAFETY_REVIEW_SCROLL_ROUNDS",
+            "NHI_ZUES_REPLY_MAX_PER_WINDOW",
+            "NHI_ZUES_REACTION_MAX_PER_CHANNEL",
+        }
+        if key in integer_keys:
+            if not number.is_integer():
+                raise ValueError(f"{key} must be a whole number.")
+            return str(int(number))
     return cleaned
 
 
@@ -2331,6 +2602,10 @@ def _server_icon_path(filename: str) -> Path | None:
 
 
 def _read_json(path: Path, *, default: dict) -> dict:
+    return read_json_file(path, default=default)
+
+
+def _read_config_json(path: Path, *, default: dict) -> dict:
     if not path.exists():
         return default
     return json.loads(path.read_text(encoding="utf-8-sig"))
@@ -2338,7 +2613,7 @@ def _read_json(path: Path, *, default: dict) -> dict:
 
 def _write_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    write_text_file(path, json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 def main() -> None:

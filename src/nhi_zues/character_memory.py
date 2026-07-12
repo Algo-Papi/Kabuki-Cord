@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .state_io import write_json_file
+from .state_io import mutate_json_file, read_json_file, write_json_file
 
 
 @dataclass(frozen=True)
@@ -31,9 +30,10 @@ class CharacterMemoryStore:
 
     def load(self, card_id: str) -> CharacterMemory:
         path = self._path(card_id)
-        if not path.exists():
-            return CharacterMemory(card_id=card_id)
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = read_json_file(
+            path,
+            default={"story_claims": [], "behavior_notes": [], "updated_at": ""},
+        )
         return CharacterMemory(
             card_id=card_id,
             story_claims=tuple(payload.get("story_claims", [])),
@@ -42,33 +42,47 @@ class CharacterMemoryStore:
         )
 
     def add_story_claim(self, card_id: str, claim: str) -> CharacterMemory:
-        memory = self.load(card_id)
         cleaned = _clean_note(claim)
         if not cleaned:
-            return memory
-        claims = _append_unique(memory.story_claims, cleaned, limit=80)
-        updated = CharacterMemory(
-            card_id=card_id,
-            story_claims=claims,
-            behavior_notes=memory.behavior_notes,
-            updated_at=datetime.now(timezone.utc).isoformat(),
+            return self.load(card_id)
+
+        def add_claim(payload: dict) -> CharacterMemory:
+            updated = CharacterMemory(
+                card_id=card_id,
+                story_claims=_append_unique(tuple(payload.get("story_claims", [])), cleaned, limit=80),
+                behavior_notes=tuple(payload.get("behavior_notes", [])),
+                updated_at=datetime.now(timezone.utc).isoformat(),
+            )
+            payload.update(asdict(updated))
+            return updated
+
+        _, updated = mutate_json_file(
+            self._path(card_id),
+            default={"story_claims": [], "behavior_notes": [], "updated_at": ""},
+            mutator=add_claim,
         )
-        self._save(updated)
         return updated
 
     def add_behavior_note(self, card_id: str, note: str) -> CharacterMemory:
-        memory = self.load(card_id)
         cleaned = _clean_note(note)
         if not cleaned:
-            return memory
-        notes = _append_unique(memory.behavior_notes, cleaned, limit=80)
-        updated = CharacterMemory(
-            card_id=card_id,
-            story_claims=memory.story_claims,
-            behavior_notes=notes,
-            updated_at=datetime.now(timezone.utc).isoformat(),
+            return self.load(card_id)
+
+        def add_note(payload: dict) -> CharacterMemory:
+            updated = CharacterMemory(
+                card_id=card_id,
+                story_claims=tuple(payload.get("story_claims", [])),
+                behavior_notes=_append_unique(tuple(payload.get("behavior_notes", [])), cleaned, limit=80),
+                updated_at=datetime.now(timezone.utc).isoformat(),
+            )
+            payload.update(asdict(updated))
+            return updated
+
+        _, updated = mutate_json_file(
+            self._path(card_id),
+            default={"story_claims": [], "behavior_notes": [], "updated_at": ""},
+            mutator=add_note,
         )
-        self._save(updated)
         return updated
 
     def _save(self, memory: CharacterMemory) -> None:

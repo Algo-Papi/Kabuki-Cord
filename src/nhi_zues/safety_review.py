@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
 from .models import MessageRecord
-from .state_io import try_write_json_file
+from .state_io import mutate_json_file, read_json_file, try_write_json_file
 
 
 @dataclass(frozen=True)
@@ -65,85 +64,86 @@ class SafetyReviewQueue:
         channel_label: str,
         findings: list[SafetyReviewFinding],
     ) -> list[SafetyReviewItem]:
-        added: list[SafetyReviewItem] = []
-        existing_ids = {item.review_id for item in self._items}
-        for finding in findings:
-            if self._open_count() >= self.max_items:
-                break
-            message = finding.message
-            review_id = _review_id(
-                server_id=server_id,
-                channel_id=channel_id,
-                message_id=message.message_id,
-                category=finding.category,
-            )
-            if review_id in existing_ids:
-                continue
-            item = SafetyReviewItem(
-                review_id=review_id,
-                created_at=datetime.now(timezone.utc).isoformat(),
-                status="open",
-                server_id=str(server_id),
-                server_label=str(server_label or ""),
-                channel_id=str(channel_id),
-                channel_label=str(channel_label or ""),
-                message_id=str(message.message_id or ""),
-                message_link=_discord_message_link(server_id, channel_id, message.message_id),
-                author=str(message.author or ""),
-                author_id=str(message.author_id or ""),
-                text=str(message.text or ""),
-                category=finding.category,
-                severity=finding.severity,
-                reason=finding.reason,
-                matched_cues=finding.matched_cues,
-            )
-            self._items.append(item)
-            existing_ids.add(review_id)
-            added.append(item)
-        if added:
-            self._prune()
-            self._save()
+        def add_rows(payload: dict) -> list[SafetyReviewItem]:
+            items = _items_from_payload(payload)
+            added: list[SafetyReviewItem] = []
+            existing_ids = {item.review_id for item in items}
+            for finding in findings:
+                if sum(1 for item in items if item.status == "open") >= self.max_items:
+                    break
+                message = finding.message
+                review_id = _review_id(
+                    server_id=server_id,
+                    channel_id=channel_id,
+                    message_id=message.message_id,
+                    category=finding.category,
+                )
+                if review_id in existing_ids:
+                    continue
+                item = SafetyReviewItem(
+                    review_id=review_id,
+                    created_at=datetime.now(timezone.utc).isoformat(),
+                    status="open",
+                    server_id=str(server_id),
+                    server_label=str(server_label or ""),
+                    channel_id=str(channel_id),
+                    channel_label=str(channel_label or ""),
+                    message_id=str(message.message_id or ""),
+                    message_link=_discord_message_link(server_id, channel_id, message.message_id),
+                    author=str(message.author or ""),
+                    author_id=str(message.author_id or ""),
+                    text=str(message.text or ""),
+                    category=finding.category,
+                    severity=finding.severity,
+                    reason=finding.reason,
+                    matched_cues=finding.matched_cues,
+                )
+                items.append(item)
+                existing_ids.add(review_id)
+                added.append(item)
+            items = _pruned_items(items, self.max_items, self.max_history_items)
+            payload["items"] = [_serialize_item(item) for item in items]
+            return added
+
+        _, added = mutate_json_file(
+            self.queue_file,
+            default={"items": []},
+            mutator=add_rows,
+        )
+        self._items = self._load()
         return added
 
     def list(self, *, include_dismissed: bool = False) -> list[SafetyReviewItem]:
+        self._items = self._load()
         items = self._items if include_dismissed else [item for item in self._items if item.status == "open"]
         return sorted(items, key=lambda item: item.created_at, reverse=True)
 
     def dismiss(self, review_ids: list[str], *, all_open: bool = False) -> int:
         requested = {str(value).strip() for value in review_ids if str(value or "").strip()}
-        dismissed = 0
-        now = datetime.now(timezone.utc).isoformat()
-        updated: list[SafetyReviewItem] = []
-        for item in self._items:
-            should_dismiss = item.status == "open" and (all_open or item.review_id in requested)
-            if not should_dismiss:
-                updated.append(item)
-                continue
-            dismissed += 1
-            updated.append(
-                SafetyReviewItem(
-                    review_id=item.review_id,
-                    created_at=item.created_at,
-                    status="dismissed",
-                    server_id=item.server_id,
-                    server_label=item.server_label,
-                    channel_id=item.channel_id,
-                    channel_label=item.channel_label,
-                    message_id=item.message_id,
-                    message_link=item.message_link,
-                    author=item.author,
-                    author_id=item.author_id,
-                    text=item.text,
-                    category=item.category,
-                    severity=item.severity,
-                    reason=item.reason,
-                    matched_cues=item.matched_cues,
-                    dismissed_at=now,
+        def dismiss_rows(payload: dict) -> int:
+            dismissed = 0
+            now = datetime.now(timezone.utc).isoformat()
+            updated: list[SafetyReviewItem] = []
+            for item in _items_from_payload(payload):
+                should_dismiss = item.status == "open" and (all_open or item.review_id in requested)
+                if not should_dismiss:
+                    updated.append(item)
+                    continue
+                dismissed += 1
+                updated.append(
+                    SafetyReviewItem(
+                        **{**asdict(item), "status": "dismissed", "dismissed_at": now}
+                    )
                 )
-            )
-        if dismissed:
-            self._items = updated
-            self._save()
+            payload["items"] = [_serialize_item(item) for item in updated]
+            return dismissed
+
+        _, dismissed = mutate_json_file(
+            self.queue_file,
+            default={"items": []},
+            mutator=dismiss_rows,
+        )
+        self._items = self._load()
         return dismissed
 
     def state(self) -> dict:
@@ -155,33 +155,8 @@ class SafetyReviewQueue:
         }
 
     def _load(self) -> list[SafetyReviewItem]:
-        if not self.queue_file.exists():
-            return []
-        payload = json.loads(self.queue_file.read_text(encoding="utf-8-sig"))
-        items: list[SafetyReviewItem] = []
-        for row in payload.get("items", []):
-            items.append(
-                SafetyReviewItem(
-                    review_id=str(row.get("review_id") or ""),
-                    created_at=str(row.get("created_at") or ""),
-                    status=str(row.get("status") or "open"),
-                    server_id=str(row.get("server_id") or ""),
-                    server_label=str(row.get("server_label") or ""),
-                    channel_id=str(row.get("channel_id") or ""),
-                    channel_label=str(row.get("channel_label") or ""),
-                    message_id=str(row.get("message_id") or ""),
-                    message_link=str(row.get("message_link") or ""),
-                    author=str(row.get("author") or ""),
-                    author_id=str(row.get("author_id") or ""),
-                    text=str(row.get("text") or ""),
-                    category=str(row.get("category") or ""),
-                    severity=str(row.get("severity") or "medium"),
-                    reason=str(row.get("reason") or ""),
-                    matched_cues=tuple(row.get("matched_cues", [])),
-                    dismissed_at=str(row.get("dismissed_at") or ""),
-                )
-            )
-        return [item for item in items if item.review_id]
+        payload = read_json_file(self.queue_file, default={"items": []})
+        return _items_from_payload(payload)
 
     def _save(self) -> None:
         self.queue_file.parent.mkdir(parents=True, exist_ok=True)
@@ -358,3 +333,41 @@ def _serialize_item(item: SafetyReviewItem) -> dict:
     payload = asdict(item)
     payload["matched_cues"] = list(item.matched_cues)
     return payload
+
+
+def _items_from_payload(payload: dict) -> list[SafetyReviewItem]:
+    items = [
+        SafetyReviewItem(
+            review_id=str(row.get("review_id") or ""),
+            created_at=str(row.get("created_at") or ""),
+            status=str(row.get("status") or "open"),
+            server_id=str(row.get("server_id") or ""),
+            server_label=str(row.get("server_label") or ""),
+            channel_id=str(row.get("channel_id") or ""),
+            channel_label=str(row.get("channel_label") or ""),
+            message_id=str(row.get("message_id") or ""),
+            message_link=str(row.get("message_link") or ""),
+            author=str(row.get("author") or ""),
+            author_id=str(row.get("author_id") or ""),
+            text=str(row.get("text") or ""),
+            category=str(row.get("category") or ""),
+            severity=str(row.get("severity") or "medium"),
+            reason=str(row.get("reason") or ""),
+            matched_cues=tuple(row.get("matched_cues", [])),
+            dismissed_at=str(row.get("dismissed_at") or ""),
+        )
+        for row in payload.get("items", [])
+    ]
+    return [item for item in items if item.review_id]
+
+
+def _pruned_items(
+    items: list[SafetyReviewItem],
+    max_items: int,
+    max_history_items: int,
+) -> list[SafetyReviewItem]:
+    open_items = [item for item in items if item.status == "open"][-max_items:]
+    closed_items = [item for item in items if item.status != "open"]
+    keep_closed_count = max(0, max_history_items - len(open_items))
+    kept_closed = closed_items[-keep_closed_count:] if keep_closed_count else []
+    return [*kept_closed, *open_items]

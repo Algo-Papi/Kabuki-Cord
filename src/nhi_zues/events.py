@@ -5,7 +5,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .state_io import try_write_json_file
+from .state_io import mutate_json_file, read_json_file, try_write_json_file
 
 
 @dataclass(frozen=True)
@@ -56,9 +56,17 @@ class EventLog:
             target_author=str(target_author or "").strip(),
             emoji=str(emoji or "").strip(),
         )
-        self._items.append(item)
-        self._items = self._items[-self.limit :]
-        self._save()
+        def append_item(payload: dict) -> None:
+            rows = list(payload.get("items", []))
+            rows.append(asdict(item))
+            payload["items"] = rows[-self.limit :]
+
+        mutate_json_file(
+            self.event_file,
+            default={"items": []},
+            mutator=append_item,
+        )
+        self._items = self._load()
         self._append_app_log(item)
         return item
 
@@ -66,9 +74,7 @@ class EventLog:
         return list(self._items)
 
     def _load(self) -> list[EventItem]:
-        if not self.event_file.exists():
-            return []
-        payload = json.loads(self.event_file.read_text(encoding="utf-8-sig"))
+        payload = read_json_file(self.event_file, default={"items": []})
         return [
             EventItem(
                 created_at=str(row.get("created_at") or ""),

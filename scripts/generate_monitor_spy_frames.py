@@ -10,8 +10,8 @@ from PIL import Image, ImageDraw, ImageEnhance, ImageFilter
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / "web" / "assets" / "source" / "kabuki-actor-reference.png"
-OUTPUT_DIR = ROOT / "web" / "assets" / "monitor_spy_frames"
+SOURCE = ROOT / "design_assets" / "kabuki-actor-reference.png"
+OUTPUT_DIR = ROOT / "src" / "nhi_zues" / "web" / "assets" / "monitor_spy_frames"
 FRAME_W = 960
 FRAME_H = 720
 FRAMES = 48
@@ -37,7 +37,6 @@ def main() -> None:
         "frame_ms": FRAME_MS,
         "width": FRAME_W,
         "height": FRAME_H,
-        "source": "../source/kabuki-actor-reference.png",
     }
     (OUTPUT_DIR / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     print(f"wrote {FRAMES} frames to {OUTPUT_DIR}")

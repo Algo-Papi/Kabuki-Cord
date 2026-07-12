@@ -9,16 +9,15 @@ Have these inputs ready:
 - A Discord account you control and can sign into through the app's browser session.
 - An OpenAI Project API key for draft generation.
 - A small test budget and model choice, such as `gpt-5.4-nano` for low-cost testing.
-- A character card JSON file under `character_cards/`.
-- A local server/channel config file, normally `.local/servers.local.json`.
-- A decision about safety mode: dry-run only, approval-based live sends, or limited autonomous sends.
+- A character card JSON file under `%LOCALAPPDATA%\Kabuki-Cord\character_cards\`.
+- A local server/channel config, managed by the app under `%LOCALAPPDATA%\Kabuki-Cord\config\servers.json`.
+- A decision about response mode: Observe only, Review every draft, Limited autonomous, or Autonomous live.
 
 Keep these local-only values out of Git:
 
-- `.env`
-- `.local/`
-- `.state/`
-- `.profiles/`
+- Legacy `.env`, `.local/`, `.state/`, and `.profiles/` directories
+- `%LOCALAPPDATA%\Kabuki-Cord\state\`
+- `%LOCALAPPDATA%\Kabuki-Cord\profiles\`
 - Discord credentials saved through the GUI
 - OpenAI API keys
 
@@ -29,7 +28,7 @@ Keep these local-only values out of Git:
 3. Open **API & Runtime**.
 4. Enter and save the OpenAI API key.
 5. Click **Models** and choose a model available to that project.
-6. Keep **Dry-run mode** on for first checks.
+6. Keep **Observe only** selected for first checks.
 7. Open **Discord Session** and sign in.
 8. Click **Sync Discord** to import servers and channels into local config.
 9. Select only the channels you want to monitor.
@@ -68,7 +67,7 @@ React means observed messages can receive a capped lightweight emoji reaction wh
 If React is on and Observe is on:
 
 - The channel can receive reactions even when Engage is off.
-- Reactions are still blocked by Dry-run mode.
+- Reactions are still blocked by Observe only.
 - Each channel scan is capped by `NHI_ZUES_REACTION_MAX_PER_CHANNEL`, which defaults to `3`.
 - The reaction ledger prevents repeating any app-made reaction on the same Discord message.
 
@@ -76,7 +75,7 @@ Reaction behavior has four app-level controls:
 
 - **Reaction threshold**: `strict`, `normal`, or `loose`. Loose accepts lower-confidence acknowledgement-style messages.
 - **Random reaction percent**: optional percentage of otherwise eligible fresh messages to react to. Keep this low.
-- **Force recent reaction**: optional rolling target/cap for reacting across the latest five visible non-character messages. Repeated scans do not keep adding reactions after the cap is full, but if the window is below target, the scanner spends available per-scan reaction cap to catch up. For example, `20%` means Kabuki tries to keep up to 1 of those latest 5 non-character messages reacted until new messages move the window. It still obeys Dry-run mode, per-channel React, the per-scan cap, and the reaction ledger.
+- **Force recent reaction**: optional rolling target/cap for reacting across the latest five visible non-character messages. Repeated scans do not keep adding reactions after the cap is full, but if the window is below target, the scanner spends available per-scan reaction cap to catch up. For example, `20%` means Kabuki tries to keep up to 1 of those latest 5 non-character messages reacted until new messages move the window. It still obeys Observe only, per-channel React, the per-scan cap, and the reaction ledger.
 - **Reaction emoji override**: optional emoji that replaces the smart choice.
 
 Smart reaction selection is conservative: obvious jokes can get `😂`, clear agreement can get `👍`, thanks/help/support can get `🙏`, questions can get `🤔`, and serious or notably weird claims usually get `👀`. The forced-reaction percentage controls frequency, not a forced laugh emoji.
@@ -87,33 +86,26 @@ The **Events -> Reaction events** filter shows successful reactions, reaction fa
 
 ### Auto
 
-Auto allows proactive, approval-required opportunities to be sent without manual approval when live sending is otherwise allowed.
+Auto is the per-channel permission for unattended sends. It is intentionally separate from the global response mode; both must allow autonomy.
 
 If Auto is off:
 
-- Proactive topic-based drafts are queued for approval.
-- Direct alias/name-cue replies can still send live when dry-run is off, because they are not treated as proactive approval-required drafts.
+- Every generated reply remains approval-gated, including direct alias/name cues.
 
 Use Auto only on channels where you are comfortable with unattended posts.
 
-### Dry-Run Mode
+### Response Modes
 
-Dry-run is the master safety switch for sending.
-
-If Dry-run is on:
+**Observe only** is the master no-send mode:
 
 - The app can scan and remember messages.
 - The app can show Events history.
-- The app can generate drafts only if **Draft during dry-run** is enabled.
+- The app can generate drafts only if **Draft while observing** is enabled.
 - Nothing is posted to Discord.
 - **Approve & Send** is blocked.
 - Auto cannot post.
 
-If Dry-run is off:
-
-- Approved drafts can post.
-- Direct alias/name-cue replies can post if the model decides to reply.
-- Proactive replies can post only when their channel is eligible for live sending through the current approval/Auto settings.
+**Review every draft** permits approved live delivery but never unattended delivery. **Limited autonomous** can auto-send regular replies in Auto-enabled channels while new conversation starts and manual drafts require review. **Autonomous live** can auto-send eligible replies only in channels where Observe, Engage, and Auto are all enabled.
 
 ### Enable LLM Drafting
 
@@ -125,7 +117,7 @@ If LLM drafting is off:
 - It cannot generate draft text.
 - It cannot send model-generated replies.
 
-### Draft During Dry-Run
+### Draft While Observing
 
 This allows paid draft generation while still preventing sends.
 
@@ -137,18 +129,9 @@ Use this for safe testing because it confirms:
 - Budgets are being recorded.
 - Draft style and character behavior are acceptable.
 
-### Require Approval For Proactive Drafts
+### Proactive Review Policy
 
-This is the default safety layer for topic-only opportunities.
-
-When on:
-
-- Topic-based opportunities require approval unless the selected channel has Auto on.
-- Direct alias/name-cue opportunities do not use this proactive approval requirement.
-
-When off:
-
-- More model decisions can move directly to send when dry-run is off.
+The response mode derives this policy. Review every draft gates every reply. Limited autonomous gates proactive conversation starts and manual drafts. Autonomous live can deliver eligible replies only when the selected channel's Auto permission is also on.
 
 ### Budgets
 
@@ -157,7 +140,7 @@ Budget settings prevent runaway API usage:
 - **Daily Budget USD** limits spending per UTC day.
 - **Session Budget USD** limits spending for the current runtime session.
 - **Max Calls Per Run** limits model calls during one scanner run/session.
-- **Max Output Tokens** and **Max Input Chars** are configured in `.env`.
+- **Max Output Tokens** and **Max Input Chars** can be configured in `%LOCALAPPDATA%\Kabuki-Cord\settings.env`.
 
 If a budget blocks a draft:
 
@@ -166,13 +149,14 @@ If a budget blocks a draft:
 
 ## Operating Modes
 
-| Mode | Observe | Engage | Dry-run | Auto | What can happen |
-| --- | --- | --- | --- | --- | --- |
-| Passive memory | On | Off | Any | Off | Reads and remembers only. No drafts. No posts. React can still run if enabled and dry-run is off. |
-| Safe drafting | On | On | On | Off | Reads, remembers, may draft if dry-run drafting is enabled. No posts. |
-| Approval-based live | On | On | Off | Off | Proactive drafts queue for approval. Approved drafts can post. Direct alias/name-cue replies may post live. |
-| Limited autonomous | On | On | Off | On | Proactive opportunities can post without approval in that channel. Direct alias/name-cue replies may also post. |
-| Fully blocked | Off | Any | Any | Any | Channel is ignored by the scanner. |
+| Response mode | Channel Auto | What can happen |
+| --- | --- | --- |
+| Observe only | Any | Reads and remembers. Optional preview drafts can be generated, but all Discord writes are blocked. |
+| Review every draft | Any | Approved drafts can post; unattended replies cannot. |
+| Limited autonomous | Off | All drafts queue for review in this channel. |
+| Limited autonomous | On | Eligible regular replies may auto-send; proactive starts and manual drafts require review. |
+| Autonomous live | Off | All drafts queue for review in this channel. |
+| Autonomous live | On | Eligible replies may auto-send after cooldown, rate, duplicate, and own-message guards. |
 
 ## What The Events Tab Means
 
@@ -198,7 +182,7 @@ Shows:
 - Duplicate-reply blocks when a draft overlaps source messages already answered.
 - Approved sends.
 - Autonomous sends.
-- Dry-run drafts.
+- Observe-only preview drafts.
 - Send failures.
 
 ### Activity Feed
@@ -215,14 +199,14 @@ This is how you know the scanner is actually running even when it decides not to
 
 The **History** tab shows remembered channel messages and response/approval trail for the selected channel.
 
-Local state lives under `.state/`:
+Local state is authoritative in `%LOCALAPPDATA%\Kabuki-Cord\state\state.db`; JSON files in the same directory are readable recovery/compatibility mirrors:
 
-- `.state/memory.json` stores remembered channel messages and per-user memory.
-- `.state/events.json` stores scan checks, approvals, sends, and failures.
-- `.state/approvals.json` stores the five newest pending approval drafts.
-- `.state/discarded_approvals.json` stores source message IDs for approvals you discarded or cleared so repeated scanner loops do not recreate the same stale drafts.
-- `.state/sent_replies.json` stores successful send receipts keyed by source message IDs, posted message IDs, and sanitized draft text so stale approvals cannot double-reply to the same Discord message or treat the account's own prior posts as new external prompts.
-- `.state/usage.json` stores estimated/recorded API usage.
+- `memory.json` stores remembered channel messages and per-user memory.
+- `events.json` stores scan checks, approvals, sends, and failures.
+- `approvals.json` stores the five newest pending approval drafts.
+- `discarded_approvals.json` prevents repeated scanner loops from recreating discarded stale drafts.
+- `sent_replies.json` prevents duplicate replies and identifies prior app-authored posts.
+- `usage.json` stores estimated/recorded API usage and the shared runtime-session ID.
 
 Use **Clear All** in Approvals before enabling live or Auto if there is any stale backlog. Semi-auto also prunes older drafts automatically once more than five are pending.
 
@@ -245,7 +229,7 @@ Useful fields:
 
 You can set:
 
-- One global character card in `.env`.
+- One global character card in the per-user `settings.env`.
 - Optional per-server card overrides in the server/channel config.
 - Runtime continuity notes in the Growth tab.
 - Per-user behavior notes in the Growth tab.
@@ -273,7 +257,7 @@ The scanner uses one global round-robin loop across every Observe-enabled channe
 - `NHI_ZUES_SCANNER_CYCLE_SLEEP_SECONDS=45`
 - `NHI_ZUES_SCANNER_CHANNEL_SETTLE_SECONDS=12`
 
-`NHI_ZUES_SCANNER_CHANNEL_SETTLE_SECONDS` keeps the scanner on a channel briefly after navigation before message extraction. This reduces rapid browser churn and gives Discord time to finish rendering the latest messages. If you increase **Max channels per cycle**, the min/max wait settings add a pause between channel checks inside that cycle. Keep the observed channel list narrow and prefer **Dry Mode** or approval-based modes while testing.
+`NHI_ZUES_SCANNER_CHANNEL_SETTLE_SECONDS` keeps the scanner on a channel briefly after navigation before message extraction. This reduces rapid browser churn and gives Discord time to finish rendering the latest messages. If you increase **Max channels per cycle**, the min/max wait settings add a pause between channel checks inside that cycle. Keep the observed channel list narrow and prefer **Observe only** or **Review every draft** while testing.
 
 If Discord repeatedly forces password resets or login checkpoints, treat that as an account security signal and reduce activity rather than retrying harder:
 
@@ -296,9 +280,9 @@ The **Replies** tab lists remembered messages that appear to need attention afte
 
 Use this sequence before allowing live sends:
 
-1. Dry-run on.
+1. Select **Observe only**.
 2. LLM drafting on.
-3. Draft during dry-run on.
+3. Turn **Draft while observing** on.
 4. Observe on for one test channel.
 5. Engage on for one test channel.
 6. Auto off.
@@ -309,7 +293,7 @@ Use this sequence before allowing live sends:
 11. Clear stale approvals.
 
 Discard and Clear All are persistent local decisions for the source messages behind those drafts. If the scanner returns to the same channel, it should log `discarded_approval_suppressed` instead of recreating the same approval.
-12. Turn dry-run off.
+12. Switch to **Review every draft**.
 13. Send one approved draft manually.
 14. Confirm Events shows `Approved response sent`.
 15. Only then consider Auto for a narrow channel.
@@ -332,7 +316,7 @@ Check:
 
 - Is Engage on for that channel?
 - Is LLM drafting enabled?
-- Is **Draft during dry-run** enabled if dry-run is on?
+- Is **Draft while observing** enabled in Observe only?
 - Did Events say `no tracked topic or direct name cue`?
 - Does the character card include useful aliases and trigger keywords?
 - Did budget limits block the model call?
@@ -341,7 +325,7 @@ Check:
 
 Check:
 
-- Is dry-run off?
+- Is the response mode **Review every draft**, **Limited autonomous**, or **Autonomous live**?
 - Are you clicking **Approve & Send**?
 - Is the Discord profile busy?
 - Did the Events feed show a send failure?
@@ -350,10 +334,10 @@ Check:
 
 Check:
 
-- Is dry-run off?
+- Is the response mode **Limited autonomous** or **Autonomous live**?
 - Is Observe on?
 - Is Engage on?
-- Is Auto on for proactive posts?
+- Is Auto on for this channel?
 - Did the model actually decide to reply?
 - Is the opportunity direct alias/name-cue or only topic-based?
 
@@ -371,9 +355,9 @@ Before live use:
 
 Use this baseline:
 
-- Dry-run: on
+- Response mode: Observe only
 - LLM drafting: on
-- Draft during dry-run: on
+- Draft while observing: on
 - Proactive approval required: on
 - Auto: off
 - Max calls per run: 3

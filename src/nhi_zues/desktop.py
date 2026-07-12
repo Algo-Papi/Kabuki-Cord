@@ -5,13 +5,13 @@ import os
 import threading
 import webbrowser
 from http.server import ThreadingHTTPServer
-from pathlib import Path
 from ctypes import wintypes
 
+from .app_paths import asset_root
 from .gui import GuiHandler
 
 
-ROOT = Path.cwd()
+ASSET_ROOT = asset_root()
 BADGE_ICON_HANDLE = None
 
 
@@ -136,7 +136,7 @@ def _badge_icon_handle() -> int:
     global BADGE_ICON_HANDLE
     if BADGE_ICON_HANDLE:
         return BADGE_ICON_HANDLE
-    icon_path = ROOT / "assets" / "taskbar-badge.ico"
+    icon_path = ASSET_ROOT / "taskbar-badge.ico"
     if not icon_path.exists():
         return 0
     load_image = ctypes.windll.user32.LoadImageW
@@ -196,7 +196,7 @@ def main() -> None:
         return
 
     try:
-        icon_path = ROOT / "assets" / "app.ico"
+        icon_path = ASSET_ROOT / "app.ico"
         if hasattr(ctypes, "windll"):
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("KabukiCord.Desktop")
         window = webview.create_window(
@@ -204,7 +204,7 @@ def main() -> None:
             url,
             width=1440,
             height=980,
-            min_size=(1180, 720),
+            min_size=(1024, 720),
             js_api=DesktopBridge(url),
         )
         webview.start(icon=str(icon_path) if icon_path.exists() else None)

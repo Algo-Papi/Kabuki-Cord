@@ -185,9 +185,9 @@ def approval_gate_reason(
     mode = str(runtime_mode or "dry").lower()
     kind = str(engagement_type or "").lower()
     if mode == "live_fire":
-        return "Live Fire requires review for every draft"
+        return "Review every draft mode requires approval before live delivery"
     if not auto_respond_enabled:
         return "Auto is off for this channel"
     if mode == "semi_auto" and kind in {"proactive", "manual"}:
-        return "Semi Auto reviews new starts and manual drafts"
+        return "Limited autonomous mode reviews new starts and manual drafts"
     return ""

@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Kabuki-Cord Backfill Animation Test</title>
+    <style>
+      :root { color-scheme: dark; font-family: Inter, system-ui, sans-serif; }
+      body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #090d12; color: #d8e1ea; }
+      main { width: min(920px, calc(100vw - 48px)); }
+      h1 { margin: 0 0 8px; font-size: 24px; }
+      p { margin: 0 0 24px; color: #8997a5; }
+      .comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+      .card { border: 1px solid #25303b; border-radius: 12px; background: #10161c; padding: 18px; }
+      .card h2 { margin: 0 0 12px; font-size: 13px; letter-spacing: .12em; color: #8997a5; }
+      .stage { height: 256px; display: grid; place-items: center; border-radius: 8px; background: #0d1319; overflow: hidden; }
+      .sprite { width: 256px; height: 256px; background-repeat: no-repeat; background-position: 0 0; }
+      .old { background-image: url("../../src/nhi_zues/web/assets/scanner-kabuki-backfill-sheet.png"); background-size: 2048px 256px; animation: old 7.2s steps(8, end) infinite; }
+      .v2 { background-image: url("../../src/nhi_zues/web/assets/scanner-kabuki-backfill-v2-sheet.png"); background-size: 2048px 256px; animation: v2 4.4s steps(8, end) infinite; }
+      .app-scale { margin-top: 18px; display: flex; align-items: center; gap: 12px; color: #8997a5; }
+      .app-sprite { width: 96px; height: 96px; background-image: url("../../src/nhi_zues/web/assets/scanner-kabuki-backfill-v2-sheet.png"); background-repeat: no-repeat; background-size: 768px 96px; animation: app 4.4s steps(8, end) infinite; filter: drop-shadow(0 0 7px rgba(95,166,255,.26)) drop-shadow(0 2px 2px rgba(0,0,0,.44)); }
+      @keyframes old { to { background-position: -2048px 0; } }
+      @keyframes v2 { to { background-position: -2048px 0; } }
+      @keyframes app { to { background-position: -768px 0; } }
+      @media (max-width: 680px) { .comparison { grid-template-columns: 1fr; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>History backfill animation test</h1>
+      <p>The bottom row shows V2 at the actual 96px topbar size.</p>
+      <section class="comparison">
+        <article class="card"><h2>CURRENT · 8 FRAMES / 7.2S</h2><div class="stage"><div class="sprite old"></div></div></article>
+        <article class="card"><h2>V2 TEST · 8 FRAMES / 4.4S</h2><div class="stage"><div class="sprite v2"></div></div></article>
+      </section>
+      <div class="app-scale"><div class="app-sprite"></div><span>Actual Kabuki-Cord topbar scale</span></div>
+    </main>
+  </body>
+</html>

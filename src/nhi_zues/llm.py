@@ -496,7 +496,7 @@ def grounding_prompt(*, engagement_type: str) -> str:
         "- If there is no clear useful reply to the target, output exactly NO_REPLY.",
         "- Do not answer app/game/system feed text unless a real user is clearly discussing it.",
         "- Do not invent a subject from banter fragments, acknowledgements, or one-word reactions.",
-        "- Do not import personal backstory props like guitar, amp, call center, parents, gigs, or St. Augustine unless the target directly makes that relevant.",
+        "- Do not import personal biography, possessions, work, family, location, or past experiences unless the target directly makes that relevant.",
         "- Do not introduce a new technical, legal, medical, or evidentiary claim unless the target/context already contains that lane.",
         "- Pick one grounded point from the target and either add one small take, ask one concrete detail, or pass.",
     ]
@@ -723,7 +723,7 @@ def conversation_intelligence_prompt(*, mode: str) -> str:
         "- If the same topic continues, advance one step: narrow the claim, add a concrete objection, concede a small point, or pivot to a fresher implication.",
         "- Pick one live point, tension, or implied claim and answer that. Do not respond to every sentence.",
         "- Have an actual take: buy it, doubt it, split the difference, draw a line, or admit a rough bias.",
-        "- For UFO lore, use one rough mental lane at a time: sightings, coverup, consciousness, crash retrieval, experiencers, military sensors, or media disinfo. Do not list lore.",
+        "- For lore-heavy topics, choose one concrete lane at a time instead of listing every related theory or reference.",
         "- It is okay to be imperfect or half-informed, but the reply still needs a direction and a reason someone could challenge.",
         "- Do not quote the user and then interpret the quote. React as if you already heard it in the room.",
         "- Prefer a specific opinion, correction, or side comment over a broad question.",
@@ -803,7 +803,7 @@ def _draft_quality_issues(
     repeat_issue = own_identity.repeated_own_point_issue(text, recent_character_lines)
     if repeat_issue:
         issues.append(repeat_issue)
-    grounding_issue = _unsupported_persona_detail_issue(text, focus_messages or [])
+    grounding_issue = _unsupported_personal_claim_issue(text, focus_messages or [])
     if grounding_issue:
         issues.append(grounding_issue)
     return issues
@@ -814,7 +814,7 @@ def _is_no_reply(text: str) -> bool:
     return normalized == "no_reply"
 
 
-def _unsupported_persona_detail_issue(
+def _unsupported_personal_claim_issue(
     text: str,
     focus_messages: list[MessageRecord],
 ) -> str:
@@ -822,28 +822,14 @@ def _unsupported_persona_detail_issue(
         return ""
     lowered = str(text or "").lower()
     focus_text = " ".join(_clean_focus_text(message.text) for message in focus_messages)
-    persona_terms = (
-        "amp",
-        "guitar",
-        "call center",
-        "call-center",
-        "headset",
-        "parents",
-        "gig",
-        "gigs",
-        "st. augustine",
-        "st augustine",
-        "beach bar",
-        "beach-town",
-        "pedalboard",
+    biography_patterns = (
+        re.compile(r"\bi (?:live|work|grew up|was born|went to school|own|play)\b"),
+        re.compile(r"\bmy (?:age|family|hometown|job|parents|school|workplace)\b"),
+        re.compile(r"\bwhen i was (?:a kid|younger|in school)\b"),
     )
-    unsupported = [
-        term
-        for term in persona_terms
-        if term in lowered and term.replace("-", " ") not in focus_text and term not in focus_text
-    ]
-    if unsupported:
-        return "injects unrelated persona detail(s): " + ", ".join(unsupported[:3])
+    unsupported = [match.group(0) for pattern in biography_patterns if (match := pattern.search(lowered))]
+    if unsupported and not any(claim in focus_text for claim in unsupported):
+        return "injects unrelated personal biography"
     return ""
 
 
