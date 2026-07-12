@@ -43,7 +43,11 @@ from .character import CharacterCardStore
 from .character_memory import CharacterMemoryStore
 from .config import AppConfig, load_config
 from .discord_text import clean_discord_display_name, sanitize_outgoing_draft
-from .events import EventLog
+from .events import (
+    EventLog,
+    normalize_event_metrics,
+    normalize_reason_code,
+)
 from .llm import ReplyPlanner
 from .memory import ConversationMemory
 from .models import MessageRecord
@@ -611,6 +615,7 @@ def app_state() -> dict:
             "NHI_ZUES_SCANNER_MAX_CHANNEL_DELAY_SECONDS": env.get("NHI_ZUES_SCANNER_MAX_CHANNEL_DELAY_SECONDS", "35"),
             "NHI_ZUES_SCANNER_HISTORY_BACKFILL_LIMIT": env.get("NHI_ZUES_SCANNER_HISTORY_BACKFILL_LIMIT", "80"),
             "NHI_ZUES_SCANNER_HISTORY_SCROLL_ROUNDS": env.get("NHI_ZUES_SCANNER_HISTORY_SCROLL_ROUNDS", "8"),
+            "NHI_ZUES_REPLY_CANDIDATE_TTL_SECONDS": env.get("NHI_ZUES_REPLY_CANDIDATE_TTL_SECONDS", "600"),
             "NHI_ZUES_SAFETY_REVIEW_EXCLUSIVE": env.get("NHI_ZUES_SAFETY_REVIEW_EXCLUSIVE", "true"),
             "NHI_ZUES_SAFETY_REVIEW_HISTORY_LIMIT": env.get("NHI_ZUES_SAFETY_REVIEW_HISTORY_LIMIT", "420"),
             "NHI_ZUES_SAFETY_REVIEW_SCROLL_ROUNDS": env.get("NHI_ZUES_SAFETY_REVIEW_SCROLL_ROUNDS", "45"),
@@ -649,6 +654,7 @@ def app_state() -> dict:
 def monitor_state() -> dict:
     config = load_config()
     servers_payload = _read_config_json(config.servers_file, default={"servers": []})
+    runtime = RUNTIME.state()
     servers = []
     for server in servers_payload.get("servers", []):
         servers.append(
@@ -672,7 +678,12 @@ def monitor_state() -> dict:
             "scanner_min_channel_delay_seconds": config.scanner_min_channel_delay_seconds,
             "scanner_max_channel_delay_seconds": config.scanner_max_channel_delay_seconds,
         },
-        "runtime": RUNTIME.state(),
+        "runtime": runtime,
+        "engagement": engagement_state(
+            config.state_dir / "events.json",
+            servers_payload,
+            runtime,
+        ),
         "events": events_state(config.state_dir / "events.json"),
         "servers": {"servers": servers},
     }
@@ -1257,6 +1268,162 @@ def events_state(event_path: Path) -> dict:
     }
 
 
+_CHANNEL_FRESHNESS_EVENT_TYPES = frozenset(
+    {"channel_checked", "channel_unavailable", "safety_review_scan"}
+)
+_RUNTIME_START_EVENT_TYPES = frozenset(
+    {"runtime_started", "runtime_signin_handoff_started"}
+)
+
+
+def engagement_state(
+    event_path: Path,
+    servers_payload: dict,
+    runtime_state: dict | None = None,
+) -> dict:
+    payload = _read_json(event_path, default={"items": []})
+    items = payload.get("items", [])
+    if not isinstance(items, list):
+        items = []
+
+    scope_started_at = _engagement_scope_started_at(items, runtime_state or {})
+    scope_timestamp = _event_timestamp(scope_started_at)
+    scoped_items = [
+        item
+        for item in items
+        if isinstance(item, dict)
+        and (
+            scope_timestamp is None
+            or (
+                (created_timestamp := _event_timestamp(item.get("created_at"))) is not None
+                and created_timestamp >= scope_timestamp
+            )
+        )
+    ]
+
+    totals: dict[str, int] = {}
+    reason_counts: dict[str, int] = {}
+    for item in scoped_items:
+        for key, value in normalize_event_metrics(item.get("metrics")).items():
+            totals[key] = totals.get(key, 0) + value
+        reason_code = normalize_reason_code(item.get("reason_code"))
+        if reason_code:
+            reason_counts[reason_code] = reason_counts.get(reason_code, 0) + 1
+
+    latest_by_channel: dict[str, dict] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("event_type") or "") not in _CHANNEL_FRESHNESS_EVENT_TYPES:
+            continue
+        channel_id = str(item.get("channel_id") or "").strip()
+        created_at = str(item.get("created_at") or "")
+        if not channel_id or _event_timestamp(created_at) is None:
+            continue
+        current = latest_by_channel.get(channel_id)
+        if current is None or created_at > str(current.get("created_at") or ""):
+            latest_by_channel[channel_id] = item
+
+    channels = []
+    for server_index, server in enumerate(servers_payload.get("servers", [])):
+        if not isinstance(server, dict):
+            continue
+        server_label = str(server.get("label") or f"Server {server_index + 1}")
+        for channel_index, channel in enumerate(server.get("channels", [])):
+            if not isinstance(channel, dict) or channel.get("scan_enabled", True) is False:
+                continue
+            channel_id = str(channel.get("channel_id") or "").strip()
+            latest = latest_by_channel.get(channel_id, {})
+            event_type = str(latest.get("event_type") or "")
+            metrics = normalize_event_metrics(latest.get("metrics"))
+            channels.append(
+                {
+                    "server_label": server_label,
+                    "channel_label": str(
+                        channel.get("label") or f"Channel {channel_index + 1}"
+                    ),
+                    "last_checked_at": str(latest.get("created_at") or ""),
+                    "last_reason_code": normalize_reason_code(latest.get("reason_code")),
+                    "last_fresh_observed": metrics.get("fresh_observed"),
+                    "status": (
+                        "never"
+                        if not latest
+                        else "unavailable"
+                        if event_type == "channel_unavailable"
+                        else "checked"
+                    ),
+                }
+            )
+    channels.sort(
+        key=lambda item: (
+            0 if not item["last_checked_at"] else 1,
+            item["last_checked_at"],
+            str(item["server_label"]).lower(),
+            str(item["channel_label"]).lower(),
+        )
+    )
+
+    scan = (runtime_state or {}).get("scan", {})
+    loop = scan.get("loop", {}) if isinstance(scan, dict) else {}
+    expected_revisit_seconds = max(
+        0.0,
+        _finite_float(loop.get("estimated_loop_seconds")) if isinstance(loop, dict) else 0.0,
+    )
+    return {
+        "scope": "latest_run" if scope_started_at else "retained_history",
+        "scope_started_at": scope_started_at,
+        "totals": totals,
+        "reasons": [
+            {"code": code, "count": count}
+            for code, count in sorted(
+                reason_counts.items(),
+                key=lambda item: (-item[1], item[0]),
+            )
+        ],
+        "channels": channels,
+        "expected_revisit_seconds": expected_revisit_seconds,
+    }
+
+
+def _engagement_scope_started_at(items: list, runtime_state: dict) -> str:
+    runtime_started_at = runtime_state.get("last_started_at")
+    if isinstance(runtime_started_at, (int, float)) and not isinstance(runtime_started_at, bool):
+        if runtime_started_at > 0:
+            return datetime.fromtimestamp(runtime_started_at, tz=timezone.utc).isoformat()
+    for item in reversed(items):
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("event_type") or "") not in _RUNTIME_START_EVENT_TYPES:
+            continue
+        created_at = str(item.get("created_at") or "")
+        if _event_timestamp(created_at) is not None:
+            return created_at
+    return ""
+
+
+def _event_timestamp(value) -> float | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
+
+
+def _finite_float(value) -> float:
+    if isinstance(value, bool):
+        return 0.0
+    try:
+        result = float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    return result if result == result and result not in {float("inf"), float("-inf")} else 0.0
+
+
 def recent_posters_state(path: Path) -> dict:
     payload = _read_json(path, default={"channels": {}})
     result: dict[str, list[dict]] = {}
@@ -1699,6 +1866,12 @@ def _send_approval_locked(*, approval_id: str, draft: str, reply_to_message_id: 
             event_type="approval_sent",
             server_id=item.server_id,
             channel_id=item.channel_id,
+            reason_code="sent",
+            metrics=(
+                {"sent": 1}
+                if str(item.engagement_type or "").lower() != "manual"
+                else {}
+            ),
             summary=summary,
             draft=draft,
             message_id=str(delivery.get("message_id") or ""),
@@ -2293,6 +2466,7 @@ def update_env(values: dict) -> None:
         "NHI_ZUES_SCANNER_MAX_CHANNEL_DELAY_SECONDS",
         "NHI_ZUES_SCANNER_HISTORY_BACKFILL_LIMIT",
         "NHI_ZUES_SCANNER_HISTORY_SCROLL_ROUNDS",
+        "NHI_ZUES_REPLY_CANDIDATE_TTL_SECONDS",
         "NHI_ZUES_SAFETY_REVIEW_EXCLUSIVE",
         "NHI_ZUES_SAFETY_REVIEW_HISTORY_LIMIT",
         "NHI_ZUES_SAFETY_REVIEW_SCROLL_ROUNDS",
@@ -2345,6 +2519,7 @@ def _clean_env_value(key: str, value) -> str:
         "NHI_ZUES_SCANNER_MAX_CHANNEL_DELAY_SECONDS": (0.0, 600.0),
         "NHI_ZUES_SCANNER_HISTORY_BACKFILL_LIMIT": (0.0, 500.0),
         "NHI_ZUES_SCANNER_HISTORY_SCROLL_ROUNDS": (1.0, 45.0),
+        "NHI_ZUES_REPLY_CANDIDATE_TTL_SECONDS": (0.0, 3600.0),
         "NHI_ZUES_SAFETY_REVIEW_HISTORY_LIMIT": (20.0, 5000.0),
         "NHI_ZUES_SAFETY_REVIEW_SCROLL_ROUNDS": (1.0, 100.0),
         "NHI_ZUES_REPLY_COOLDOWN_SECONDS": (0.0, 86400.0),

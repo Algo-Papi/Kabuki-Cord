@@ -47,6 +47,7 @@ class AppConfig:
     scanner_max_channel_delay_seconds: float
     scanner_history_backfill_limit: int
     scanner_history_scroll_rounds: int
+    reply_candidate_ttl_seconds: float
     safety_review_exclusive: bool
     safety_review_history_limit: int
     safety_review_scroll_rounds: int
@@ -127,6 +128,10 @@ def load_config() -> AppConfig:
         scanner_history_scroll_rounds=max(
             1,
             min(_env_int("NHI_ZUES_SCANNER_HISTORY_SCROLL_ROUNDS", 8), 45),
+        ),
+        reply_candidate_ttl_seconds=max(
+            0.0,
+            min(_env_float("NHI_ZUES_REPLY_CANDIDATE_TTL_SECONDS", 600.0), 3600.0),
         ),
         safety_review_exclusive=_env_bool("NHI_ZUES_SAFETY_REVIEW_EXCLUSIVE", default=True),
         safety_review_history_limit=max(20, _env_int("NHI_ZUES_SAFETY_REVIEW_HISTORY_LIMIT", 420)),

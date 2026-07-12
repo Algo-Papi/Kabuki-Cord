@@ -29,6 +29,36 @@ const reactionActionEventTypes = new Set([
   "reaction_failed",
   "reaction_skipped",
 ]);
+const funnelMetricElements = Object.freeze({
+  fresh_observed: "funnelFreshObserved",
+  own_filtered: "funnelOwnFiltered",
+  pending: "funnelPending",
+  deferred: "funnelDeferred",
+  eligible: "funnelEligible",
+  model_called: "funnelModelCalled",
+  draft_queued: "funnelDraftQueued",
+  sent: "funnelSent",
+  rejected: "funnelRejected",
+});
+const decisionReasonLabels = Object.freeze({
+  no_new_messages: "No new messages",
+  engage_disabled: "Engage disabled",
+  no_engagement_cue: "No engagement cue",
+  no_source: "No usable source",
+  meta_suspicion: "Bot-suspicion thread",
+  source_too_thin: "Source too thin",
+  llm_disabled: "Model disabled",
+  draft_generation_disabled: "Drafting disabled",
+  api_key_missing: "API key missing",
+  budget_blocked: "Budget blocked",
+  model_declined: "Model declined",
+  draft_ready: "Draft ready",
+  output_guard_blocked: "Output guard",
+  duplicate_reply: "Duplicate reply",
+  reply_guard_blocked: "Reply guard",
+  approval_queued: "Queued for approval",
+  sent: "Sent",
+});
 const stageTransitionTypes = ["logo-swipe-left", "mask-zoom", "logo-swipe-right", "crest-iris"];
 const dismissedActionStorageKey = "kabukiScannerDismissedActions:v1";
 let dismissedActionKeys = loadDismissedActionKeys();
@@ -232,6 +262,7 @@ function render(state) {
   });
   renderCompleted(scan.last_completed);
   renderUpcoming(scan.upcoming || []);
+  renderEngagement(state.engagement || {});
   renderActionHistory(state);
   renderPace(state);
   renderCountdowns();
@@ -353,6 +384,105 @@ function renderCompleted(target) {
   $("lastCompleted").textContent = formatTargetTitle(target);
   $("lastCompletedDetail").textContent =
     `${target.visible_messages || 0} visible, ${target.fresh_messages || 0} new to memory`;
+}
+
+function renderEngagement(engagement) {
+  const totals = engagement && typeof engagement.totals === "object" ? engagement.totals : {};
+  Object.entries(funnelMetricElements).forEach(([metric, elementId]) => {
+    const element = $(elementId);
+    if (!element) return;
+    const available = Object.prototype.hasOwnProperty.call(totals, metric);
+    const value = Number(totals[metric]);
+    element.textContent = available && Number.isFinite(value) ? String(Math.max(0, Math.round(value))) : "--";
+  });
+
+  const scope = $("funnelScope");
+  if (scope) {
+    const startedAt = formatMonitorTimestamp(engagement.scope_started_at);
+    const modelRequests = Number(totals.model_requests);
+    const requestNote = Object.prototype.hasOwnProperty.call(totals, "model_requests") && Number.isFinite(modelRequests)
+      ? ` - ${Math.max(0, Math.round(modelRequests))} model request${Math.round(modelRequests) === 1 ? "" : "s"}`
+      : "";
+    scope.textContent = `${startedAt ? `Latest run since ${startedAt}` : "Retained local history"}${requestNote}`;
+  }
+
+  const reasons = Array.isArray(engagement.reasons) ? engagement.reasons.slice(0, 6) : [];
+  const reasonHost = $("decisionReasons");
+  if (reasonHost) {
+    reasonHost.innerHTML = reasons.length
+      ? reasons.map((item) => {
+        const code = String(item.code || "");
+        const label = decisionReasonLabels[code] || readableReasonCode(code);
+        const count = Math.max(0, Math.round(Number(item.count) || 0));
+        return `<span class="reason-chip"><b>${escapeHtml(label)}</b><em>${count}</em></span>`;
+      }).join("")
+      : `<span class="detail-empty">No structured decisions recorded yet.</span>`;
+  }
+
+  renderChannelFreshness(
+    Array.isArray(engagement.channels) ? engagement.channels : [],
+    Number(engagement.expected_revisit_seconds || 0)
+  );
+}
+
+function renderChannelFreshness(channels, expectedRevisitSeconds) {
+  const host = $("channelFreshness");
+  if (!host) return;
+  host.innerHTML = channels.length
+    ? channels.map((channel) => {
+      const freshness = channelFreshnessState(channel, expectedRevisitSeconds);
+      const count = channel.last_fresh_observed;
+      const countText = Number.isInteger(count) ? ` - ${count} new` : "";
+      return `
+        <div class="freshness-row ${escapeAttr(freshness.className)}">
+          <span class="freshness-dot" aria-hidden="true"></span>
+          <span class="freshness-route">
+            <strong>${escapeHtml(channel.channel_label || "Unnamed channel")}</strong>
+            <small>${escapeHtml(channel.server_label || "Unnamed server")}</small>
+          </span>
+          <span class="freshness-age">${escapeHtml(freshness.label + countText)}</span>
+        </div>
+      `;
+    }).join("")
+    : `<span class="detail-empty">No observed channels configured.</span>`;
+}
+
+function channelFreshnessState(channel, expectedRevisitSeconds) {
+  if (!channel.last_checked_at || channel.status === "never") {
+    return { className: "never", label: "Never checked" };
+  }
+  if (channel.status === "unavailable") {
+    return { className: "unavailable", label: "Unavailable" };
+  }
+  const timestamp = Date.parse(channel.last_checked_at);
+  if (!Number.isFinite(timestamp)) return { className: "unknown", label: "Unknown" };
+  const ageSeconds = Math.max(0, (Date.now() - timestamp) / 1000);
+  const expected = Number(expectedRevisitSeconds);
+  const className = Number.isFinite(expected) && expected > 0 && ageSeconds > expected * 1.5
+    ? "stale"
+    : Number.isFinite(expected) && expected > 0 && ageSeconds > expected
+      ? "late"
+      : "fresh";
+  return { className, label: ageSeconds < 10 ? "Just now" : `${formatAge(ageSeconds)} ago` };
+}
+
+function formatMonitorTimestamp(value) {
+  const timestamp = Date.parse(String(value || ""));
+  if (!Number.isFinite(timestamp)) return "";
+  return new Intl.DateTimeFormat([], { hour: "numeric", minute: "2-digit" }).format(timestamp);
+}
+
+function formatAge(seconds) {
+  const value = Math.max(0, Math.round(Number(seconds) || 0));
+  if (value < 60) return `${value}s`;
+  if (value < 3600) return `${Math.floor(value / 60)}m`;
+  if (value < 86400) return `${Math.floor(value / 3600)}h`;
+  return `${Math.floor(value / 86400)}d`;
+}
+
+function readableReasonCode(value) {
+  const words = String(value || "Decision").replaceAll("_", " ").trim();
+  return words ? words.charAt(0).toUpperCase() + words.slice(1) : "Decision";
 }
 
 function renderUpcoming(items) {

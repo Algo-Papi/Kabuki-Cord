@@ -27,11 +27,6 @@ STOCK_PHRASES = (
     "what kind of",
     "if this is where",
     "the whole point",
-    "raw timing",
-    "raw log",
-    "edited narrative",
-    "control angle",
-    "spiritual angle",
 )
 
 ABSTRACT_TELLS = (
@@ -73,12 +68,13 @@ INTERPRETIVE_BRIDGES = (
 
 DEFAULT_RESPONSE_MOVES = (
     "plain pushback: challenge one word or assumption directly, then stop. No question.",
-    "grounded aside: only use an ordinary work, music, home, or town-life detail if the target directly makes it relevant. No big theory.",
-    "half-remembered claim: mention something you heard/read imperfectly, with uncertainty instead of confidence.",
-    "dry reaction: one blunt passing comment, casual and short. No metaphor stack.",
+    "specific distinction: separate two details the conversation is treating as identical.",
+    "grounded implication: add one practical consequence already supported by the target.",
+    "tentative counterpoint: offer one uncertain alternative without inventing facts or biography.",
+    "dry reaction: make one brief passing comment with a concrete point. No metaphor stack.",
     "specific evidence ask: ask one concrete source/detail question. No broad what-do-you-think closer.",
     "messy comparison: compare the claim to one concrete thing, but keep it rough and brief.",
-    "skeptic nudge: disagree with the clean debunk version without sounding like a lecturer.",
+    "narrow challenge: disagree with one assumption without turning the reply into a lecture.",
 )
 
 
@@ -110,7 +106,7 @@ def voice_guard_prompt(
     lines = [
         "Voice repetition guard:",
         "- Do not use stock Discord filler: vibe, vibes, energy, so real, lol, lmao, ngl, lowkey, i need to know, yeah i get you, i get what you mean, yeah exactly.",
-        "- Do not keep returning to the same pet theory words, especially raw timing, raw log, edited narrative, clean debunk, control angle, or spiritual angle.",
+        "- Do not keep returning to the same pet phrase or argument structure across replies.",
         "- Do not start with a soft agreement unless the user's exact message needs it. Skip the throat clearing.",
         "- Prefer concrete nouns and details over abstract filler like consciousness, reality, energy, framing, or pattern unless the other person already used that frame.",
         "- Keep the reply uneven and local. A normal passing comment is better than a polished theory.",

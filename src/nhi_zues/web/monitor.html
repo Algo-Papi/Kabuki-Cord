@@ -66,6 +66,59 @@
         </div>
       </section>
 
+      <section class="engagement-panel" aria-labelledby="engagementTitle">
+        <div class="engagement-heading">
+          <div>
+            <div id="engagementTitle" class="section-title">Engagement Funnel</div>
+            <small>Content-free runtime counts from the latest run.</small>
+          </div>
+          <span id="funnelScope" class="funnel-scope">Waiting for activity</span>
+        </div>
+        <div id="engagementFunnel" class="funnel-grid">
+          <div class="funnel-stat" title="New messages discovered during channel checks.">
+            <span>New observed</span><strong id="funnelFreshObserved">--</strong>
+          </div>
+          <div class="funnel-stat" title="New messages removed because they came from this account.">
+            <span>Own removed</span><strong id="funnelOwnFiltered">--</strong>
+          </div>
+          <div class="funnel-stat" title="New candidates entered deterministic review during this run.">
+            <span>Queued</span><strong id="funnelPending">--</strong>
+          </div>
+          <div class="funnel-stat" title="Candidate deferrals recorded during this run; unchanged windows are not counted again.">
+            <span>Deferred</span><strong id="funnelDeferred">--</strong>
+          </div>
+          <div class="funnel-stat" title="Candidate targets that passed deterministic engagement gates during this run.">
+            <span>Eligible</span><strong id="funnelEligible">--</strong>
+          </div>
+          <div class="funnel-stat" title="Eligible decisions that reached the language model; retries are not double-counted.">
+            <span>Model reached</span><strong id="funnelModelCalled">--</strong>
+          </div>
+          <div class="funnel-stat" title="Drafts placed in the approval queue.">
+            <span>Drafts queued</span><strong id="funnelDraftQueued">--</strong>
+          </div>
+          <div class="funnel-stat sent" title="Scanner-originated responses confirmed as sent.">
+            <span>Sent</span><strong id="funnelSent">--</strong>
+          </div>
+          <div class="funnel-stat rejected" title="Candidates terminated by a decision or safety gate.">
+            <span>Rejected</span><strong id="funnelRejected">--</strong>
+          </div>
+        </div>
+        <div class="engagement-details">
+          <div class="engagement-detail-card">
+            <div class="section-title">Decision Reasons</div>
+            <div id="decisionReasons" class="reason-list">
+              <span class="detail-empty">No structured decisions recorded yet.</span>
+            </div>
+          </div>
+          <div class="engagement-detail-card freshness-card">
+            <div class="section-title">Channel Freshness</div>
+            <div id="channelFreshness" class="freshness-list">
+              <span class="detail-empty">No observed channels configured.</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <section class="queue-panel">
         <div class="section-title">Upcoming Channels</div>
         <div id="upcomingList" class="upcoming-list"></div>

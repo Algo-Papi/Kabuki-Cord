@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from nhi_zues.voice_guard import draft_quality_issues
+from nhi_zues.voice_guard import DEFAULT_RESPONSE_MOVES, draft_quality_issues
 
 
 class VoiceGuardTests(unittest.TestCase):
@@ -30,6 +30,13 @@ class VoiceGuardTests(unittest.TestCase):
         )
 
         self.assertEqual([], issues)
+
+    def test_default_moves_are_domain_neutral(self) -> None:
+        defaults = " ".join(DEFAULT_RESPONSE_MOVES).lower()
+
+        for residue in ("uap", "ufo", "foia", "raw log", "clean debunk", "spiritual angle"):
+            with self.subTest(residue=residue):
+                self.assertNotIn(residue, defaults)
 
 
 if __name__ == "__main__":

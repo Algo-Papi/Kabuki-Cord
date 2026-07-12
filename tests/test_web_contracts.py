@@ -26,6 +26,34 @@ class WebContractTests(unittest.TestCase):
         self.assertIn('api("/api/monitor-state")', script)
         self.assertNotIn('api("/api/state")', script)
 
+    def test_monitor_renders_content_free_engagement_funnel_and_freshness(self) -> None:
+        markup = (WEB_ROOT / "monitor.html").read_text(encoding="utf-8")
+        script = (WEB_ROOT / "monitor.js").read_text(encoding="utf-8")
+        styles = (WEB_ROOT / "monitor.css").read_text(encoding="utf-8")
+
+        for element_id in (
+            "engagementFunnel",
+            "funnelFreshObserved",
+            "funnelOwnFiltered",
+            "funnelPending",
+            "funnelDeferred",
+            "funnelEligible",
+            "funnelModelCalled",
+            "funnelDraftQueued",
+            "funnelSent",
+            "funnelRejected",
+            "decisionReasons",
+            "channelFreshness",
+        ):
+            self.assertIn(f'id="{element_id}"', markup)
+        self.assertIn("renderEngagement(state.engagement || {})", script)
+        self.assertIn('available && Number.isFinite(value) ? String', script)
+        self.assertIn(': "--"', script)
+        self.assertIn("channel.server_label", script)
+        self.assertIn("channel.channel_label", script)
+        self.assertIn(".funnel-grid", styles)
+        self.assertIn(".freshness-row", styles)
+
     def test_scanner_monitor_uses_direct_v2_frames(self) -> None:
         from PIL import Image
 

@@ -14,7 +14,7 @@ from .config import AppConfig
 from .discarded_approvals import DiscardedApprovalStore, discarded_approval_message
 from .events import EventLog
 from .llm import ReplyPlanner
-from .memory import ConversationMemory
+from .memory import ConversationMemory, ReplyCandidateBatch
 from .output_guard import outgoing_block_reason
 from .reaction_ledger import ReactionLedger
 from .reaction_service import (
@@ -31,6 +31,7 @@ from .reply_policy import (
     requires_approval as _requires_approval,
 )
 from .reply_ledger import ReplyLedger, duplicate_reply_message
+from .runtime_lock import RuntimeInstanceLock
 from .safety_review import SafetyReviewQueue, detect_safety_review_findings
 from . import scan_scheduler
 from .secrets import get_discord_credentials
@@ -52,6 +53,9 @@ class ChannelScanState:
     own_message_ids: set[str]
     own_texts: set[str]
     own_author_ids: set[str]
+    fresh_observed_count: int = 0
+    own_filtered_count: int = 0
+    reply_candidates_observed: int = 0
     history_message_count: int = 0
     history_fresh_count: int = 0
 
@@ -76,7 +80,10 @@ class NhiZuesRunner:
     ) -> None:
         self.config = config
         self.transport_factory = transport_factory
-        self.memory = ConversationMemory(config.state_dir / "memory.json")
+        self.memory = ConversationMemory(
+            config.state_dir / "memory.json",
+            candidate_ttl_seconds=getattr(config, "reply_candidate_ttl_seconds", 600.0),
+        )
         self.topics = TopicTracker()
         self.budget = BudgetManager(
             config.state_dir / "usage.json",
@@ -112,6 +119,7 @@ class NhiZuesRunner:
         self._target_cursor = int(start_cursor or 0) % channel_count if channel_count else 0
         self._completed_loop_count = max(0, int(completed_loop_count or 0))
         self._own_author_ids: set[str] = set()
+        self._candidate_replayed_channels: set[str] = set()
 
     async def run_once(self) -> None:
         await self._run(loop=False)
@@ -168,12 +176,39 @@ class NhiZuesRunner:
         on_target_start=None,
         on_target_complete=None,
     ) -> None:
-        async with self.transport_factory(
-            self.config.profile_dir,
-            browser_channel=self.config.browser_channel,
-            headless=self.config.headless,
-        ) as session:
-            await self._run_in_session(
+        self.config.state_dir.mkdir(parents=True, exist_ok=True)
+        with RuntimeInstanceLock(self.config.state_dir / "runtime.lock"):
+            async with self.transport_factory(
+                self.config.profile_dir,
+                browser_channel=self.config.browser_channel,
+                headless=self.config.headless,
+            ) as session:
+                await self._run_in_locked_session(
+                    session,
+                    loop=loop,
+                    stop_event=stop_event,
+                    on_cycle=on_cycle,
+                    on_targets_planned=on_targets_planned,
+                    on_target_start=on_target_start,
+                    on_target_complete=on_target_complete,
+                    verify_login=True,
+                )
+
+    async def _run_in_session(
+        self,
+        session: ChatTransport,
+        *,
+        loop: bool,
+        stop_event=None,
+        on_cycle=None,
+        on_targets_planned=None,
+        on_target_start=None,
+        on_target_complete=None,
+        verify_login: bool,
+    ) -> None:
+        self.config.state_dir.mkdir(parents=True, exist_ok=True)
+        with RuntimeInstanceLock(self.config.state_dir / "runtime.lock"):
+            await self._run_in_locked_session(
                 session,
                 loop=loop,
                 stop_event=stop_event,
@@ -181,10 +216,10 @@ class NhiZuesRunner:
                 on_targets_planned=on_targets_planned,
                 on_target_start=on_target_start,
                 on_target_complete=on_target_complete,
-                verify_login=True,
+                verify_login=verify_login,
             )
 
-    async def _run_in_session(
+    async def _run_in_locked_session(
         self,
         session: ChatTransport,
         *,
@@ -199,7 +234,6 @@ class NhiZuesRunner:
         if not self.config.channels:
             raise ValueError("Configure at least one channel in NHI_ZUES_CHANNELS.")
 
-        self.config.state_dir.mkdir(parents=True, exist_ok=True)
         self.memory.load()
         await self._prepare_discord_session(session, verify_login=verify_login)
         await self._run_scan_cycles(
@@ -494,7 +528,7 @@ class NhiZuesRunner:
         target,
     ) -> ChannelScanState:
         visible_messages = await session.read_visible_messages(target.server_id, target.channel_id)
-        fresh_messages = self.memory.ingest(target.channel_id, visible_messages)
+        observed_fresh_messages = self.memory.ingest(target.channel_id, visible_messages)
         history_message_count = 0
         history_fresh_count = 0
         if self._scanner_history_backfill_enabled(target):
@@ -503,7 +537,6 @@ class NhiZuesRunner:
             if history_messages:
                 history_fresh_count = len(self.memory.ingest(target.channel_id, history_messages))
                 await session.ensure_latest_messages_visible()
-        self.memory.save()
         character = self.characters.for_server(target.server_id, target.character_card)
         character_names = (character.name, *character.aliases)
         own_message_ids = self.reply_ledger.own_message_ids_for_channel(channel_id=target.channel_id)
@@ -514,12 +547,21 @@ class NhiZuesRunner:
             own_texts=own_texts,
         )
         fresh_messages = _without_own_messages(
-            fresh_messages,
+            observed_fresh_messages,
             character_names=character_names,
             own_author_ids=own_author_ids,
             own_message_ids=own_message_ids,
             own_texts=own_texts,
         )
+        candidate_batch = None
+        observe_candidates = getattr(self.memory, "observe_reply_candidates", None)
+        if (
+            callable(observe_candidates)
+            and getattr(target, "engage_enabled", True)
+            and not getattr(target, "safety_review_enabled", False)
+        ):
+            candidate_batch = observe_candidates(target.channel_id, fresh_messages)
+        self.memory.save()
         return ChannelScanState(
             visible_messages=visible_messages,
             fresh_messages=fresh_messages,
@@ -528,6 +570,9 @@ class NhiZuesRunner:
             own_message_ids=own_message_ids,
             own_texts=own_texts,
             own_author_ids=own_author_ids,
+            fresh_observed_count=len(observed_fresh_messages),
+            own_filtered_count=max(0, len(observed_fresh_messages) - len(fresh_messages)),
+            reply_candidates_observed=len(fresh_messages) if candidate_batch is not None else 0,
             history_message_count=history_message_count,
             history_fresh_count=history_fresh_count,
         )
@@ -725,48 +770,218 @@ class NhiZuesRunner:
         target,
         state: ChannelScanState,
     ) -> None:
-        reacted_message_ids = await self._process_channel_reactions(session, target, state)
-        reply_fresh = [
-            message
-            for message in state.fresh_messages
-            if message.message_id not in reacted_message_ids
-        ]
-        planning = self._build_reply_planning_state(target, state)
         if not target.engage_enabled:
+            await self._process_channel_reactions(session, target, state)
             self._record_engage_disabled(target, state)
             self.memory.save()
             return
 
-        decision = await self.planner.plan(
-            channel_id=target.channel_id,
-            character=state.character,
-            character_memory=planning.character_memory,
-            new_messages=reply_fresh,
-            context=planning.context,
-            topics=planning.snapshot,
-            user_memories=planning.user_memories,
-            user_instructions=planning.user_notes,
+        planning = self._build_reply_planning_state(target, state)
+        candidate_batch, reply_candidates = self._ready_reply_candidate_messages(
+            target,
+            state,
         )
-        self._record_planner_decision(target, state, planning, decision)
-        await self._handle_reply_decision(session, target, state, decision, reply_fresh)
+        if reply_candidates:
+            decision = await self.planner.plan(
+                channel_id=target.channel_id,
+                character=state.character,
+                character_memory=planning.character_memory,
+                new_messages=reply_candidates,
+                context=planning.context,
+                topics=planning.snapshot,
+                user_memories=planning.user_memories,
+                user_instructions=planning.user_notes,
+            )
+        else:
+            decision = DraftDecision(
+                False,
+                "no pending candidate context changed",
+                reason_code="no_new_messages",
+            )
+
+        lifecycle_metrics = self._apply_candidate_decision(
+            target.channel_id,
+            candidate_batch,
+            reply_candidates,
+            decision,
+        )
+        reserved_ids = _reaction_reserved_message_ids(decision)
+        reserved_ids.update(self._active_reply_candidate_ids(target.channel_id))
+        if (decision.should_reply or _decision_defers_until_context(decision)) and not reserved_ids:
+            reserved_ids = {message.message_id for message in reply_candidates}
+        reacted_message_ids = await self._process_channel_reactions(
+            session,
+            target,
+            state,
+            excluded_message_ids=reserved_ids,
+        )
+        self._resolve_reply_candidate_ids(target.channel_id, reacted_message_ids)
+        self._record_planner_decision(
+            target,
+            state,
+            planning,
+            decision,
+            lifecycle_metrics=lifecycle_metrics,
+        )
+        terminal = await self._handle_reply_decision(
+            session,
+            target,
+            state,
+            decision,
+            reply_candidates,
+        )
+        if terminal and candidate_batch is not None:
+            self._resolve_reply_candidate_batch(target.channel_id, candidate_batch)
         self.memory.save()
+
+    def _ready_reply_candidate_messages(
+        self,
+        target,
+        state: ChannelScanState,
+    ) -> tuple[ReplyCandidateBatch | None, list[MessageRecord]]:
+        ready_candidates = getattr(self.memory, "ready_reply_candidates", None)
+        messages_by_ids = getattr(self.memory, "messages_by_ids", None)
+        if not callable(ready_candidates) or not callable(messages_by_ids):
+            return None, list(state.fresh_messages)
+        if float(getattr(self.memory, "candidate_ttl_seconds", 1.0) or 0.0) <= 0:
+            return None, list(state.fresh_messages)
+
+        batch = ready_candidates(target.channel_id)
+        replayed_channels = set(getattr(self, "_candidate_replayed_channels", set()))
+        if batch is None and target.channel_id not in replayed_channels:
+            active_candidates = getattr(self.memory, "active_reply_candidates", None)
+            if callable(active_candidates):
+                active_batch = active_candidates(target.channel_id)
+                if active_batch is not None and active_batch.status in {"deferred", "eligible"}:
+                    batch_limit = max(
+                        1,
+                        int(getattr(self.memory, "candidate_batch_size", 8) or 8),
+                    )
+                    batch = ReplyCandidateBatch(
+                        channel_id=active_batch.channel_id,
+                        message_ids=active_batch.message_ids[-batch_limit:],
+                        generation=active_batch.generation,
+                        revision=active_batch.revision,
+                        status=active_batch.status,
+                        reason=active_batch.reason,
+                    )
+        replayed_channels.add(target.channel_id)
+        self._candidate_replayed_channels = replayed_channels
+        if batch is None:
+            return None, []
+        messages = messages_by_ids(target.channel_id, batch.message_ids)
+        messages = _without_own_messages(
+            messages,
+            character_names=state.character_names,
+            own_author_ids=state.own_author_ids,
+            own_message_ids=state.own_message_ids,
+            own_texts=state.own_texts,
+        )
+        safe_ids = {message.message_id for message in messages}
+        removed_ids = set(batch.message_ids) - safe_ids
+        self._resolve_reply_candidate_ids(target.channel_id, removed_ids)
+        return batch, messages
+
+    def _apply_candidate_decision(
+        self,
+        channel_id: str,
+        batch: ReplyCandidateBatch | None,
+        candidate_messages: list[MessageRecord],
+        decision: DraftDecision,
+    ) -> dict[str, int]:
+        metrics = {
+            "deferred": 0,
+            "eligible": max(0, int(getattr(decision, "eligible_source_count", 0) or 0)),
+            "rejected": 0,
+        }
+        candidate_count = len(candidate_messages)
+        if batch is None:
+            if decision.should_reply:
+                metrics["eligible"] = metrics["eligible"] or len(decision.source_message_ids) or candidate_count
+            elif _decision_defers_until_context(decision):
+                metrics["deferred"] = candidate_count
+            else:
+                metrics["rejected"] = candidate_count
+            return metrics
+
+        if decision.should_reply:
+            metrics["eligible"] = metrics["eligible"] or len(decision.source_message_ids) or candidate_count
+            if decision.draft:
+                return metrics
+            mark_eligible = getattr(self.memory, "mark_reply_candidates_eligible", None)
+            if callable(mark_eligible):
+                mark_eligible(batch, reason=decision.reason)
+            return metrics
+
+        if _decision_defers_until_context(decision):
+            defer_candidates = getattr(self.memory, "defer_reply_candidates", None)
+            if callable(defer_candidates) and defer_candidates(batch, reason=decision.reason):
+                metrics["deferred"] = candidate_count
+            return metrics
+
+        metrics["rejected"] = candidate_count
+        self._resolve_reply_candidate_batch(channel_id, batch)
+        return metrics
+
+    def _resolve_reply_candidate_batch(
+        self,
+        channel_id: str,
+        batch: ReplyCandidateBatch,
+    ) -> int:
+        resolve = getattr(self.memory, "resolve_reply_candidates", None)
+        if not callable(resolve):
+            return 0
+        return int(resolve(channel_id, batch) or 0)
+
+    def _active_reply_candidate_ids(self, channel_id: str) -> set[str]:
+        active = getattr(self.memory, "active_reply_candidates", None)
+        if not callable(active):
+            return set()
+        batch = active(channel_id)
+        return set(batch.message_ids) if batch is not None else set()
+
+    def _resolve_reply_candidate_ids(
+        self,
+        channel_id: str,
+        message_ids,
+    ) -> int:
+        cleaned_ids = {
+            str(message_id or "").strip()
+            for message_id in (message_ids or ())
+            if str(message_id or "").strip()
+        }
+        if not cleaned_ids:
+            return 0
+        resolve = getattr(self.memory, "resolve_reply_candidates", None)
+        if not callable(resolve):
+            return 0
+        return int(resolve(channel_id, cleaned_ids) or 0)
 
     async def _process_channel_reactions(
         self,
         session: ChatTransport,
         target,
         state: ChannelScanState,
+        *,
+        excluded_message_ids: set[str] | None = None,
     ) -> set[str]:
+        excluded = set(excluded_message_ids or ())
+        visible_messages = [
+            message for message in state.visible_messages if message.message_id not in excluded
+        ]
+        fresh_messages = [
+            message for message in state.fresh_messages if message.message_id not in excluded
+        ]
         reaction_candidates = _recent_reaction_candidates(
-            state.visible_messages,
-            state.fresh_messages,
+            visible_messages,
+            fresh_messages,
             character_names=state.character_names,
             own_author_ids=state.own_author_ids,
             own_message_ids=state.own_message_ids,
             own_texts=state.own_texts,
         )
         force_laugh_ids = _recent_non_own_message_ids(
-            state.visible_messages,
+            visible_messages,
             character_names=state.character_names,
             own_author_ids=state.own_author_ids,
             own_message_ids=state.own_message_ids,
@@ -777,7 +992,7 @@ class NhiZuesRunner:
             session,
             target,
             reaction_candidates,
-            fresh_count=len(state.fresh_messages),
+            fresh_count=len(fresh_messages),
             force_laugh_ids=force_laugh_ids,
             character_names=state.character_names,
             own_author_ids=state.own_author_ids,
@@ -786,7 +1001,14 @@ class NhiZuesRunner:
         )
 
     def _build_reply_planning_state(self, target, state: ChannelScanState) -> ReplyPlanningState:
-        snapshot = self.topics.update(target.channel_id, state.fresh_messages)
+        if isinstance(self.topics, TopicTracker):
+            snapshot = self.topics.update(
+                target.channel_id,
+                state.fresh_messages,
+                tracked_terms=tuple(getattr(state.character, "trigger_keywords", ()) or ()),
+            )
+        else:
+            snapshot = self.topics.update(target.channel_id, state.fresh_messages)
         context = self.memory.context(target.channel_id, limit=80)
         user_memories = self.memory.user_context_for(context, limit=10)
         user_notes = self.user_instructions.for_users(
@@ -816,6 +1038,19 @@ class NhiZuesRunner:
             event_type="channel_checked",
             server_id=target.server_id,
             channel_id=target.channel_id,
+            reason_code="engage_disabled",
+            metrics={
+                "fresh_observed": int(
+                    getattr(state, "fresh_observed_count", 0) or len(state.fresh_messages)
+                ),
+                "own_filtered": int(getattr(state, "own_filtered_count", 0) or 0),
+                "pending": 0,
+                "deferred": 0,
+                "eligible": 0,
+                "model_called": 0,
+                "model_requests": 0,
+                "rejected": 0,
+            },
             summary=(
                 f"Reviewed {len(state.visible_messages)} visible message(s), "
                 f"{len(state.fresh_messages)} new; Engage is off."
@@ -829,7 +1064,11 @@ class NhiZuesRunner:
         state: ChannelScanState,
         planning: ReplyPlanningState,
         decision: DraftDecision,
+        *,
+        lifecycle_metrics: dict[str, int] | None = None,
     ) -> None:
+        lifecycle = lifecycle_metrics or {}
+        model_requests = max(0, int(getattr(decision, "model_call_count", 0) or 0))
         log.info(
             "server=%s character=%s channel=%s visible=%s fresh=%s users=%s topics=%s decision=%s",
             target.server_id,
@@ -845,6 +1084,19 @@ class NhiZuesRunner:
             event_type="channel_checked",
             server_id=target.server_id,
             channel_id=target.channel_id,
+            reason_code=str(getattr(decision, "reason_code", "") or "unspecified"),
+            metrics={
+                "fresh_observed": int(
+                    getattr(state, "fresh_observed_count", 0) or len(state.fresh_messages)
+                ),
+                "own_filtered": int(getattr(state, "own_filtered_count", 0) or 0),
+                "pending": int(getattr(state, "reply_candidates_observed", 0) or 0),
+                "deferred": max(0, int(lifecycle.get("deferred", 0) or 0)),
+                "eligible": max(0, int(lifecycle.get("eligible", 0) or 0)),
+                "model_called": int(model_requests > 0),
+                "model_requests": model_requests,
+                "rejected": max(0, int(lifecycle.get("rejected", 0) or 0)),
+            },
             summary=(
                 f"Reviewed {len(state.visible_messages)} visible message(s), "
                 f"{len(state.fresh_messages)} new; {decision.reason}."
@@ -859,28 +1111,29 @@ class NhiZuesRunner:
         state: ChannelScanState,
         decision: DraftDecision,
         reply_fresh: list[MessageRecord],
-    ) -> None:
+    ) -> bool:
         if not decision.should_reply or not decision.draft:
-            return
+            return False
         if self._record_output_block_if_needed(target, decision):
-            return
+            return True
         source_ids = tuple(decision.source_message_ids or tuple(message.message_id for message in reply_fresh))
-        source_messages = _messages_by_ids(state.fresh_messages, source_ids) or _messages_by_ids(reply_fresh, source_ids) or reply_fresh
+        source_messages = _messages_by_ids(reply_fresh, source_ids) or _messages_by_ids(state.fresh_messages, source_ids) or reply_fresh
         if self._record_discarded_source_if_needed(target, decision, source_ids):
-            return
+            return True
         if self._record_duplicate_reply_if_needed(target, decision, source_ids):
-            return
+            return True
         if self.config.runtime_mode == "dry":
             self._record_dry_run_decision(target, decision)
-            return
+            return True
         if _requires_approval(
             self.config.runtime_mode,
             decision.engagement_type,
             auto_respond_enabled=target.auto_respond_enabled,
         ):
             self._queue_approval_decision(target, state, decision, source_ids, source_messages)
-            return
+            return True
         await self._send_auto_reply_decision(session, target, state, decision, source_ids, source_messages)
+        return True
 
     def _record_output_block_if_needed(self, target, decision: DraftDecision) -> bool:
         output_block = outgoing_block_reason(decision.draft)
@@ -891,6 +1144,8 @@ class NhiZuesRunner:
             event_type="output_guard_blocked",
             server_id=target.server_id,
             channel_id=target.channel_id,
+            reason_code="output_guard_blocked",
+            metrics={"rejected": 1},
             summary=output_block,
             draft=decision.draft,
         )
@@ -915,6 +1170,8 @@ class NhiZuesRunner:
             event_type="discarded_approval_suppressed",
             server_id=target.server_id,
             channel_id=target.channel_id,
+            reason_code="discarded_source",
+            metrics={"rejected": 1},
             summary=discarded_message,
             draft=decision.draft,
         )
@@ -939,6 +1196,8 @@ class NhiZuesRunner:
             event_type="duplicate_reply_blocked",
             server_id=target.server_id,
             channel_id=target.channel_id,
+            reason_code="duplicate_reply",
+            metrics={"rejected": 1},
             summary=duplicate_message,
             draft=decision.draft,
         )
@@ -950,6 +1209,7 @@ class NhiZuesRunner:
             event_type="dry_run",
             server_id=target.server_id,
             channel_id=target.channel_id,
+            reason_code=str(getattr(decision, "reason_code", "") or "dry_run"),
             summary=decision.reason,
             draft=decision.draft,
         )
@@ -981,6 +1241,8 @@ class NhiZuesRunner:
                 event_type="duplicate_reply_blocked",
                 server_id=target.server_id,
                 channel_id=target.channel_id,
+                reason_code="duplicate_reply",
+                metrics={"rejected": 1},
                 summary=(
                     "Duplicate approval skipped: an approval is already queued "
                     "for one or more of the same source messages."
@@ -1002,6 +1264,8 @@ class NhiZuesRunner:
             event_type="approval_queued",
             server_id=target.server_id,
             channel_id=target.channel_id,
+            reason_code="approval_queued",
+            metrics={"draft_queued": 1},
             summary=approval_summary,
             draft=decision.draft,
         )
@@ -1036,6 +1300,8 @@ class NhiZuesRunner:
                 event_type="reply_guard_blocked",
                 server_id=target.server_id,
                 channel_id=target.channel_id,
+                reason_code="reply_guard_blocked",
+                metrics={"rejected": 1},
                 summary=guard_reason,
                 draft=decision.draft,
             )
@@ -1052,6 +1318,8 @@ class NhiZuesRunner:
             event_type="message_sent",
             server_id=target.server_id,
             channel_id=target.channel_id,
+            reason_code="sent",
+            metrics={"sent": 1},
             summary=decision.reason,
             draft=decision.draft,
             message_id=str(delivery.get("message_id") or ""),
@@ -1124,6 +1392,37 @@ def _messages_by_ids(messages: list[MessageRecord], message_ids: tuple[str, ...]
     if not wanted:
         return []
     return [message for message in messages if message.message_id in wanted]
+
+
+_DEFERRED_DECISION_CODES = frozenset(
+    {
+        "awaiting_context",
+        "awaiting_more_detail",
+        "near_threshold",
+        "insufficient_substance",
+        "model_declined",
+    }
+)
+_AUTOMATIC_SILENCE_CODES = frozenset({"meta_suspicion", "self_only", "system_feed"})
+
+
+def _decision_defers_until_context(decision: DraftDecision) -> bool:
+    return str(getattr(decision, "reason_code", "") or "") in _DEFERRED_DECISION_CODES
+
+
+def _reaction_reserved_message_ids(decision: DraftDecision) -> set[str]:
+    reason_code = str(getattr(decision, "reason_code", "") or "")
+    if not (
+        decision.should_reply
+        or reason_code in _DEFERRED_DECISION_CODES
+        or reason_code in _AUTOMATIC_SILENCE_CODES
+    ):
+        return set()
+    return {
+        str(message_id or "").strip()
+        for message_id in decision.source_message_ids
+        if str(message_id or "").strip()
+    }
 
 
 def _scan_history_summary(state: ChannelScanState) -> str:
