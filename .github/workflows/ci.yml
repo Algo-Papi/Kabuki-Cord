@@ -27,10 +27,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - name: Install package
-        run: python -m pip install -e .
-      - name: Install CI tools
-        run: python -m pip install build mypy pip-audit ruff
+      - name: Install package and development checks
+        run: python -m pip install -e ".[dev]"
       - name: Compile Python sources
         run: python -m compileall -f src
       - name: Ruff lint

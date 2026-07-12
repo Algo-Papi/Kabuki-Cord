@@ -16,6 +16,15 @@ dependencies = [
     "pywebview>=5.0",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "build>=1.2.2",
+    "mypy>=1.11.0",
+    "Pillow>=11.0.0",
+    "pip-audit>=2.7.3",
+    "ruff>=0.8.0",
+]
+
 [project.scripts]
 nhi-zues = "nhi_zues.cli:main"
 kabuki-cord = "nhi_zues.cli:main"
