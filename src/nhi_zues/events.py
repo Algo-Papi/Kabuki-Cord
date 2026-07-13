@@ -20,6 +20,13 @@ ENGAGEMENT_METRIC_KEYS = (
     "draft_queued",
     "sent",
     "rejected",
+    "scanned_messages",
+    "newly_visible",
+    "backfill_discovered",
+    "history_passes",
+    "history_rounds",
+    "history_retry_added",
+    "queued_reviews",
 )
 
 

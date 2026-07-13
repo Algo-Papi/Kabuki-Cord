@@ -22,8 +22,8 @@ SKIP_DIRS = {
     "tmp",
 }
 PATTERNS = {
-    "openai_project_key": re.compile(r"sk-proj-[A-Za-z0-9_-]{20,}"),
-    "openai_secret_key": re.compile(r"sk-[A-Za-z0-9_-]{20,}"),
+    "openai_project_key": re.compile(r"(?<![A-Za-z0-9])sk-proj-[A-Za-z0-9_-]{20,}"),
+    "openai_secret_key": re.compile(r"(?<![A-Za-z0-9])sk-(?!proj-)[A-Za-z0-9_-]{20,}"),
     "github_token": re.compile(r"(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]{20,}"),
     "discord_token_like": re.compile(r"[MN][A-Za-z\d]{23}\.[\w-]{6}\.[\w-]{27}"),
     "discord_webhook": re.compile(r"https://(?:canary\.|ptb\.)?discord(?:app)?\.com/api/webhooks/\d+/[A-Za-z0-9_-]+"),

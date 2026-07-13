@@ -25,6 +25,9 @@ EXPECTED_SUFFIXES = {
     "nhi_zues/web/assets/mode-kabuki-full-auto-v2-sheet.png",
     "nhi_zues/web/assets/mode-kabuki-live-fire-v2-sheet.png",
     "nhi_zues/web/assets/monitor-arigato-v2-sheet.png",
+    "nhi_zues/web/assets/update-mask-workshop-checking-v2-sheet.png",
+    "nhi_zues/web/assets/update-mask-workshop-updated-v2-sheet.png",
+    "nhi_zues/web/assets/update-mask-workshop-current-v2-sheet.png",
 }
 
 

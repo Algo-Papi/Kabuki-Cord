@@ -4,6 +4,7 @@ import hashlib
 import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 
 from .models import MessageRecord
@@ -191,10 +192,9 @@ def detect_safety_review_findings(
         if not text.strip():
             continue
         normalized = _normalize_text(text)
-        compact = _compact_text(normalized)
         matched: list[_SafetyPattern] = []
         for pattern in SAFETY_PATTERNS:
-            if pattern.matches(normalized, compact):
+            if pattern.matches(normalized):
                 matched.append(pattern)
         if not matched:
             continue
@@ -224,10 +224,13 @@ class _SafetyPattern:
     regex: re.Pattern[str] | None = None
     compact_terms: tuple[str, ...] = ()
 
-    def matches(self, normalized: str, compact: str) -> bool:
+    def matches(self, normalized: str) -> bool:
         if self.regex is not None and self.regex.search(normalized):
             return True
-        return any(term in compact for term in self.compact_terms)
+        # Match punctuation/spacing-obfuscated terms while preserving alphabetic
+        # boundaries.  Searching the fully compacted message made a term such as
+        # "spic" match the middle of the ordinary word "suspicious".
+        return any(_obfuscated_term_pattern(term).search(normalized) for term in self.compact_terms)
 
 
 SAFETY_PATTERNS: tuple[_SafetyPattern, ...] = (
@@ -314,8 +317,13 @@ def _normalize_text(text: str) -> str:
     return lowered.translate(replacements)
 
 
-def _compact_text(text: str) -> str:
-    return re.sub(r"[^a-z]+", "", text)
+@lru_cache(maxsize=128)
+def _obfuscated_term_pattern(term: str) -> re.Pattern[str]:
+    letters = [re.escape(letter) for letter in str(term or "").lower() if "a" <= letter <= "z"]
+    if not letters:
+        return re.compile(r"(?!x)x")
+    separated = r"[^a-z]*".join(letters)
+    return re.compile(rf"(?<![a-z]){separated}(?![a-z])", re.IGNORECASE)
 
 
 def _review_id(*, server_id: str, channel_id: str, message_id: str, category: str) -> str:

@@ -566,6 +566,7 @@ def app_state() -> dict:
             "safety_review_exclusive": config.safety_review_exclusive,
             "safety_review_history_limit": config.safety_review_history_limit,
             "safety_review_scroll_rounds": config.safety_review_scroll_rounds,
+            "safety_review_history_retries": config.safety_review_history_retries,
             "reply_cooldown_seconds": config.reply_cooldown_seconds,
             "reply_window_seconds": config.reply_window_seconds,
             "reply_max_per_window": config.reply_max_per_window,
@@ -619,6 +620,7 @@ def app_state() -> dict:
             "NHI_ZUES_SAFETY_REVIEW_EXCLUSIVE": env.get("NHI_ZUES_SAFETY_REVIEW_EXCLUSIVE", "true"),
             "NHI_ZUES_SAFETY_REVIEW_HISTORY_LIMIT": env.get("NHI_ZUES_SAFETY_REVIEW_HISTORY_LIMIT", "420"),
             "NHI_ZUES_SAFETY_REVIEW_SCROLL_ROUNDS": env.get("NHI_ZUES_SAFETY_REVIEW_SCROLL_ROUNDS", "45"),
+            "NHI_ZUES_SAFETY_REVIEW_HISTORY_RETRIES": env.get("NHI_ZUES_SAFETY_REVIEW_HISTORY_RETRIES", "1"),
             "NHI_ZUES_REPLY_COOLDOWN_SECONDS": env.get("NHI_ZUES_REPLY_COOLDOWN_SECONDS", "900"),
             "NHI_ZUES_REPLY_WINDOW_SECONDS": env.get("NHI_ZUES_REPLY_WINDOW_SECONDS", "3600"),
             "NHI_ZUES_REPLY_MAX_PER_WINDOW": env.get("NHI_ZUES_REPLY_MAX_PER_WINDOW", "3"),
@@ -2470,6 +2472,7 @@ def update_env(values: dict) -> None:
         "NHI_ZUES_SAFETY_REVIEW_EXCLUSIVE",
         "NHI_ZUES_SAFETY_REVIEW_HISTORY_LIMIT",
         "NHI_ZUES_SAFETY_REVIEW_SCROLL_ROUNDS",
+        "NHI_ZUES_SAFETY_REVIEW_HISTORY_RETRIES",
         "NHI_ZUES_REPLY_COOLDOWN_SECONDS",
         "NHI_ZUES_REPLY_WINDOW_SECONDS",
         "NHI_ZUES_REPLY_MAX_PER_WINDOW",
@@ -2521,7 +2524,8 @@ def _clean_env_value(key: str, value) -> str:
         "NHI_ZUES_SCANNER_HISTORY_SCROLL_ROUNDS": (1.0, 45.0),
         "NHI_ZUES_REPLY_CANDIDATE_TTL_SECONDS": (0.0, 3600.0),
         "NHI_ZUES_SAFETY_REVIEW_HISTORY_LIMIT": (20.0, 5000.0),
-        "NHI_ZUES_SAFETY_REVIEW_SCROLL_ROUNDS": (1.0, 100.0),
+        "NHI_ZUES_SAFETY_REVIEW_SCROLL_ROUNDS": (1.0, 150.0),
+        "NHI_ZUES_SAFETY_REVIEW_HISTORY_RETRIES": (0.0, 2.0),
         "NHI_ZUES_REPLY_COOLDOWN_SECONDS": (0.0, 86400.0),
         "NHI_ZUES_REPLY_WINDOW_SECONDS": (60.0, 604800.0),
         "NHI_ZUES_REPLY_MAX_PER_WINDOW": (0.0, 1000.0),
@@ -2545,6 +2549,7 @@ def _clean_env_value(key: str, value) -> str:
             "NHI_ZUES_SCANNER_HISTORY_SCROLL_ROUNDS",
             "NHI_ZUES_SAFETY_REVIEW_HISTORY_LIMIT",
             "NHI_ZUES_SAFETY_REVIEW_SCROLL_ROUNDS",
+            "NHI_ZUES_SAFETY_REVIEW_HISTORY_RETRIES",
             "NHI_ZUES_REPLY_MAX_PER_WINDOW",
             "NHI_ZUES_REACTION_MAX_PER_CHANNEL",
         }
@@ -2673,6 +2678,7 @@ def check_update(*, apply_update: bool) -> dict:
         "behind": behind,
         "ahead": ahead,
         "update_available": behind > 0,
+        "can_fast_forward": behind > 0 and ahead == 0,
     }
     if not apply_update:
         return payload
@@ -2686,6 +2692,15 @@ def check_update(*, apply_update: bool) -> dict:
         }
     if behind == 0:
         return {**payload, "updated": False, "message": "Already up to date."}
+    if ahead > 0:
+        return {
+            **payload,
+            "ok": False,
+            "error": (
+                "This checkout has diverged from origin/main; a safe fast-forward is impossible. "
+                "Reconcile the Git branches manually before updating from the app."
+            ),
+        }
 
     pulled = _git(["pull", "--ff-only", "origin", "main"], check=False)
     if pulled.returncode != 0:

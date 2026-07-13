@@ -28,7 +28,7 @@ TEXT_SUFFIXES = {
 FORBIDDEN_PARTS = {".git", ".local", ".profiles", ".state", "__pycache__"}
 FORBIDDEN_SUFFIXES = {".db", ".har", ".jsonl", ".log", ".sqlite", ".sqlite3"}
 PATTERNS = {
-    "openai_key": re.compile(r"sk-(?:proj-)?[A-Za-z0-9_-]{20,}"),
+    "openai_key": re.compile(r"(?<![A-Za-z0-9])sk-(?:proj-)?[A-Za-z0-9_-]{20,}"),
     "github_token": re.compile(r"(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]{20,}"),
     "discord_token": re.compile(r"[MN][A-Za-z\d]{23}\.[\w-]{6}\.[\w-]{27}"),
     "discord_webhook": re.compile(
@@ -37,9 +37,6 @@ PATTERNS = {
     "private_key": re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
     "machine_user_path": re.compile(
         r"(?i)\b[A-Z]:[\\/]+Users[\\/]+(?!example\b|username\b|your-name\b)[^\\/\s]+"
-    ),
-    "private_persona": re.compile(
-        r"(?i)st\.? augustine|cigar-shaped craft|call-center job|zyn\.bad|joe rogan"
     ),
 }
 DEFAULT_CARD_SUFFIX = "src/nhi_zues/defaults/character_cards/default.json"

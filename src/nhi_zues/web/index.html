@@ -368,6 +368,11 @@
                   <input id="safetyReviewScrollRounds" type="number" min="1" max="150" step="1" />
                 </label>
                 <label class="field">
+                  <span>Dojo Sweep retry passes</span>
+                  <input id="safetyReviewHistoryRetries" type="number" min="0" max="2" step="1" />
+                  <small class="field-hint">Extra full history passes only when Discord stops before the limit or channel beginning; 0 disables retries.</small>
+                </label>
+                <label class="field">
                   <span>Auto reply cooldown</span>
                   <input id="replyCooldownSeconds" type="number" min="0" max="7200" step="30" />
                 </label>
@@ -578,6 +583,62 @@
           </section>
         </div>
       </aside>
+    </div>
+
+    <div
+      id="updateOverlay"
+      class="update-overlay hidden"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="updateOverlayTitle"
+      aria-describedby="updateOverlayDetail"
+    >
+      <div id="updateDialog" class="update-dialog" tabindex="-1" aria-busy="false" data-state="checking">
+        <div class="update-dialog-heading">
+          <div>
+            <div class="eyebrow">The Mask Workshop</div>
+            <h2 id="updateOverlayTitle">Inspecting Kabuki-Cord</h2>
+          </div>
+          <span id="updateResultIcon" class="update-result-icon" aria-hidden="true"><i class="bi bi-cloud-arrow-down"></i></span>
+        </div>
+
+        <div class="update-workshop-stage" aria-hidden="true">
+          <span class="update-stage-curtain update-stage-curtain-left"></span>
+          <span class="update-stage-curtain update-stage-curtain-right"></span>
+          <span id="updateWorkshopSprite" class="update-workshop-sprite"></span>
+          <span class="update-stage-footlights"></span>
+        </div>
+
+        <div class="update-progress-block">
+          <div
+            id="updatePhaseBar"
+            class="update-phase-bar"
+            role="progressbar"
+            aria-label="Application update progress"
+            aria-valuetext="Waiting to check GitHub"
+          >
+            <span data-update-phase="validate"></span>
+            <span data-update-phase="fetch"></span>
+            <span data-update-phase="compare"></span>
+            <span data-update-phase="apply"></span>
+          </div>
+          <ol id="updatePhaseList" class="update-phase-list" aria-label="Git update phases">
+            <li data-update-phase-label="validate">Validate</li>
+            <li data-update-phase-label="fetch">Fetch</li>
+            <li data-update-phase-label="compare">Compare</li>
+            <li data-update-phase-label="apply">Apply</li>
+          </ol>
+        </div>
+
+        <div id="updateOverlayDetail" class="update-dialog-status" role="status" aria-live="polite" aria-atomic="true">
+          Ready to inspect the configured GitHub origin.
+        </div>
+
+        <div class="update-dialog-actions">
+          <button id="updateInstallFromOverlay" class="primary-button hidden" type="button"><i class="bi bi-cloud-download"></i> Install update</button>
+          <button id="closeUpdateOverlay" class="secondary-button hidden" type="button"><i class="bi bi-check2"></i> Done</button>
+        </div>
+      </div>
     </div>
 
     <div id="toast" class="toast"></div>

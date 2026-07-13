@@ -206,7 +206,37 @@ function isDojoSweepTarget(target) {
 function restartSpyFrameTimer() {
   if (spyFrameTimer) clearInterval(spyFrameTimer);
   spyFrameTimer = null;
-  if (!spyPaused) spyFrameTimer = setInterval(advanceSpyFrame, spyFrameMs);
+  if (!spyPaused && !document.hidden) spyFrameTimer = setInterval(advanceSpyFrame, spyFrameMs);
+}
+
+function startMonitorTimers() {
+  if (document.hidden) return;
+  if (!refreshTimer) refreshTimer = setInterval(refresh, 1800);
+  if (!countdownTimer) {
+    countdownTimer = setInterval(() => {
+      renderCountdowns();
+      renderLoopHud(latestState);
+    }, 1000);
+  }
+  restartSpyFrameTimer();
+}
+
+function stopMonitorTimers() {
+  if (refreshTimer) clearInterval(refreshTimer);
+  if (spyFrameTimer) clearInterval(spyFrameTimer);
+  if (countdownTimer) clearInterval(countdownTimer);
+  refreshTimer = null;
+  spyFrameTimer = null;
+  countdownTimer = null;
+}
+
+function syncMonitorVisibility() {
+  if (document.hidden) {
+    stopMonitorTimers();
+    return;
+  }
+  refresh();
+  startMonitorTimers();
 }
 
 function setSpyPaused(paused) {
@@ -921,13 +951,8 @@ loadSpyAnimation();
 setupSoundToggle();
 setupActionClearButtons();
 refresh();
-refreshTimer = setInterval(refresh, 1800);
-countdownTimer = setInterval(() => {
-  renderCountdowns();
-  renderLoopHud(latestState);
-}, 1000);
+startMonitorTimers();
+document.addEventListener("visibilitychange", syncMonitorVisibility);
 window.addEventListener("beforeunload", () => {
-  if (refreshTimer) clearInterval(refreshTimer);
-  if (spyFrameTimer) clearInterval(spyFrameTimer);
-  if (countdownTimer) clearInterval(countdownTimer);
+  stopMonitorTimers();
 });

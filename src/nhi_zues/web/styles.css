@@ -2739,6 +2739,382 @@ button:disabled {
   transform: translateY(0);
 }
 
+.update-overlay {
+  position: fixed;
+  z-index: 165;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+  background:
+    radial-gradient(circle at 50% 24%, rgba(126, 216, 255, 0.12), transparent 28%),
+    linear-gradient(90deg, rgba(64, 9, 18, 0.78), rgba(5, 8, 12, 0.92) 26%, rgba(5, 8, 12, 0.94) 74%, rgba(64, 9, 18, 0.78));
+  backdrop-filter: blur(12px);
+}
+
+.update-overlay.hidden {
+  display: none;
+}
+
+.update-dialog {
+  position: relative;
+  width: min(560px, calc(100vw - 40px));
+  border: 1px solid rgba(149, 101, 255, 0.42);
+  border-radius: 12px;
+  background:
+    linear-gradient(180deg, rgba(24, 31, 39, 0.98), rgba(10, 15, 20, 0.99)),
+    #10161c;
+  box-shadow:
+    0 30px 90px rgba(0, 0, 0, 0.62),
+    0 0 0 1px rgba(126, 216, 255, 0.06) inset;
+  overflow: hidden;
+}
+
+.update-dialog:focus-visible {
+  outline: 3px solid rgba(126, 216, 255, 0.82);
+  outline-offset: 4px;
+}
+
+.update-dialog-heading {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 20px 22px 12px;
+}
+
+.update-dialog-heading h2 {
+  margin: 4px 0 0;
+  color: #f4f7fa;
+  font-size: 22px;
+  line-height: 1.15;
+}
+
+.update-result-icon {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 auto;
+  border: 1px solid rgba(126, 216, 255, 0.24);
+  border-radius: 50%;
+  background: rgba(126, 216, 255, 0.08);
+  color: var(--cyan);
+  font-size: 18px;
+}
+
+.update-workshop-stage {
+  position: relative;
+  height: 260px;
+  margin: 0 18px;
+  border: 1px solid rgba(217, 185, 91, 0.18);
+  border-radius: 10px;
+  background:
+    radial-gradient(ellipse at 50% 62%, rgba(217, 185, 91, 0.14), transparent 34%),
+    linear-gradient(180deg, #121923 0%, #10161d 72%, #18140f 72%, #0c0d0e 100%);
+  box-shadow: inset 0 -26px 46px rgba(0, 0, 0, 0.36);
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.update-workshop-stage::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: 12px 18% 24px;
+  border: 1px solid rgba(217, 185, 91, 0.18);
+  border-bottom: 0;
+  border-radius: 50% 50% 0 0;
+  background: repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.018) 0 1px, transparent 1px 26px);
+}
+
+.update-stage-curtain {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  bottom: 0;
+  width: 84px;
+  background:
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.055) 0 5px, transparent 5px 17px),
+    linear-gradient(90deg, #4b111c, #741827 58%, #3d0b14);
+  filter: drop-shadow(0 0 12px rgba(0, 0, 0, 0.5));
+}
+
+.update-stage-curtain-left {
+  left: 0;
+  clip-path: polygon(0 0, 100% 0, 72% 100%, 0 100%);
+}
+
+.update-stage-curtain-right {
+  right: 0;
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 28% 100%);
+}
+
+.update-workshop-sprite {
+  position: absolute;
+  z-index: 1;
+  left: 50%;
+  bottom: 2px;
+  display: block;
+  width: 256px;
+  height: 256px;
+  background-image: url("/assets/update-mask-workshop-checking-v2-sheet.png");
+  background-repeat: no-repeat;
+  background-position: 0 0;
+  background-size: 2048px 256px;
+  image-rendering: auto;
+  transform: translateX(-50%);
+  filter: drop-shadow(0 15px 18px rgba(0, 0, 0, 0.52));
+  animation: update-mask-workshop-run 3.2s steps(8, end) infinite;
+}
+
+.update-stage-footlights {
+  position: absolute;
+  z-index: 3;
+  right: 92px;
+  bottom: 10px;
+  left: 92px;
+  height: 5px;
+  border-radius: 50%;
+  background: repeating-linear-gradient(90deg, #e7c56c 0 7px, transparent 7px 24px);
+  box-shadow: 0 -7px 20px rgba(217, 185, 91, 0.2);
+  opacity: 0.72;
+}
+
+.update-progress-block {
+  padding: 16px 22px 0;
+}
+
+.update-phase-bar {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 5px;
+  height: 9px;
+}
+
+.update-phase-bar > span {
+  position: relative;
+  border: 1px solid rgba(148, 160, 172, 0.18);
+  border-radius: 999px;
+  background: rgba(148, 160, 172, 0.1);
+  overflow: hidden;
+}
+
+.update-phase-bar > span.active {
+  border-color: rgba(217, 185, 91, 0.48);
+  background: rgba(217, 185, 91, 0.18);
+}
+
+.update-phase-bar > span.active::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 42%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, transparent, rgba(255, 236, 166, 0.92), transparent);
+  animation: update-phase-sheen 1.35s ease-in-out infinite;
+}
+
+.update-phase-bar > span.complete {
+  border-color: rgba(95, 201, 120, 0.44);
+  background: linear-gradient(90deg, rgba(95, 201, 120, 0.48), rgba(126, 216, 255, 0.42));
+}
+
+.update-phase-bar > span.ready {
+  border-color: rgba(217, 185, 91, 0.5);
+  background: rgba(217, 185, 91, 0.3);
+}
+
+.update-phase-bar > span.skipped {
+  border-style: dashed;
+  opacity: 0.46;
+}
+
+.update-phase-bar > span.failed {
+  border-color: rgba(239, 107, 120, 0.5);
+  background: rgba(239, 107, 120, 0.24);
+}
+
+.update-phase-list {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 5px;
+  margin: 7px 0 0;
+  padding: 0;
+  color: var(--faint);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  list-style: none;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.update-phase-list li.active {
+  color: #f0dfa8;
+}
+
+.update-phase-list li.complete {
+  color: #aeeabd;
+}
+
+.update-phase-list li.ready {
+  color: #f0dfa8;
+}
+
+.update-phase-list li.skipped {
+  opacity: 0.46;
+}
+
+.update-phase-list li.failed {
+  color: #ffc1c8;
+}
+
+.update-dialog-status {
+  min-height: 48px;
+  margin: 14px 22px 0;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.025);
+  color: #cbd6df;
+  font-size: 13px;
+  line-height: 1.45;
+  padding: 10px 12px;
+}
+
+.update-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  min-height: 68px;
+  padding: 16px 22px;
+}
+
+.update-dialog-actions .hidden {
+  display: none;
+}
+
+.update-dialog[data-state="available"] {
+  border-color: rgba(217, 185, 91, 0.48);
+}
+
+.update-dialog[data-state="available"] .update-result-icon {
+  border-color: rgba(217, 185, 91, 0.42);
+  background: rgba(217, 185, 91, 0.1);
+  color: #f0dfa8;
+}
+
+.update-dialog[data-state="available"] .update-workshop-sprite {
+  animation: update-mask-workshop-finish 2.6s steps(7, end) 1 forwards;
+}
+
+.update-dialog[data-state="updated"] {
+  border-color: rgba(126, 216, 255, 0.48);
+}
+
+.update-dialog[data-state="updated"] .update-result-icon,
+.update-dialog[data-state="current"] .update-result-icon {
+  border-color: rgba(95, 201, 120, 0.42);
+  background: rgba(95, 201, 120, 0.1);
+  color: #bff0cb;
+}
+
+.update-dialog[data-state="updated"] .update-workshop-sprite {
+  background-image: url("/assets/update-mask-workshop-updated-v2-sheet.png");
+  animation: update-mask-workshop-finish 1.95s steps(7, end) 1 forwards;
+  filter: drop-shadow(0 0 14px rgba(126, 216, 255, 0.22)) drop-shadow(0 15px 18px rgba(0, 0, 0, 0.52));
+}
+
+.update-dialog[data-state="current"] {
+  border-color: rgba(95, 201, 120, 0.46);
+}
+
+.update-dialog[data-state="current"] .update-workshop-sprite {
+  background-image: url("/assets/update-mask-workshop-current-v2-sheet.png");
+  animation: update-mask-workshop-finish 2.1s steps(7, end) 1 forwards;
+  filter: drop-shadow(0 0 12px rgba(95, 201, 120, 0.2)) drop-shadow(0 15px 18px rgba(0, 0, 0, 0.52));
+}
+
+.update-dialog[data-state="failure"] {
+  border-color: rgba(239, 107, 120, 0.5);
+}
+
+.update-dialog[data-state="failure"] .update-result-icon {
+  border-color: rgba(239, 107, 120, 0.46);
+  background: rgba(239, 107, 120, 0.11);
+  color: #ffc1c8;
+}
+
+.update-dialog[data-state="failure"] .update-workshop-sprite {
+  animation: update-workshop-failure 0.48s ease 2;
+  filter: grayscale(0.45) hue-rotate(125deg) drop-shadow(0 15px 18px rgba(0, 0, 0, 0.52));
+}
+
+.update-dialog[data-state="failure"] .update-dialog-status {
+  border-color: rgba(239, 107, 120, 0.32);
+  background: rgba(239, 107, 120, 0.08);
+  color: #ffcbd1;
+}
+
+@keyframes update-mask-workshop-run {
+  to {
+    background-position: -2048px 0;
+  }
+}
+
+@keyframes update-mask-workshop-finish {
+  to {
+    background-position: 100% 0;
+  }
+}
+
+@keyframes update-phase-sheen {
+  from {
+    transform: translateX(-125%);
+  }
+
+  to {
+    transform: translateX(340%);
+  }
+}
+
+@keyframes update-workshop-failure {
+  25% {
+    transform: translateX(calc(-50% - 3px));
+  }
+
+  75% {
+    transform: translateX(calc(-50% + 3px));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .update-workshop-sprite,
+  .update-dialog[data-state] .update-workshop-sprite,
+  .update-phase-bar > span.active::after {
+    animation: none;
+  }
+
+  .update-dialog[data-state="updated"] .update-workshop-sprite,
+  .update-dialog[data-state="current"] .update-workshop-sprite,
+  .update-dialog[data-state="available"] .update-workshop-sprite {
+    background-position: 100% 0;
+  }
+}
+
+@media (max-height: 720px) {
+  .update-workshop-stage {
+    height: 216px;
+  }
+
+  .update-workshop-sprite {
+    bottom: -20px;
+    transform: translateX(-50%) scale(0.84);
+  }
+}
+
 .onboarding-overlay {
   position: fixed;
   z-index: 120;

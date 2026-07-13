@@ -26,6 +26,14 @@ class WebContractTests(unittest.TestCase):
         self.assertIn('api("/api/monitor-state")', script)
         self.assertNotIn('api("/api/state")', script)
 
+    def test_hidden_windows_suspend_background_polling_and_animation(self) -> None:
+        monitor = (WEB_ROOT / "monitor.js").read_text(encoding="utf-8")
+        app = (WEB_ROOT / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('document.addEventListener("visibilitychange", syncMonitorVisibility)', monitor)
+        self.assertIn("stopMonitorTimers()", monitor)
+        self.assertIn("if (document.hidden || !appState", app)
+
     def test_monitor_renders_content_free_engagement_funnel_and_freshness(self) -> None:
         markup = (WEB_ROOT / "monitor.html").read_text(encoding="utf-8")
         script = (WEB_ROOT / "monitor.js").read_text(encoding="utf-8")
@@ -99,6 +107,46 @@ class WebContractTests(unittest.TestCase):
         self.assertIn('url("/assets/scanner-kabuki-discord-blocked-v2-sheet.png")', styles)
         self.assertIn("animation: scanner-discord-blocked 3.6s steps(8, end) infinite", styles)
         self.assertIn("background-position: -624px 0", styles)
+
+    def test_update_mask_workshop_is_accessible_and_uses_truthful_git_phases(self) -> None:
+        markup = (WEB_ROOT / "index.html").read_text(encoding="utf-8")
+        script = (WEB_ROOT / "app.js").read_text(encoding="utf-8")
+        styles = (WEB_ROOT / "styles.css").read_text(encoding="utf-8")
+
+        self.assertIn('id="updateOverlay"', markup)
+        self.assertIn('role="dialog"', markup)
+        self.assertIn('aria-modal="true"', markup)
+        self.assertIn('id="updatePhaseBar"', markup)
+        self.assertIn('role="progressbar"', markup)
+        self.assertNotIn('aria-valuenow=', markup)
+        for phase in ("validate", "fetch", "compare", "apply"):
+            self.assertIn(f'data-update-phase="{phase}"', markup)
+        for state in ('"updated"', '"current"', '"failure"'):
+            self.assertIn(f"dialog.dataset.state = {state}", script)
+        self.assertIn("const diverged = Boolean(result.update_available && ahead > 0)", script)
+        self.assertIn("No remote update is needed", script)
+        self.assertIn("Manual Git reconciliation needed", script)
+        self.assertIn("if (updateOperationInFlight) return", script)
+        self.assertIn("setUpdateControlsBusy(true)", script)
+        self.assertIn('openDialog("updateOverlay", "#updateDialog")', script)
+        self.assertIn("if (!focusable.length) {", script)
+        self.assertIn("event.preventDefault();", script)
+        self.assertIn('url("/assets/update-mask-workshop-checking-v2-sheet.png")', styles)
+        self.assertIn('url("/assets/update-mask-workshop-updated-v2-sheet.png")', styles)
+        self.assertIn('url("/assets/update-mask-workshop-current-v2-sheet.png")', styles)
+        self.assertIn("animation: update-mask-workshop-run 3.2s steps(8, end) infinite", styles)
+        self.assertIn("background-position: -2048px 0", styles)
+        self.assertIn("animation: update-mask-workshop-finish 1.95s steps(7, end) 1 forwards", styles)
+        self.assertIn("background-position: 100% 0", styles)
+
+    def test_dojo_history_retry_setting_is_editable_and_persisted(self) -> None:
+        markup = (WEB_ROOT / "index.html").read_text(encoding="utf-8")
+        script = (WEB_ROOT / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('id="safetyReviewHistoryRetries"', markup)
+        self.assertIn('min="0" max="2" step="1"', markup)
+        self.assertIn("appState.env.NHI_ZUES_SAFETY_REVIEW_HISTORY_RETRIES", script)
+        self.assertIn("NHI_ZUES_SAFETY_REVIEW_HISTORY_RETRIES:", script)
 
     def test_posting_animation_uses_v2_eight_frame_sheet(self) -> None:
         styles = (WEB_ROOT / "styles.css").read_text(encoding="utf-8")
@@ -211,6 +259,9 @@ class WebContractTests(unittest.TestCase):
             "mode-kabuki-full-auto-v2-sheet.png",
             "mode-kabuki-live-fire-v2-sheet.png",
             "monitor-arigato-v2-sheet.png",
+            "update-mask-workshop-checking-v2-sheet.png",
+            "update-mask-workshop-updated-v2-sheet.png",
+            "update-mask-workshop-current-v2-sheet.png",
         ):
             with self.subTest(filename=filename):
                 with Image.open(WEB_ROOT / "assets" / filename) as sheet:

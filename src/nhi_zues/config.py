@@ -51,6 +51,7 @@ class AppConfig:
     safety_review_exclusive: bool
     safety_review_history_limit: int
     safety_review_scroll_rounds: int
+    safety_review_history_retries: int
     reply_cooldown_seconds: float
     reply_window_seconds: float
     reply_max_per_window: int
@@ -136,6 +137,10 @@ def load_config() -> AppConfig:
         safety_review_exclusive=_env_bool("NHI_ZUES_SAFETY_REVIEW_EXCLUSIVE", default=True),
         safety_review_history_limit=max(20, _env_int("NHI_ZUES_SAFETY_REVIEW_HISTORY_LIMIT", 420)),
         safety_review_scroll_rounds=max(1, _env_int("NHI_ZUES_SAFETY_REVIEW_SCROLL_ROUNDS", 45)),
+        safety_review_history_retries=max(
+            0,
+            min(_env_int("NHI_ZUES_SAFETY_REVIEW_HISTORY_RETRIES", 1), 2),
+        ),
         reply_cooldown_seconds=max(0.0, _env_float("NHI_ZUES_REPLY_COOLDOWN_SECONDS", 900.0)),
         reply_window_seconds=max(60.0, _env_float("NHI_ZUES_REPLY_WINDOW_SECONDS", 3600.0)),
         reply_max_per_window=max(0, _env_int("NHI_ZUES_REPLY_MAX_PER_WINDOW", 3)),

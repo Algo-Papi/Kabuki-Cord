@@ -13,6 +13,13 @@ from .gui import GuiHandler
 
 ASSET_ROOT = asset_root()
 BADGE_ICON_HANDLE = None
+WEBVIEW2_RUNTIME_FLAGS = (
+    "--renderer-process-limit=2",
+    "--disable-background-networking",
+    "--disable-component-update",
+    "--disable-domain-reliability",
+    "--disable-sync",
+)
 
 
 class DesktopBridge:
@@ -106,6 +113,17 @@ def set_taskbar_badge(active: bool) -> bool:
         return False
 
 
+def configure_webview2_runtime() -> None:
+    """Use a bounded local-UI renderer footprint while preserving caller flags."""
+    key = "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"
+    existing = os.environ.get(key, "").strip()
+    values = existing.split() if existing else []
+    for flag in WEBVIEW2_RUNTIME_FLAGS:
+        if flag not in values:
+            values.append(flag)
+    os.environ[key] = " ".join(values)
+
+
 def _find_kabuki_window() -> int:
     user32 = ctypes.windll.user32
     current_pid = os.getpid()
@@ -185,6 +203,7 @@ def main() -> None:
     thread = threading.Thread(target=server.serve_forever, name="kabuki-cord-gui", daemon=True)
     thread.start()
 
+    configure_webview2_runtime()
     try:
         import webview
     except Exception:

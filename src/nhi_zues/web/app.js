@@ -23,6 +23,7 @@ let bootSoundQueued = false;
 let bootSoundPlayed = false;
 let kabukiAudioUnlocked = false;
 let serverPersistTimer = null;
+let updateOperationInFlight = false;
 
 const {
   runtimeModeClassNames,
@@ -89,6 +90,7 @@ const formSectionFieldIds = Object.freeze({
     "safetyReviewExclusive",
     "safetyReviewHistoryLimit",
     "safetyReviewScrollRounds",
+    "safetyReviewHistoryRetries",
     "replyCooldownSeconds",
     "replyWindowSeconds",
     "replyMaxPerWindow",
@@ -514,6 +516,7 @@ function renderSettings(options = {}) {
   $("safetyReviewExclusive").value = strBool(appState.env.NHI_ZUES_SAFETY_REVIEW_EXCLUSIVE, true) ? "true" : "false";
   $("safetyReviewHistoryLimit").value = appState.env.NHI_ZUES_SAFETY_REVIEW_HISTORY_LIMIT || "420";
   $("safetyReviewScrollRounds").value = appState.env.NHI_ZUES_SAFETY_REVIEW_SCROLL_ROUNDS || "45";
+  $("safetyReviewHistoryRetries").value = appState.env.NHI_ZUES_SAFETY_REVIEW_HISTORY_RETRIES || "1";
   $("replyCooldownSeconds").value = appState.env.NHI_ZUES_REPLY_COOLDOWN_SECONDS || "900";
   $("replyWindowSeconds").value = appState.env.NHI_ZUES_REPLY_WINDOW_SECONDS || "3600";
   $("replyMaxPerWindow").value = appState.env.NHI_ZUES_REPLY_MAX_PER_WINDOW || "3";
@@ -2059,6 +2062,7 @@ async function saveAll() {
       NHI_ZUES_SAFETY_REVIEW_EXCLUSIVE: $("safetyReviewExclusive").value,
       NHI_ZUES_SAFETY_REVIEW_HISTORY_LIMIT: $("safetyReviewHistoryLimit").value,
       NHI_ZUES_SAFETY_REVIEW_SCROLL_ROUNDS: $("safetyReviewScrollRounds").value,
+      NHI_ZUES_SAFETY_REVIEW_HISTORY_RETRIES: $("safetyReviewHistoryRetries").value,
       NHI_ZUES_REPLY_COOLDOWN_SECONDS: $("replyCooldownSeconds").value,
       NHI_ZUES_REPLY_WINDOW_SECONDS: $("replyWindowSeconds").value,
       NHI_ZUES_REPLY_MAX_PER_WINDOW: $("replyMaxPerWindow").value,
@@ -2373,13 +2377,106 @@ async function refreshChannelLatest() {
 }
 
 async function checkUpdates() {
-  const result = await api("/api/update-check", { method: "POST", body: JSON.stringify({}) });
-  renderUpdateResult(result);
+  await runUpdateOperation({ applyUpdate: false });
 }
 
 async function applyUpdate() {
-  const result = await api("/api/update", { method: "POST", body: JSON.stringify({}) });
-  renderUpdateResult(result);
+  await runUpdateOperation({ applyUpdate: true });
+}
+
+async function runUpdateOperation({ applyUpdate }) {
+  if (updateOperationInFlight) return;
+  updateOperationInFlight = true;
+  setUpdateControlsBusy(true);
+  showUpdateOverlay({ applyUpdate });
+  try {
+    const result = await api(applyUpdate ? "/api/update" : "/api/update-check", {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    renderUpdateResult(result, { applyUpdate });
+  } catch (error) {
+    renderUpdateFailure(error?.message || "Update check failed.");
+  } finally {
+    updateOperationInFlight = false;
+    setUpdateControlsBusy(false);
+  }
+}
+
+function showUpdateOverlay({ applyUpdate }) {
+  const dialog = $("updateDialog");
+  dialog.dataset.state = "checking";
+  dialog.setAttribute("aria-busy", "true");
+  $("updateOverlayTitle").textContent = applyUpdate ? "Updating Kabuki-Cord" : "Inspecting Kabuki-Cord";
+  $("updateOverlayDetail").textContent = applyUpdate
+    ? "Validating the checkout, fetching origin/main, comparing commits, and applying a safe fast-forward when available."
+    : "Validating the checkout, fetching origin/main, and comparing it with this installation.";
+  $("updateOverlayDetail").setAttribute("aria-live", "polite");
+  $("updateResultIcon").innerHTML = '<i class="bi bi-cloud-arrow-down"></i>';
+  $("updateInstallFromOverlay").classList.add("hidden");
+  $("closeUpdateOverlay").classList.add("hidden");
+  setUpdatePhaseState({ active: applyUpdate ? ["validate", "fetch", "compare", "apply"] : ["validate", "fetch", "compare"] });
+  $("updatePhaseBar").setAttribute(
+    "aria-valuetext",
+    applyUpdate
+      ? "Validating, fetching, comparing, and applying a safe Git fast-forward"
+      : "Validating, fetching, and comparing Git commits",
+  );
+  if ($("updateOverlay").classList.contains("hidden")) {
+    openDialog("updateOverlay", "#updateDialog");
+  }
+}
+
+function renderUpdateFailure(message) {
+  const detail = message || "Update check failed.";
+  const dialog = $("updateDialog");
+  dialog.dataset.state = "failure";
+  dialog.setAttribute("aria-busy", "false");
+  $("updateOverlayTitle").textContent = "The inspection hit a snag";
+  $("updateOverlayDetail").textContent = detail;
+  $("updateOverlayDetail").setAttribute("aria-live", "assertive");
+  $("updateResultIcon").innerHTML = '<i class="bi bi-exclamation-triangle"></i>';
+  $("updatePhaseBar").setAttribute("aria-valuetext", `Update failed: ${detail}`);
+  setUpdatePhaseState({ failed: ["validate", "fetch", "compare", "apply"] });
+  showUpdateTerminalAction();
+  $("updateStatus").textContent = detail;
+  toast(detail);
+}
+
+function showUpdateTerminalAction({ install = false } = {}) {
+  const installButton = $("updateInstallFromOverlay");
+  const closeButton = $("closeUpdateOverlay");
+  installButton.classList.toggle("hidden", !install);
+  closeButton.classList.remove("hidden");
+  requestAnimationFrame(() => (install ? installButton : closeButton).focus());
+}
+
+function setUpdateControlsBusy(busy) {
+  [$("checkUpdates"), $("applyUpdate"), $("updateInstallFromOverlay")].forEach((button) => {
+    if (button) button.disabled = busy;
+  });
+}
+
+function setUpdatePhaseState({ completed = [], active = [], ready = [], skipped = [], failed = [] } = {}) {
+  const classForPhase = (phase) => {
+    if (completed.includes(phase)) return "complete";
+    if (active.includes(phase)) return "active";
+    if (ready.includes(phase)) return "ready";
+    if (skipped.includes(phase)) return "skipped";
+    if (failed.includes(phase)) return "failed";
+    return "";
+  };
+  document.querySelectorAll("[data-update-phase]").forEach((segment) => {
+    segment.className = classForPhase(segment.dataset.updatePhase);
+  });
+  document.querySelectorAll("[data-update-phase-label]").forEach((label) => {
+    label.className = classForPhase(label.dataset.updatePhaseLabel);
+  });
+}
+
+function closeUpdateOverlay() {
+  if (updateOperationInFlight) return;
+  closeDialog("updateOverlay");
 }
 
 async function refreshOpenAIModels() {
@@ -2502,14 +2599,78 @@ async function dismissSafetyReviews({ reviewIds = [], serverId = "", channelId =
   }
 }
 
-function renderUpdateResult(result) {
-  const message = result.ok
-    ? result.update_available
-      ? `Update available: ${result.behind} commit(s) behind.`
-      : result.message || "Kabuki-Cord is up to date."
-    : result.error || "Update check failed.";
+function renderUpdateResult(result, { applyUpdate = false } = {}) {
+  const ahead = Math.max(0, Number(result.ahead) || 0);
+  const diverged = Boolean(result.update_available && ahead > 0);
+  const message = updateResultMessage(result, { ahead, diverged });
   $("updateStatus").textContent = message;
+
+  if (!result.ok) {
+    renderUpdateFailure(message);
+    return;
+  }
   toast(message);
+
+  const dialog = $("updateDialog");
+  dialog.setAttribute("aria-busy", "false");
+  $("updateOverlayDetail").setAttribute("aria-live", "polite");
+  if (diverged) {
+    dialog.dataset.state = "failure";
+    $("updateOverlayTitle").textContent = "Manual Git reconciliation needed";
+    $("updateOverlayDetail").textContent = `origin/main has ${result.behind} new commit${result.behind === 1 ? "" : "s"}, but this checkout is ${ahead} commit${ahead === 1 ? "" : "s"} ahead. A safe fast-forward is impossible.`;
+    $("updateResultIcon").innerHTML = '<i class="bi bi-signpost-split"></i>';
+    $("updatePhaseBar").setAttribute("aria-valuetext", "Update requires manual Git reconciliation");
+    setUpdatePhaseState({ completed: ["validate", "fetch", "compare"], failed: ["apply"] });
+    showUpdateTerminalAction();
+    return;
+  }
+  if (result.updated) {
+    dialog.dataset.state = "updated";
+    $("updateOverlayTitle").textContent = "Fresh lacquer, fresh version";
+    $("updateOverlayDetail").textContent = "Kabuki-Cord updated successfully. Restart the app to load the new checkout.";
+    $("updateResultIcon").innerHTML = '<i class="bi bi-check2-circle"></i>';
+    $("updatePhaseBar").setAttribute("aria-valuetext", "Update installed successfully");
+    setUpdatePhaseState({ completed: ["validate", "fetch", "compare", "apply"] });
+    showUpdateTerminalAction();
+    return;
+  }
+
+  if (!result.update_available) {
+    dialog.dataset.state = "current";
+    $("updateOverlayTitle").textContent = ahead > 0 ? "No remote update is needed" : "The mask is already pristine";
+    $("updateOverlayDetail").textContent = ahead > 0
+      ? `This checkout is ${ahead} commit${ahead === 1 ? "" : "s"} ahead of origin/main; there is nothing new to install from the remote.`
+      : "This installation exactly matches origin/main. No update is needed.";
+    $("updateResultIcon").innerHTML = '<i class="bi bi-patch-check"></i>';
+    $("updatePhaseBar").setAttribute(
+      "aria-valuetext",
+      ahead > 0 ? "No remote update needed; local checkout is ahead" : "Version exactly matches origin/main",
+    );
+    setUpdatePhaseState({ completed: ["validate", "fetch", "compare"], skipped: ["apply"] });
+    showUpdateTerminalAction();
+    return;
+  }
+
+  dialog.dataset.state = "available";
+  $("updateOverlayTitle").textContent = "A newly lacquered mask is ready";
+  $("updateOverlayDetail").textContent = `${result.behind} commit${result.behind === 1 ? "" : "s"} available from origin/main.`;
+  $("updateResultIcon").innerHTML = '<i class="bi bi-stars"></i>';
+  $("updatePhaseBar").setAttribute("aria-valuetext", "Update found and ready to install");
+  setUpdatePhaseState({ completed: ["validate", "fetch", "compare"], ready: ["apply"] });
+  showUpdateTerminalAction({ install: !applyUpdate });
+}
+
+function updateResultMessage(result, { ahead, diverged }) {
+  if (!result.ok) return result.error || "Update check failed.";
+  if (diverged) {
+    return `Manual Git reconciliation required: origin/main has ${result.behind} new commit${result.behind === 1 ? "" : "s"}, while this checkout is ${ahead} commit${ahead === 1 ? "" : "s"} ahead.`;
+  }
+  if (result.updated) return "Kabuki-Cord updated successfully. Restart the app to load the new version.";
+  if (result.update_available) return `Update available: ${result.behind} commit(s) behind.`;
+  if (ahead > 0) {
+    return `No remote update is needed; this checkout is ${ahead} commit${ahead === 1 ? "" : "s"} ahead of origin/main.`;
+  }
+  return result.message || "Kabuki-Cord is up to date.";
 }
 
 function lines(id) {
@@ -2649,7 +2810,7 @@ function updateFaviconBadge(active) {
 function startAutoRefresh() {
   if (autoRefreshTimer) return;
   autoRefreshTimer = setInterval(() => {
-    if (!appState || isUserEditing()) return;
+    if (document.hidden || !appState || isUserEditing()) return;
     loadState({ notify: true, background: true }).catch((error) => console.warn(error));
   }, 10_000);
 }
@@ -2922,11 +3083,15 @@ function focusableElements(root) {
 
 function trapDialogFocus(event) {
   if (event.key !== "Tab") return;
-  const overlay = [$("approvalReviewOverlay"), $("onboardingOverlay")]
+  const overlay = [$("updateOverlay"), $("approvalReviewOverlay"), $("onboardingOverlay")]
     .find((item) => item && !item.classList.contains("hidden"));
   if (!overlay) return;
   const focusable = focusableElements(overlay);
-  if (!focusable.length) return;
+  if (!focusable.length) {
+    event.preventDefault();
+    overlay.querySelector('[tabindex="-1"]')?.focus();
+    return;
+  }
   const first = focusable[0];
   const last = focusable[focusable.length - 1];
   if (event.shiftKey && document.activeElement === first) {
@@ -3013,6 +3178,8 @@ $("approvalReviewOverlay").addEventListener("click", (event) => {
 $("clearApprovals").addEventListener("click", () => clearApprovals().catch((error) => toast(error.message)));
 $("checkUpdates").addEventListener("click", checkUpdates);
 $("applyUpdate").addEventListener("click", applyUpdate);
+$("updateInstallFromOverlay").addEventListener("click", applyUpdate);
+$("closeUpdateOverlay").addEventListener("click", closeUpdateOverlay);
 $("runtimeMode").addEventListener("change", () => {
   const previousMode = currentRuntimeMode();
   const nextMode = $("runtimeMode").value;
@@ -3123,7 +3290,9 @@ window.addEventListener("pointerdown", unlockKabukiAudio, { once: true });
 window.addEventListener("keydown", unlockKabukiAudio, { once: true });
 window.addEventListener("keydown", (event) => {
   trapDialogFocus(event);
-  if (event.key === "Escape" && !$("approvalReviewOverlay").classList.contains("hidden")) {
+  if (event.key === "Escape" && !$("updateOverlay").classList.contains("hidden")) {
+    closeUpdateOverlay();
+  } else if (event.key === "Escape" && !$("approvalReviewOverlay").classList.contains("hidden")) {
     closeApprovalReview();
   } else if (event.key === "Escape" && !$("onboardingOverlay").classList.contains("hidden")) {
     closeOnboarding();

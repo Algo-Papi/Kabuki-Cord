@@ -58,6 +58,7 @@ class ChannelScanState:
     reply_candidates_observed: int = 0
     history_message_count: int = 0
     history_fresh_count: int = 0
+    safety_history_diagnostics: dict[str, object] | None = None
 
 
 @dataclass
@@ -234,6 +235,9 @@ class NhiZuesRunner:
         if not self.config.channels:
             raise ValueError("Configure at least one channel in NHI_ZUES_CHANNELS.")
 
+        set_stop_event = getattr(session, "set_stop_event", None)
+        if callable(set_stop_event):
+            set_stop_event(stop_event)
         self.memory.load()
         await self._prepare_discord_session(session, verify_login=verify_login)
         await self._run_scan_cycles(
@@ -397,7 +401,8 @@ class NhiZuesRunner:
         planned = list(planned_targets or targets)
         for index, target in enumerate(targets):
             if index > 0:
-                await self._channel_pacing_delay()
+                if await self._channel_pacing_delay(stop_event):
+                    return
             self._notify_target_start(
                 target,
                 index,
@@ -422,12 +427,17 @@ class NhiZuesRunner:
                 return
 
             state = await self._capture_channel_state(session, target)
+            if _stop_requested(stop_event):
+                return
             if getattr(target, "safety_review_enabled", False):
                 visible_count, fresh_count = await self._process_safety_review_channel(
                     session,
                     target,
                     state,
+                    stop_event=stop_event,
                 )
+                if _stop_requested(stop_event):
+                    return
             else:
                 await self._process_regular_channel(session, target, state)
                 visible_count = len(state.visible_messages)
@@ -632,12 +642,16 @@ class NhiZuesRunner:
         session: ChatTransport,
         target,
         state: ChannelScanState,
+        *,
+        stop_event=None,
     ) -> tuple[int, int]:
         review_source, fresh_messages, review_source_label = await self._read_safety_review_source(
             session,
             target,
             state,
         )
+        if _stop_requested(stop_event):
+            return len(review_source), 0
         review_messages = _without_own_messages(
             review_source,
             character_names=state.character_names,
@@ -646,6 +660,19 @@ class NhiZuesRunner:
             own_texts=state.own_texts,
         )
         findings = detect_safety_review_findings(review_messages)
+        fresh_review_messages = _without_own_messages(
+            fresh_messages,
+            character_names=state.character_names,
+            own_author_ids=state.own_author_ids,
+            own_message_ids=state.own_message_ids,
+            own_texts=state.own_texts,
+        )
+        newly_visible_count = len(state.fresh_messages)
+        # A successful history read ingests older rows after the visible-window
+        # capture, so its fresh rows are true backfill.  Visible fallbacks return
+        # state.fresh_messages directly and must not be counted a second time.
+        backfill_discovered_count = len(fresh_review_messages) if review_source_label == "history" else 0
+        total_new_count = newly_visible_count + backfill_discovered_count
         added = self.safety_reviews.add_findings(
             server_id=target.server_id,
             server_label=getattr(target, "server_label", ""),
@@ -659,28 +686,49 @@ class NhiZuesRunner:
             if getattr(self.config, "safety_review_exclusive", True)
             else "other observed channels stay in rotation"
         )
+        diagnostics = state.safety_history_diagnostics or {}
+        stop_reason = str(diagnostics.get("stop_reason") or "unknown")
+        pass_count = max(1, _diagnostic_int(diagnostics.get("pass_count"), default=1))
+        rounds_used = max(0, _diagnostic_int(diagnostics.get("rounds_used")))
+        retry_added = max(0, _diagnostic_int(diagnostics.get("retry_added")))
+        coverage = _safety_history_coverage_summary(diagnostics)
         self.events.add(
             event_type=event_type,
             server_id=target.server_id,
             channel_id=target.channel_id,
             summary=(
                 f"Dojo Sweep scanned {len(review_messages)} non-own {review_source_label} message(s), "
-                f"{len(fresh_messages)} new; queued {len(added)} new review item(s). "
+                f"{newly_visible_count} newly visible since the prior visit and "
+                f"{backfill_discovered_count} older backfill discovery/discoveries; "
+                f"queued {len(added)} new review item(s). {coverage} "
                 f"Replies/reactions are disabled for this sweep target; {sweep_scope}."
             ),
+            reason_code=f"history_{stop_reason}",
+            metrics={
+                "scanned_messages": len(review_messages),
+                "newly_visible": newly_visible_count,
+                "backfill_discovered": backfill_discovered_count,
+                "history_passes": pass_count,
+                "history_rounds": rounds_used,
+                "history_retry_added": retry_added,
+                "queued_reviews": len(added),
+            },
             draft="\n".join(item.text for item in added[:3]),
         )
         log.info(
-            "server=%s channel=%s safety_review=true source=%s scanned=%s fresh=%s queued=%s",
+            "server=%s channel=%s safety_review=true source=%s scanned=%s visible_new=%s backfill_new=%s queued=%s stop=%s passes=%s",
             target.server_id,
             target.channel_id,
             review_source_label,
             len(review_messages),
-            len(fresh_messages),
+            newly_visible_count,
+            backfill_discovered_count,
             len(added),
+            stop_reason,
+            pass_count,
         )
         self.memory.save()
-        return len(review_source), len(fresh_messages)
+        return len(review_source), total_new_count
 
     async def _read_safety_review_source(
         self,
@@ -688,12 +736,14 @@ class NhiZuesRunner:
         target,
         state: ChannelScanState,
     ) -> tuple[list[MessageRecord], list[MessageRecord], str]:
+        limit = max(20, int(getattr(self.config, "safety_review_history_limit", 420) or 420))
+        scroll_rounds = max(1, int(getattr(self.config, "safety_review_scroll_rounds", 45) or 45))
         try:
             review_source = await session.read_channel_history(
                 target.server_id,
                 target.channel_id,
-                limit=int(getattr(self.config, "safety_review_history_limit", 420) or 420),
-                scroll_rounds=int(getattr(self.config, "safety_review_scroll_rounds", 45) or 45),
+                limit=limit,
+                scroll_rounds=scroll_rounds,
             )
         except Exception as exc:
             log.warning(
@@ -712,6 +762,48 @@ class NhiZuesRunner:
                 ),
             )
             return state.visible_messages, state.fresh_messages, "visible"
+
+        diagnostics = self._history_read_diagnostics(session)
+        pass_count = 1
+        retry_added = 0
+        max_retries = max(0, min(2, int(getattr(self.config, "safety_review_history_retries", 1) or 0)))
+        while max_retries > 0 and _safety_history_retry_needed(review_source, diagnostics, limit=limit):
+            prior_ids = {message.message_id for message in review_source}
+            try:
+                retry_source = await session.read_channel_history(
+                    target.server_id,
+                    target.channel_id,
+                    limit=limit,
+                    scroll_rounds=scroll_rounds,
+                )
+            except Exception as exc:
+                log.warning(
+                    "server=%s channel=%s safety_review_history_retry_failed=%s",
+                    target.server_id,
+                    target.channel_id,
+                    exc,
+                )
+                diagnostics = {**diagnostics, "retry_error": str(exc)}
+                break
+            pass_count += 1
+            retry_diagnostics = self._history_read_diagnostics(session)
+            merged = _merge_history_messages(review_source, retry_source, limit=limit)
+            retry_added += len({message.message_id for message in merged} - prior_ids)
+            review_source = merged
+            diagnostics = retry_diagnostics or diagnostics
+            max_retries -= 1
+            if bool(diagnostics.get("cancelled")):
+                break
+
+        diagnostics = {
+            **diagnostics,
+            "pass_count": pass_count,
+            "retry_added": retry_added,
+            "message_count": len(review_source),
+        }
+        state.safety_history_diagnostics = diagnostics
+        if bool(diagnostics.get("cancelled")):
+            return review_source, [], "history-cancelled"
 
         if not review_source:
             diagnostics = await self._message_dom_diagnostics(session, target)
@@ -747,6 +839,17 @@ class NhiZuesRunner:
             own_texts=state.own_texts,
         )
         return review_source, fresh_messages, "history"
+
+    @staticmethod
+    def _history_read_diagnostics(session: ChatTransport) -> dict[str, object]:
+        diagnostics = getattr(session, "history_read_diagnostics", None)
+        if not callable(diagnostics):
+            return {}
+        try:
+            value = diagnostics()
+        except Exception:
+            return {}
+        return dict(value) if isinstance(value, dict) else {}
 
     async def _message_dom_diagnostics(self, session: ChatTransport, target) -> dict[str, object]:
         diagnostics = getattr(session, "message_dom_diagnostics", None)
@@ -1335,12 +1438,12 @@ class NhiZuesRunner:
             message_id=str(delivery.get("message_id") or ""),
         )
 
-    async def _channel_pacing_delay(self) -> None:
+    async def _channel_pacing_delay(self, stop_event=None) -> bool:
         lower = max(0.0, self.config.scanner_min_channel_delay_seconds)
         upper = max(lower, self.config.scanner_max_channel_delay_seconds)
         if upper <= 0:
-            return
-        await asyncio.sleep(random.uniform(lower, upper))
+            return _stop_requested(stop_event)
+        return await _sleep_interruptible(stop_event, random.uniform(lower, upper))
 
     async def _channel_settle_delay(self, stop_event=None) -> bool:
         return await _sleep_interruptible(stop_event, self.config.scanner_channel_settle_seconds)
@@ -1458,6 +1561,65 @@ def _format_safety_review_dom_diagnostics(diagnostics: dict[str, object]) -> str
     if preview:
         parts.append(f"body={preview[:120]}")
     return ", ".join(parts) or "no DOM diagnostics available"
+
+
+def _safety_history_retry_needed(
+    messages: list[MessageRecord],
+    diagnostics: dict[str, object],
+    *,
+    limit: int,
+) -> bool:
+    if not diagnostics or bool(diagnostics.get("cancelled")):
+        return False
+    stop_reason = str(diagnostics.get("stop_reason") or "")
+    if stop_reason in {"channel_start", "limit_reached"}:
+        return False
+    shallow_threshold = min(max(80, limit // 3), limit)
+    return len(messages) < shallow_threshold
+
+
+def _merge_history_messages(
+    first: list[MessageRecord],
+    second: list[MessageRecord],
+    *,
+    limit: int,
+) -> list[MessageRecord]:
+    unique = {message.message_id: message for message in (*first, *second) if message.message_id}
+    ordered = sorted(unique.values(), key=_history_message_order)
+    return ordered[-max(1, limit) :]
+
+
+def _history_message_order(message: MessageRecord) -> int:
+    raw = str(message.message_id or "")
+    token = raw.rsplit("-", 1)[-1]
+    return int(token) if token.isdigit() else 0
+
+
+def _safety_history_coverage_summary(diagnostics: dict[str, object]) -> str:
+    reason = str(diagnostics.get("stop_reason") or "unknown")
+    labels = {
+        "limit_reached": "configured history limit reached",
+        "channel_start": "channel beginning verified",
+        "stable_timeout": "history loader stopped advancing",
+        "round_limit": "scroll-round limit reached",
+        "cancelled": "scan cancelled",
+        "unknown": "coverage status unavailable",
+    }
+    pass_count = max(1, _diagnostic_int(diagnostics.get("pass_count"), default=1))
+    rounds = max(0, _diagnostic_int(diagnostics.get("rounds_used")))
+    retry_added = max(0, _diagnostic_int(diagnostics.get("retry_added")))
+    retry_text = f", retry recovered {retry_added}" if pass_count > 1 else ""
+    return (
+        f"Coverage: {labels.get(reason, reason.replace('_', ' '))} "
+        f"after {pass_count} pass(es) and {rounds} final-pass round(s){retry_text}."
+    )
+
+
+def _diagnostic_int(value: object, *, default: int = 0) -> int:
+    try:
+        return int(str(value))
+    except (TypeError, ValueError):
+        return default
 
 
 def _stop_requested(stop_event) -> bool:
