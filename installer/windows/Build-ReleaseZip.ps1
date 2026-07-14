@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [string]$Version = "2.5.0.dev0"
+    [string]$Version = "2.5.0",
+    [switch]$RequireSignature
 )
 
 $ErrorActionPreference = "Stop"
@@ -42,12 +43,32 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $SigningThumbprint = [Environment]::GetEnvironmentVariable("KABUKI_CORD_SIGNING_CERT_THUMBPRINT")
+if ($RequireSignature -and -not $SigningThumbprint) {
+  throw "A trusted Authenticode signing certificate is required for this release."
+}
 if ($SigningThumbprint) {
   $Certificate = Get-Item "Cert:\CurrentUser\My\$SigningThumbprint" -ErrorAction Stop
+  if (-not $Certificate.HasPrivateKey) {
+    throw "The selected signing certificate does not have an accessible private key."
+  }
+  if ($Certificate.NotAfter -le (Get-Date)) {
+    throw "The selected signing certificate has expired."
+  }
+  if ($Certificate.EnhancedKeyUsageList.ObjectId -notcontains "1.3.6.1.5.5.7.3.3") {
+    throw "The selected certificate is not valid for code signing."
+  }
   $Signature = Set-AuthenticodeSignature -FilePath $ExePath -Certificate $Certificate -TimestampServer "http://timestamp.digicert.com"
   if ($Signature.Status -ne "Valid") {
     throw "Installer signing failed: $($Signature.StatusMessage)"
   }
+}
+
+if ($RequireSignature) {
+  $VerifiedSignature = Get-AuthenticodeSignature -FilePath $ExePath
+  if ($VerifiedSignature.Status -ne "Valid" -or -not $VerifiedSignature.SignerCertificate) {
+    throw "Installer signature verification failed: $($VerifiedSignature.StatusMessage)"
+  }
+  Write-Host "Verified Authenticode signer: $($VerifiedSignature.SignerCertificate.Subject)"
 }
 
 New-Item -ItemType Directory -Force -Path $StageDir | Out-Null

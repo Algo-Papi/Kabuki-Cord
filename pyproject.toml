@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kabuki-cord"
-version = "2.5.0.dev0"
+version = "2.5.0"
 description = "Local Discord web automation and character orchestration app."
 readme = "README.md"
 requires-python = ">=3.11"
