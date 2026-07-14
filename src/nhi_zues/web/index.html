@@ -60,7 +60,7 @@
         </section>
 
         <footer class="account-footer">
-          <div class="avatar-dot runtime-avatar"><img src="/assets/runtime-mask-pixel.png" alt="" /></div>
+          <div class="avatar-dot runtime-avatar"><img src="/assets/app-icon-64.png" alt="" /></div>
           <div>
             <strong>Kabuki runtime</strong>
             <span id="runtimeStatus">local session</span>
@@ -84,6 +84,7 @@
             </button>
             <span id="apiStatus" class="status-pill"></span>
             <div class="topbar-button-group">
+              <button id="openHelp" class="secondary-button" type="button"><i class="bi bi-question-circle"></i> Help</button>
               <button id="runtimeControl" class="secondary-button" type="button"><i class="bi bi-play-fill"></i> Start</button>
               <button id="openScannerMonitor" class="secondary-button" type="button"><i class="bi bi-binoculars"></i> Monitor</button>
               <button id="syncDiscordServers" class="secondary-button"><i class="bi bi-diagram-3"></i> Sync Discord</button>
@@ -656,17 +657,86 @@
       </div>
     </div>
     <div id="onboardingOverlay" class="onboarding-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="onboardingTitle">
-      <div class="onboarding-card">
+      <div class="onboarding-card help-center">
         <div class="onboarding-header">
           <div>
-            <div class="eyebrow">Kabuki-Cord Setup</div>
-            <h2 id="onboardingTitle">First-run checklist</h2>
+            <div class="eyebrow">Kabuki-Cord Field Manual</div>
+            <h2 id="onboardingTitle">Help &amp; setup</h2>
+            <p>Start safely, shape a character, and collect useful diagnostics without uploading anything.</p>
           </div>
-          <button id="closeOnboarding" class="icon-button" type="button" title="Close setup guide" aria-label="Close setup guide"><i class="bi bi-x-lg"></i></button>
+          <button id="closeOnboarding" class="icon-button" type="button" title="Close help" aria-label="Close help"><i class="bi bi-x-lg"></i></button>
         </div>
-        <div id="onboardingSteps" class="onboarding-steps"></div>
+        <div class="help-layout">
+          <nav class="help-nav" aria-label="Help topics">
+            <button class="active" type="button" data-help-topic="start"><i class="bi bi-flag"></i><span>Quick start</span></button>
+            <button type="button" data-help-topic="discord"><i class="bi bi-discord"></i><span>Discord sign-in</span></button>
+            <button type="button" data-help-topic="character"><i class="bi bi-person-vcard"></i><span>Character cards</span></button>
+            <button type="button" data-help-topic="channels"><i class="bi bi-toggles"></i><span>Channel actions</span></button>
+            <button type="button" data-help-topic="modes"><i class="bi bi-broadcast"></i><span>Response modes</span></button>
+            <button type="button" data-help-topic="diagnostics"><i class="bi bi-wrench-adjustable-circle"></i><span>Diagnostics</span></button>
+          </nav>
+          <div class="help-content">
+            <section class="help-topic active" data-help-panel="start">
+              <div class="help-topic-heading"><span>01</span><div><h3>Safe first run</h3><p>Complete these in order. Green items are already ready.</p></div></div>
+              <div id="onboardingSteps" class="onboarding-steps"></div>
+            </section>
+            <section class="help-topic" data-help-panel="discord">
+              <div class="help-topic-heading"><span>02</span><div><h3>Sign into Discord first</h3><p>Kabuki-Cord uses a private local browser profile, not the official bot gateway.</p></div></div>
+              <ol class="help-procedure">
+                <li><strong>Open API &amp; Runtime.</strong> Discord email/password are optional conveniences and are stored in the OS keyring.</li>
+                <li><strong>Click Sign In.</strong> Complete login, CAPTCHA, passkey, or 2FA yourself in the visible Discord window.</li>
+                <li><strong>Keep that window open until the app confirms the session.</strong> Then click Sync Discord.</li>
+                <li><strong>Use Switch Account for another login.</strong> It clears only Kabuki-Cord's private Discord session, not your normal browser.</li>
+              </ol>
+              <div class="help-callout warning"><i class="bi bi-exclamation-triangle"></i><span>Personal-account browser automation is less stable and carries more platform risk than a supported integration. Start in Observe only.</span></div>
+            </section>
+            <section class="help-topic" data-help-panel="character">
+              <div class="help-topic-heading"><span>03</span><div><h3>Build a precise character</h3><p>A custom card is required for persona-driven drafts; observation tools still work without one.</p></div></div>
+              <div class="help-field-grid">
+                <div><strong>Name</strong><span>The identity shown in previews and approvals.</span></div>
+                <div><strong>System prompt</strong><span>Core worldview, voice, limits, and non-negotiable behavior.</span></div>
+                <div><strong>Aliases</strong><span>Names and spellings that count as mentions of the character.</span></div>
+                <div><strong>Trigger keywords</strong><span>Topic cues that make a reply more relevant; they are not commands.</span></div>
+                <div><strong>Style rules</strong><span>Sentence length, tone, vocabulary, formatting, and recurring quirks.</span></div>
+                <div><strong>Engagement rules</strong><span>When to enter, when to stay quiet, and conversations to avoid.</span></div>
+                <div><strong>Growth notes</strong><span>Persistent story and behavior details added after the base card.</span></div>
+                <div><strong>User guidance</strong><span>Extra instructions scoped to one user, server, or channel.</span></div>
+              </div>
+              <div class="help-callout"><i class="bi bi-lightbulb"></i><span>Put stable identity in the system prompt, writing mechanics in Style, and routing decisions in Engagement. Test with Review every draft before autonomy.</span></div>
+            </section>
+            <section class="help-topic" data-help-panel="channels">
+              <div class="help-topic-heading"><span>04</span><div><h3>Channel actions</h3><p>Observation and maintenance do not require a custom character card.</p></div></div>
+              <div class="help-field-grid compact">
+                <div><strong>Observe</strong><span>Reads new visible messages into local memory. It does not send.</span></div>
+                <div><strong>Latest</strong><span>Rereads the newest visible messages in the selected channel.</span></div>
+                <div><strong>Backfill</strong><span>Scrolls older accessible history into local memory.</span></div>
+                <div><strong>React</strong><span>Adds rate-limited lightweight emoji reactions when channel rules allow.</span></div>
+                <div><strong>Engage</strong><span>Allows reply decisions and drafts. A useful custom card and API setup are needed.</span></div>
+                <div><strong>Auto</strong><span>Channel-level permission for unreviewed sends; global mode must also allow it.</span></div>
+                <div><strong>Dojo Sweep</strong><span>Pauses other servers, deep-reviews accessible history, and queues items for manual review.</span></div>
+                <div><strong>Repair / Sync</strong><span>Refreshes server and channel discovery when Discord's UI changes or lists are stale.</span></div>
+              </div>
+            </section>
+            <section class="help-topic" data-help-panel="modes">
+              <div class="help-topic-heading"><span>05</span><div><h3>Choose the right response mode</h3><p>The global mode combines with each channel's Observe, Engage, and Auto switches.</p></div></div>
+              <div class="mode-guide">
+                <div class="mode-guide-card dry"><strong>Observe only</strong><span>Scan and reason, never send. Optional Draft while observing can spend API budget on previews.</span><small>Best for setup, discovery, and regression testing.</small></div>
+                <div class="mode-guide-card review"><strong>Review every draft</strong><span>Eligible messages become approvals. Nothing is sent until you review and click Send.</span><small>Best default for tuning a new card.</small></div>
+                <div class="mode-guide-card limited"><strong>Limited autonomous</strong><span>Regular eligible replies may auto-send; proactive and manual drafts still require review.</span><small>Best after consistent review results.</small></div>
+                <div class="mode-guide-card live"><strong>Autonomous live</strong><span>Eligible replies can auto-send when Engage and Auto are enabled and budgets and guards pass.</span><small>Highest risk; watch pacing and the event feed.</small></div>
+              </div>
+            </section>
+            <section class="help-topic" data-help-panel="diagnostics">
+              <div class="help-topic-heading"><span>06</span><div><h3>Collect local diagnostics</h3><p>Create a support bundle you can inspect and share manually.</p></div></div>
+              <div class="diagnostic-card"><i class="bi bi-file-earmark-zip"></i><div><strong>Privacy-conscious support bundle</strong><span>Includes redacted rotating application logs, content-free activity metrics, app version, platform details, and configuration counts. It excludes chat text, character cards, credentials, API keys, and the Discord browser profile.</span></div></div>
+              <div class="help-callout"><i class="bi bi-shield-check"></i><span>Nothing is uploaded or sent. The folder opens locally so you can review and copy the ZIP yourself.</span></div>
+              <button id="collectLogs" class="primary-button" type="button"><i class="bi bi-folder2-open"></i> Collect Logs &amp; Open Folder</button>
+              <p id="diagnosticStatus" class="diagnostic-status" role="status" aria-live="polite"></p>
+            </section>
+          </div>
+        </div>
         <div class="onboarding-actions">
-          <button id="onboardingSettings" class="secondary-button" type="button"><i class="bi bi-sliders"></i> API & Runtime</button>
+          <button id="onboardingSettings" class="secondary-button" type="button"><i class="bi bi-sliders"></i> API &amp; Runtime</button>
           <button id="onboardingSync" class="secondary-button" type="button"><i class="bi bi-diagram-3"></i> Sync Discord</button>
           <button id="dismissOnboarding" class="primary-button" type="button"><i class="bi bi-check2"></i> Done</button>
         </div>

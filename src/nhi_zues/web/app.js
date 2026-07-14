@@ -421,13 +421,16 @@ function renderServerPanel(options = {}) {
 function renderCharacterCards() {
   const activePath = appState.env.NHI_ZUES_CHARACTER_CARD || appState.active_character.path;
   $("characterCards").innerHTML = appState.characters
-    .map((card) => `
-      <button class="character-card ${card.path === activePath ? "active" : ""}" data-card="${escapeAttr(card.path)}">
-        <div class="portrait"><img src="/assets/placeholders/character.svg" alt="" /></div>
+    .map((card) => {
+      const color = characterColor(card.path || card.name);
+      return `
+      <button class="character-card ${card.path === activePath ? "active" : ""}" data-card="${escapeAttr(card.path)}" style="--card-accent:${color.hex};--card-accent-rgb:${color.rgb}">
+        <div class="portrait"><img src="/assets/kabuki-mask-mark-v2.png" alt="" /></div>
         <strong>${escapeHtml(card.name)}</strong>
         <small>${escapeHtml(card.path)}</small>
       </button>
-    `)
+    `;
+    })
     .join("");
   document.querySelectorAll("[data-card]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -436,6 +439,25 @@ function renderCharacterCards() {
       render();
     });
   });
+}
+
+function characterColor(seed) {
+  const palette = [
+    { hex: "#7ed8ff", rgb: "126,216,255" },
+    { hex: "#c58cff", rgb: "197,140,255" },
+    { hex: "#ff7db6", rgb: "255,125,182" },
+    { hex: "#ff9c67", rgb: "255,156,103" },
+    { hex: "#e1c45a", rgb: "225,196,90" },
+    { hex: "#6ed49a", rgb: "110,212,154" },
+    { hex: "#6fd7d0", rgb: "111,215,208" },
+    { hex: "#7f9cff", rgb: "127,156,255" },
+  ];
+  let hash = 2166136261;
+  for (const character of String(seed || "character")) {
+    hash ^= character.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return palette[(hash >>> 0) % palette.length];
 }
 
 function readCardFromList(path) {
@@ -574,9 +596,20 @@ function needsOnboarding() {
   return !appState?.app?.api_key_set || !appState?.discord?.complete || !servers().length;
 }
 
-function showOnboarding() {
+function showOnboarding(topic = "start") {
   renderOnboardingSteps();
+  selectHelpTopic(topic);
   openDialog("onboardingOverlay");
+}
+
+function selectHelpTopic(topic) {
+  const selected = String(topic || "start");
+  document.querySelectorAll("[data-help-topic]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.helpTopic === selected);
+  });
+  document.querySelectorAll("[data-help-panel]").forEach((panel) => {
+    panel.classList.toggle("active", panel.dataset.helpPanel === selected);
+  });
 }
 
 function closeOnboarding({ dismissed = false } = {}) {
@@ -601,23 +634,23 @@ function renderOnboardingSteps() {
   const mode = runtimeModeLabel(currentRuntimeMode());
   const steps = [
     {
-      title: "1. Add OpenAI API access",
+      title: "1. Sign into Discord",
+      ready: discordReady,
+      body: discordReady
+        ? "Discord credentials are present. Complete a visible Sign In if Discord asks for CAPTCHA, passkey, 2FA, or verification."
+        : "Open API & Runtime, click Sign In, and complete Discord login in the visible private browser window before syncing servers.",
+    },
+    {
+      title: "2. Add OpenAI API access",
       ready: apiReady,
       body: apiReady
         ? "API key is stored in your operating system keyring. Use Models to refresh the project model catalog."
-        : "Paste a Project API key in API & Runtime, save changes, then click Models. The key is stored in your operating system keyring.",
+        : "Paste a Project API key in API & Runtime and save. The key is stored in your operating system keyring, not in the repo.",
     },
     {
-      title: "2. Pick a model and budget",
+      title: "3. Pick a model and budget",
       ready: Boolean(appState?.env?.OPENAI_MODEL || appState?.app?.openai_model),
       body: `Current mode is ${mode}. Set daily/session budgets before enabling Engage on active channels.`,
-    },
-    {
-      title: "3. Sign into Discord",
-      ready: discordReady,
-      body: discordReady
-        ? "Discord credentials are present. Use Sign In & Run when Discord forces a reset or verification before scanning."
-        : "Save Discord credentials or use Sign In & Run, then complete any Discord reset or verification in the visible browser window.",
     },
     {
       title: "4. Sync servers and channels",
@@ -653,6 +686,23 @@ function renderOnboardingSteps() {
       </div>
     `)
     .join("");
+}
+
+async function collectDiagnosticLogs() {
+  const button = $("collectLogs");
+  const status = $("diagnosticStatus");
+  button.disabled = true;
+  status.textContent = "Collecting redacted logs and local configuration details...";
+  try {
+    const result = await api("/api/diagnostics/collect", { method: "POST", body: JSON.stringify({}) });
+    status.textContent = `${result.filename} is ready. Nothing was uploaded.`;
+    toast("Diagnostic bundle created and folder opened");
+  } catch (error) {
+    status.textContent = error.message || "Could not collect diagnostics.";
+    throw error;
+  } finally {
+    button.disabled = false;
+  }
 }
 
 function renderRuntime() {
@@ -3160,9 +3210,14 @@ $("clearModelFilter").addEventListener("click", () => {
   $("openaiModel").focus();
   toast("Model field cleared. Open the dropdown to browse cached models.");
 });
-$("openOnboarding").addEventListener("click", showOnboarding);
+$("openHelp").addEventListener("click", () => showOnboarding("start"));
+$("openOnboarding").addEventListener("click", () => showOnboarding("start"));
 $("closeOnboarding").addEventListener("click", () => closeOnboarding());
 $("dismissOnboarding").addEventListener("click", () => closeOnboarding({ dismissed: true }));
+document.querySelectorAll("[data-help-topic]").forEach((button) => {
+  button.addEventListener("click", () => selectHelpTopic(button.dataset.helpTopic));
+});
+$("collectLogs").addEventListener("click", () => collectDiagnosticLogs().catch((error) => toast(error.message)));
 $("onboardingSettings").addEventListener("click", () => {
   activateTab("settings");
   closeOnboarding();

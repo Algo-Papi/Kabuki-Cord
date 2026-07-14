@@ -8,6 +8,8 @@ from http.server import ThreadingHTTPServer
 from ctypes import wintypes
 
 from .app_paths import asset_root
+from .config import load_config
+from .diagnostics import configure_diagnostic_logging
 from .gui import GuiHandler
 
 
@@ -197,6 +199,7 @@ def _set_taskbar_overlay(hwnd: int, icon: int | None, description: str) -> bool:
 
 
 def main() -> None:
+    configure_diagnostic_logging(load_config().state_dir)
     server = ThreadingHTTPServer(("127.0.0.1", 0), GuiHandler)
     host, port = server.server_address
     url = f"http://{host}:{port}"

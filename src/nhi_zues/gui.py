@@ -43,6 +43,7 @@ from .character import CharacterCardStore
 from .character_memory import CharacterMemoryStore
 from .config import AppConfig, load_config
 from .discord_text import clean_discord_display_name, sanitize_outgoing_draft
+from .diagnostics import collect_diagnostics, configure_diagnostic_logging, open_diagnostics_folder
 from .events import (
     EventLog,
     normalize_event_metrics,
@@ -372,6 +373,16 @@ class GuiHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/update":
             self._json(check_update(apply_update=True))
+            return
+        if parsed.path == "/api/diagnostics/collect":
+            try:
+                self._json(collect_diagnostics(open_folder=True))
+            except (OSError, RuntimeError) as exc:
+                self._json({"ok": False, "error": f"Could not collect logs: {_redact_secret_text(str(exc))}"}, status=500)
+            return
+        if parsed.path == "/api/diagnostics/open-folder":
+            opened = open_diagnostics_folder()
+            self._json({"ok": opened, "message": "Opened the local diagnostics folder." if opened else "Could not open the diagnostics folder."})
             return
         if parsed.path == "/api/character":
             config = load_config()
@@ -2809,6 +2820,7 @@ def _write_json(path: Path, payload: dict) -> None:
 def main() -> None:
     host = os.getenv("KABUKI_CORD_HOST", "127.0.0.1")
     port = int(os.getenv("KABUKI_CORD_PORT", "8765"))
+    configure_diagnostic_logging(load_config().state_dir)
     if not _is_loopback_host(host):
         raise RuntimeError("Kabuki-Cord GUI must bind to a loopback host such as 127.0.0.1 or localhost.")
     server = ThreadingHTTPServer((host, port), GuiHandler)

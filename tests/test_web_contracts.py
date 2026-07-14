@@ -102,6 +102,28 @@ class WebContractTests(unittest.TestCase):
         self.assertIn('api("/api/discord-session-reset"', script)
         self.assertIn('confirmation: "SWITCH_DISCORD_ACCOUNT"', script)
 
+    def test_help_center_covers_setup_modes_and_local_diagnostics(self) -> None:
+        index = (WEB_ROOT / "index.html").read_text(encoding="utf-8")
+        script = (WEB_ROOT / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('id="openHelp"', index)
+        for topic in ("start", "discord", "character", "channels", "modes", "diagnostics"):
+            self.assertIn(f'data-help-topic="{topic}"', index)
+            self.assertIn(f'data-help-panel="{topic}"', index)
+        self.assertIn("Observe only", index)
+        self.assertIn("Review every draft", index)
+        self.assertIn("Limited autonomous", index)
+        self.assertIn("Autonomous live", index)
+        self.assertIn('api("/api/diagnostics/collect"', script)
+        self.assertIn("Nothing was uploaded", script)
+
+    def test_character_cards_use_new_mark_and_stable_color_palette(self) -> None:
+        script = (WEB_ROOT / "app.js").read_text(encoding="utf-8")
+        self.assertIn('/assets/kabuki-mask-mark-v2.png', script)
+        self.assertIn("function characterColor(seed)", script)
+        self.assertIn("--card-accent-rgb", script)
+        self.assertNotIn('/assets/placeholders/character.svg', script)
+
     def test_discord_blocked_animation_uses_v2_eight_frame_sheet(self) -> None:
         styles = (WEB_ROOT / "styles.css").read_text(encoding="utf-8")
         self.assertIn('url("/assets/scanner-kabuki-discord-blocked-v2-sheet.png")', styles)

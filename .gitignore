@@ -23,6 +23,7 @@ dist/
 build/
 output/
 tmp/
+/diagnostics/
 design_assets/*chromakey*.png
 design_assets/previews/*.gif
 Install-Kabuki-Cord.exe
