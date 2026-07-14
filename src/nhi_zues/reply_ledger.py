@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
 from .discord_text import sanitize_outgoing_draft
 from .own_identity import normalize_message_text
-from .state_io import write_json_file
+from .state_io import mutate_json_file, read_json_file, write_json_file
 
 
 @dataclass(frozen=True)
@@ -43,10 +42,6 @@ class ReplyLedger:
         source_ids = _clean_source_ids(source_message_ids)
         draft_hash = _draft_hash(draft)
         reply_id = _reply_id(channel_id=channel_id, draft_hash=draft_hash, source_ids=source_ids)
-        existing = next((item for item in self._items if item.reply_id == reply_id), None)
-        if existing:
-            return existing
-
         item = SentReply(
             reply_id=reply_id,
             created_at=datetime.now(timezone.utc).isoformat(),
@@ -58,10 +53,23 @@ class ReplyLedger:
             message_id=str(message_id or "").strip(),
             draft_text=sanitize_outgoing_draft(draft),
         )
-        self._items.append(item)
-        self._items = self._items[-self.limit :]
-        self._save()
-        return item
+
+        def add_item(payload: dict) -> SentReply:
+            items = _items_from_payload(payload)
+            existing = next((row for row in items if row.reply_id == reply_id), None)
+            if existing:
+                return existing
+            items.append(item)
+            payload["items"] = [asdict(row) for row in items[-self.limit :]]
+            return item
+
+        _, result = mutate_json_file(
+            self.ledger_file,
+            default={"items": []},
+            mutator=add_item,
+        )
+        self._items = self._load()
+        return result
 
     def find_overlap(
         self,
@@ -69,6 +77,7 @@ class ReplyLedger:
         channel_id: str,
         source_message_ids: tuple[str, ...] | list[str],
     ) -> list[SentReply]:
+        self._items = self._load()
         source_ids = set(_clean_source_ids(source_message_ids))
         if not source_ids:
             return []
@@ -123,23 +132,8 @@ class ReplyLedger:
         }
 
     def _load(self) -> list[SentReply]:
-        if not self.ledger_file.exists():
-            return []
-        payload = json.loads(self.ledger_file.read_text(encoding="utf-8-sig"))
-        return [
-            SentReply(
-                reply_id=str(row["reply_id"]),
-                created_at=str(row["created_at"]),
-                server_id=str(row["server_id"]),
-                channel_id=str(row["channel_id"]),
-                mode=str(row.get("mode") or "unknown"),
-                draft_hash=str(row["draft_hash"]),
-                source_message_ids=tuple(str(value) for value in row.get("source_message_ids", [])),
-                message_id=str(row.get("message_id") or ""),
-                draft_text=str(row.get("draft_text") or ""),
-            )
-            for row in payload.get("items", [])
-        ]
+        payload = read_json_file(self.ledger_file, default={"items": []})
+        return _items_from_payload(payload)
 
     def _save(self) -> None:
         self.ledger_file.parent.mkdir(parents=True, exist_ok=True)
@@ -185,3 +179,20 @@ def _parse_created_at(value: str) -> datetime | None:
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def _items_from_payload(payload: dict) -> list[SentReply]:
+    return [
+        SentReply(
+            reply_id=str(row["reply_id"]),
+            created_at=str(row["created_at"]),
+            server_id=str(row["server_id"]),
+            channel_id=str(row["channel_id"]),
+            mode=str(row.get("mode") or "unknown"),
+            draft_hash=str(row["draft_hash"]),
+            source_message_ids=tuple(str(value) for value in row.get("source_message_ids", [])),
+            message_id=str(row.get("message_id") or ""),
+            draft_text=str(row.get("draft_text") or ""),
+        )
+        for row in payload.get("items", [])
+    ]

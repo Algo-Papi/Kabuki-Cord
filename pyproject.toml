@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kabuki-cord"
-version = "1.0.39"
+version = "2.5.0"
 description = "Local Discord web automation and character orchestration app."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -14,6 +14,16 @@ dependencies = [
     "playwright>=1.44.0",
     "python-dotenv>=1.0.0",
     "pywebview>=5.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "build>=1.2.2",
+    "mypy>=1.11.0",
+    "Pillow>=12.3.0",
+    "pip-audit>=2.7.3",
+    "ruff>=0.8.0",
+    "setuptools>=78.1.1",
 ]
 
 [project.scripts]
@@ -26,3 +36,18 @@ kabuki-cord-gui = "nhi_zues.gui:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+nhi_zues = [
+    "assets/*",
+    "defaults/*",
+    "defaults/character_cards/*",
+    "web/*",
+    "web/js/*",
+    "web/assets/*",
+    "web/assets/placeholders/*",
+    "web/assets/monitor_spy_frames/*",
+    "web/assets/monitor_spy_v2_frames/*",
+    "web/assets/monitor_dojo_sweep_frames/*",
+    "web/assets/monitor_dojo_sweep_v2_frames/*",
+]

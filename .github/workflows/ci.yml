@@ -13,30 +13,51 @@ on:
 jobs:
   test:
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - name: Install package
-        run: python -m pip install -e .
-      - name: Install CI tools
-        run: python -m pip install ruff
+      - name: Install package and development checks
+        run: python -m pip install -e ".[dev]"
       - name: Compile Python sources
         run: python -m compileall -f src
-      - name: Ruff correctness lint
-        run: python -m ruff check src tests scripts --select E9,F63,F7,F82
+      - name: Ruff lint
+        run: python -m ruff check src tests scripts
+      - name: Type-check V2 boundaries
+        run: >-
+          python -m mypy
+          src/nhi_zues/app_paths.py
+          src/nhi_zues/budget.py
+          src/nhi_zues/config.py
+          src/nhi_zues/secrets.py
+          src/nhi_zues/settings.py
+          src/nhi_zues/state_io.py
+          src/nhi_zues/transport.py
+          --ignore-missing-imports
+          --follow-imports=skip
       - name: Run Python tests
         run: python -m unittest discover -s tests
       - name: Check JavaScript syntax
         run: |
-          node --check web/app.js
-          node --check web/monitor.js
+          node --check src/nhi_zues/web/app.js
+          node --check src/nhi_zues/web/monitor.js
+          node --check src/nhi_zues/web/js/ui-helpers.js
+      - name: Build and inspect wheel
+        run: |
+          python -m build --wheel
+          python scripts/verify_wheel.py
+      - name: Audit Python dependencies
+        run: python -m pip_audit
       - name: Check version metadata
         run: python scripts/check_version.py --check-github-ref --print-latest-tag
       - name: Secret pattern scan

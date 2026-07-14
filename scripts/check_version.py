@@ -56,11 +56,13 @@ def main() -> int:
             )
             return 1
         print("tag matches pyproject version.")
-    elif latest_tag and latest_tag != expected_tag:
+    elif latest_tag and latest_tag != expected_tag and not is_development_version(version):
         print(
             "release hygiene warning: latest local tag does not match pyproject version "
             f"({latest_tag} != {expected_tag}). Cut a release tag or mark the version as dev."
         )
+    elif is_development_version(version):
+        print("development version; no matching release tag is expected.")
 
     return 0
 
@@ -71,6 +73,10 @@ def project_version() -> str:
     if not version:
         raise SystemExit("pyproject.toml is missing [project].version")
     return version
+
+
+def is_development_version(version: str) -> bool:
+    return any(marker in version.lower() for marker in (".dev", "+dev"))
 
 
 def latest_git_tag() -> str:

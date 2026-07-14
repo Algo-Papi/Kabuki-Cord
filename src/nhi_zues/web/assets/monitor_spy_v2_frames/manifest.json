@@ -1,0 +1,9 @@
+{
+  "frame_count": 8,
+  "frame_ms": 350,
+  "width": 640,
+  "height": 480,
+  "extension": "webp",
+  "timing": "looped-while-normal-scan-target-active",
+  "animation": "eight-pose-fixed-camera-magnifier-scan"
+}

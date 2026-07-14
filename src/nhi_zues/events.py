@@ -1,11 +1,33 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+import re
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .state_io import try_write_json_file
+from .state_io import mutate_json_file, read_json_file, try_write_json_file
+
+
+ENGAGEMENT_METRIC_KEYS = (
+    "fresh_observed",
+    "own_filtered",
+    "pending",
+    "deferred",
+    "eligible",
+    "model_called",
+    "model_requests",
+    "draft_queued",
+    "sent",
+    "rejected",
+    "scanned_messages",
+    "newly_visible",
+    "backfill_discovered",
+    "history_passes",
+    "history_rounds",
+    "history_retry_added",
+    "queued_reviews",
+)
 
 
 @dataclass(frozen=True)
@@ -15,6 +37,8 @@ class EventItem:
     server_id: str
     channel_id: str
     summary: str
+    reason_code: str = ""
+    metrics: dict[str, int] = field(default_factory=dict)
     draft: str = ""
     user_key: str = ""
     message_id: str = ""
@@ -36,6 +60,8 @@ class EventLog:
         server_id: str,
         channel_id: str,
         summary: str,
+        reason_code: str = "",
+        metrics: dict | None = None,
         draft: str = "",
         user_key: str = "",
         message_id: str = "",
@@ -49,6 +75,8 @@ class EventLog:
             server_id=server_id,
             channel_id=channel_id,
             summary=" ".join(summary.strip().split()),
+            reason_code=normalize_reason_code(reason_code),
+            metrics=normalize_event_metrics(metrics),
             draft=draft.strip(),
             user_key=user_key,
             message_id=str(message_id or "").strip(),
@@ -56,9 +84,17 @@ class EventLog:
             target_author=str(target_author or "").strip(),
             emoji=str(emoji or "").strip(),
         )
-        self._items.append(item)
-        self._items = self._items[-self.limit :]
-        self._save()
+        def append_item(payload: dict) -> None:
+            rows = list(payload.get("items", []))
+            rows.append(asdict(item))
+            payload["items"] = rows[-self.limit :]
+
+        mutate_json_file(
+            self.event_file,
+            default={"items": []},
+            mutator=append_item,
+        )
+        self._items = self._load()
         self._append_app_log(item)
         return item
 
@@ -66,9 +102,7 @@ class EventLog:
         return list(self._items)
 
     def _load(self) -> list[EventItem]:
-        if not self.event_file.exists():
-            return []
-        payload = json.loads(self.event_file.read_text(encoding="utf-8-sig"))
+        payload = read_json_file(self.event_file, default={"items": []})
         return [
             EventItem(
                 created_at=str(row.get("created_at") or ""),
@@ -76,6 +110,8 @@ class EventLog:
                 server_id=str(row.get("server_id") or ""),
                 channel_id=str(row.get("channel_id") or ""),
                 summary=str(row.get("summary") or ""),
+                reason_code=normalize_reason_code(row.get("reason_code")),
+                metrics=normalize_event_metrics(row.get("metrics")),
                 draft=str(row.get("draft") or ""),
                 user_key=str(row.get("user_key") or ""),
                 message_id=str(row.get("message_id") or ""),
@@ -95,23 +131,13 @@ class EventLog:
         line_parts = [
             item.created_at,
             item.event_type,
-            f"server={_log_value(item.server_id)}",
-            f"channel={_log_value(item.channel_id)}",
         ]
-        if item.user_key:
-            line_parts.append(f"user={_log_value(item.user_key)}")
-        if item.message_id:
-            line_parts.append(f"message={_log_value(item.message_id)}")
-        if item.target_message_id:
-            line_parts.append(f"target_message={_log_value(item.target_message_id)}")
-        if item.target_author:
-            line_parts.append(f"target_author={_log_value(item.target_author)}")
-        if item.emoji:
-            line_parts.append(f"emoji={_log_value(item.emoji)}")
-        if item.summary:
-            line_parts.append(f"summary={_log_value(item.summary)}")
-        if item.draft:
-            line_parts.append(f"draft={_log_value(item.draft)}")
+        if item.reason_code:
+            line_parts.append(f"reason={_log_value(item.reason_code)}")
+        if item.metrics:
+            line_parts.append(
+                f"metrics={json.dumps(item.metrics, ensure_ascii=True, sort_keys=True)}"
+            )
         try:
             with (self.event_file.parent / "app.log").open("a", encoding="utf-8") as handle:
                 handle.write(" | ".join(line_parts) + "\n")
@@ -121,3 +147,20 @@ class EventLog:
 
 def _log_value(value: str) -> str:
     return json.dumps(str(value or ""), ensure_ascii=False)
+
+
+def normalize_reason_code(value) -> str:
+    cleaned = re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
+    return cleaned[:64]
+
+
+def normalize_event_metrics(value) -> dict[str, int]:
+    if not isinstance(value, dict):
+        return {}
+    normalized: dict[str, int] = {}
+    for key in ENGAGEMENT_METRIC_KEYS:
+        metric = value.get(key)
+        if isinstance(metric, bool) or not isinstance(metric, int) or metric < 0:
+            continue
+        normalized[key] = metric
+    return normalized

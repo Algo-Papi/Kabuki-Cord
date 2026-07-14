@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Kabuki-Cord Mask Workshop V2 Test</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: Inter, system-ui, sans-serif;
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background:
+          radial-gradient(circle at 50% 18%, rgba(126, 216, 255, 0.1), transparent 28%),
+          linear-gradient(90deg, #270811, #090d12 24%, #090d12 76%, #270811);
+        color: #d8e1ea;
+      }
+
+      main {
+        width: min(1080px, calc(100vw - 40px));
+        padding: 36px 0;
+      }
+
+      h1 { margin: 0 0 8px; font-size: 26px; }
+      p { margin: 0 0 22px; color: #8997a5; }
+
+      .states {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 16px;
+      }
+
+      .card {
+        border: 1px solid #25303b;
+        border-radius: 12px;
+        background: rgba(16, 22, 28, 0.96);
+        padding: 16px;
+      }
+
+      .card h2 {
+        margin: 0 0 12px;
+        color: #aab6c1;
+        font-size: 12px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      .stage {
+        position: relative;
+        height: 270px;
+        border: 1px solid rgba(217, 185, 91, 0.18);
+        border-radius: 9px;
+        background:
+          radial-gradient(ellipse at 50% 65%, rgba(217, 185, 91, 0.14), transparent 34%),
+          linear-gradient(180deg, #121923 0%, #10161d 72%, #18140f 72%, #0c0d0e 100%);
+        overflow: hidden;
+      }
+
+      .stage::before,
+      .stage::after {
+        content: "";
+        position: absolute;
+        z-index: 2;
+        top: 0;
+        bottom: 0;
+        width: 48px;
+        background: linear-gradient(90deg, #4b111c, #741827 58%, #3d0b14);
+      }
+
+      .stage::before { left: 0; clip-path: polygon(0 0, 100% 0, 70% 100%, 0 100%); }
+      .stage::after { right: 0; clip-path: polygon(0 0, 100% 0, 100% 100%, 30% 100%); }
+
+      .sprite {
+        position: absolute;
+        z-index: 1;
+        bottom: 2px;
+        left: 50%;
+        width: 256px;
+        height: 256px;
+        background-repeat: no-repeat;
+        background-size: 800% 100%;
+        background-position: 0 0;
+        transform: translateX(-50%);
+        filter: drop-shadow(0 15px 18px rgba(0, 0, 0, 0.52));
+      }
+
+      .checking {
+        background-image: url("../../src/nhi_zues/web/assets/update-mask-workshop-checking-v2-sheet.png");
+        animation: loop 3.2s steps(8, end) infinite;
+      }
+
+      .updated {
+        background-image: url("../../src/nhi_zues/web/assets/update-mask-workshop-updated-v2-sheet.png");
+        animation: finish 1.95s steps(7, end) forwards;
+      }
+
+      .current {
+        background-image: url("../../src/nhi_zues/web/assets/update-mask-workshop-current-v2-sheet.png");
+        animation: finish 2.1s steps(7, end) forwards;
+      }
+
+      .caption {
+        min-height: 48px;
+        margin-top: 12px;
+        color: #8997a5;
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      .replay {
+        margin-top: 18px;
+        border: 1px solid #384653;
+        border-radius: 7px;
+        background: #182129;
+        color: #d8e1ea;
+        padding: 9px 13px;
+        cursor: pointer;
+      }
+
+      @keyframes loop { to { background-position: -2048px 0; } }
+      @keyframes finish { to { background-position: 100% 0; } }
+
+      @media (max-width: 860px) {
+        .states { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>The Mask Workshop</h1>
+      <p>Production-scale preview of the update check loop and its two terminal outcomes.</p>
+      <section class="states">
+        <article class="card">
+          <h2>Checking &middot; looping</h2>
+          <div class="stage"><div class="sprite checking" aria-label="Kabuki actor inspecting and polishing a mask"></div></div>
+          <div class="caption">The actor inspects and polishes the mask while Kabuki-Cord validates, fetches, and compares the GitHub checkout.</div>
+        </article>
+        <article class="card">
+          <h2>Updated &middot; one shot</h2>
+          <div class="stage"><div class="sprite updated" aria-label="Kabuki actor presenting a renewed glowing mask"></div></div>
+          <div class="caption">A warm lacquer glow and triumphant presentation confirm that the update was installed.</div>
+        </article>
+        <article class="card">
+          <h2>Already current &middot; one shot</h2>
+          <div class="stage"><div class="sprite current" aria-label="Kabuki actor returning a pristine mask and bowing"></div></div>
+          <div class="caption">A cool sparkle, careful return to the stand, and modest bow confirm that no update is needed.</div>
+        </article>
+      </section>
+      <button class="replay" type="button">Replay ending animations</button>
+    </main>
+    <script>
+      document.querySelector(".replay").addEventListener("click", () => {
+        document.querySelectorAll(".updated, .current").forEach((sprite) => {
+          sprite.style.animation = "none";
+          void sprite.offsetWidth;
+          sprite.style.animation = "";
+        });
+      });
+    </script>
+  </body>
+</html>

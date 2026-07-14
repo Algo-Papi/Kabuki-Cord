@@ -10,7 +10,8 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot = Resolve-Path (Join-Path $ScriptDir "..\..")
 Set-Location $RepoRoot
 
-$StateDir = Join-Path $RepoRoot ".state"
+$DataDir = Join-Path $env:LOCALAPPDATA "Kabuki-Cord"
+$StateDir = Join-Path $DataDir "state"
 New-Item -ItemType Directory -Force -Path $StateDir | Out-Null
 $LogPath = Join-Path $StateDir "install.log"
 
@@ -125,7 +126,7 @@ function New-Shortcut {
   $shortcut.TargetPath = $TargetPath
   $shortcut.WorkingDirectory = $WorkingDirectory
   $shortcut.Description = $Description
-  $iconPath = Join-Path $WorkingDirectory "assets\app.ico"
+  $iconPath = Join-Path $WorkingDirectory "src\nhi_zues\assets\app.ico"
   if (Test-Path $iconPath) {
     $shortcut.IconLocation = $iconPath
   } else {
@@ -136,15 +137,11 @@ function New-Shortcut {
 
 try {
   Write-Step "Preparing Kabuki-Cord install in $RepoRoot"
-  New-Item -ItemType Directory -Force -Path ".local", ".profiles", ".state" | Out-Null
-
-  if (-not (Test-Path ".env")) {
-    Copy-Item ".env.example" ".env"
-  }
+  New-Item -ItemType Directory -Force -Path $DataDir, $StateDir | Out-Null
 
   if (-not (Test-ChromeInstalled)) {
     Write-Step "Chrome was not detected; configuring Playwright Chromium fallback"
-    Set-EnvValue -Path ".env" -Name "NHI_ZUES_BROWSER_CHANNEL" -Value ""
+    Set-EnvValue -Path (Join-Path $DataDir "settings.env") -Name "NHI_ZUES_BROWSER_CHANNEL" -Value ""
   }
 
   Write-Step "Checking Python 3.11+"

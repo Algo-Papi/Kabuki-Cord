@@ -6,8 +6,8 @@ from PIL import Image
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE_DIR = ROOT / "web" / "assets" / "source" / "live_fire_keyframes"
-OUTPUT = ROOT / "web" / "assets" / "mode-kabuki-live-fire-sheet.png"
+SOURCE_DIR = ROOT / "design_assets" / "live_fire_keyframes"
+OUTPUT = ROOT / "src" / "nhi_zues" / "web" / "assets" / "mode-kabuki-live-fire-sheet.png"
 FRAME = 256
 FRAMES = 12
 

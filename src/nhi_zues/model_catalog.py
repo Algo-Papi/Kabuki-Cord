@@ -5,11 +5,9 @@ import time
 import urllib.error
 import urllib.request
 
-from dotenv import load_dotenv
-
 from .config import AppConfig, load_config
 from .redaction import redact_secret_text
-from .state_io import write_json_file
+from .state_io import read_json_file, write_json_file
 
 
 OPENAI_MODEL_FALLBACKS = [
@@ -62,7 +60,6 @@ def model_catalog_state(config: AppConfig) -> dict:
 
 
 def fetch_openai_models() -> dict:
-    load_dotenv(override=True)
     config = load_config()
     fallback = model_catalog_state(config)
     if not config.openai_api_key:
@@ -237,6 +234,4 @@ def safe_openai_error(exc: urllib.error.HTTPError) -> str:
 
 
 def _read_json(path, *, default: dict) -> dict:
-    if not path.exists():
-        return default
-    return json.loads(path.read_text(encoding="utf-8-sig"))
+    return read_json_file(path, default=default)

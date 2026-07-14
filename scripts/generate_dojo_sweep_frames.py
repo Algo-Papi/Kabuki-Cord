@@ -9,8 +9,8 @@ from PIL import Image, ImageDraw, ImageEnhance, ImageFilter
 
 
 ROOT = Path(__file__).resolve().parents[1]
-KEYFRAME_DIR = ROOT / "web" / "assets" / "source" / "dojo_sweep_keyframes"
-OUTPUT_DIR = ROOT / "web" / "assets" / "monitor_dojo_sweep_frames"
+KEYFRAME_DIR = ROOT / "design_assets" / "dojo_sweep_keyframes"
+OUTPUT_DIR = ROOT / "src" / "nhi_zues" / "web" / "assets" / "monitor_dojo_sweep_frames"
 FRAME_W = 960
 FRAME_H = 720
 FRAMES = 48
@@ -43,8 +43,6 @@ def main() -> None:
         "frame_ms": FRAME_MS,
         "width": FRAME_W,
         "height": FRAME_H,
-        "source": "../source/dojo_sweep_keyframes/key_000.png",
-        "keyframes": list(KEYFRAME_NAMES),
         "timing": "looped-while-sweep-target-active",
         "animation": "five-pose-sweep-cycle-with-dust-vortex",
     }

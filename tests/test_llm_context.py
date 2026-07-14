@@ -228,12 +228,12 @@ class LlmContextTests(unittest.TestCase):
 
     def test_quality_gate_rejects_unrelated_persona_detail(self) -> None:
         issues = _draft_quality_issues(
-            "my cheap amp does that too before it pops",
+            "i work overnight shifts so i know how that goes",
             [],
             [record(1, "Rook", "42", "What do you think about that old footage?")],
         )
 
-        self.assertIn("unrelated persona detail", " ".join(issues))
+        self.assertIn("unrelated personal biography", " ".join(issues))
 
 
 if __name__ == "__main__":

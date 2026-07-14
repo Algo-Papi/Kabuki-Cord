@@ -14,12 +14,12 @@ from .config import AppConfig
 from .discarded_approvals import DiscardedApprovalStore, discarded_approval_message
 from .events import EventLog
 from .llm import ReplyPlanner
-from .memory import ConversationMemory
+from .memory import ConversationMemory, ReplyCandidateBatch
 from .output_guard import outgoing_block_reason
 from .reaction_ledger import ReactionLedger
 from .reaction_service import (
     process_reactions as _process_reactions_service,
-    reaction_window_cap as _reaction_window_cap,
+    reaction_window_cap as _reaction_window_cap,  # noqa: F401 - compatibility export
     recent_non_own_message_ids as _recent_non_own_message_ids,
     recent_reaction_candidates as _recent_reaction_candidates,
     without_own_messages as _without_own_messages,
@@ -27,17 +27,18 @@ from .reaction_service import (
 from .reply_policy import (
     approval_gate_reason as _approval_gate_reason,
     auto_reply_guard_reason as _auto_reply_guard_reason,
-    is_own_message as _is_own_message,
     own_author_ids_from_messages as _own_author_ids_from_messages,
     requires_approval as _requires_approval,
 )
 from .reply_ledger import ReplyLedger, duplicate_reply_message
+from .runtime_lock import RuntimeInstanceLock
 from .safety_review import SafetyReviewQueue, detect_safety_review_findings
 from . import scan_scheduler
 from .secrets import get_discord_credentials
 from .topics import TopicTracker
 from .user_instructions import UserInstructionStore
 from .models import DraftDecision, MessageRecord
+from .transport import ChatTransport, TransportFactory
 
 
 log = logging.getLogger(__name__)
@@ -52,8 +53,12 @@ class ChannelScanState:
     own_message_ids: set[str]
     own_texts: set[str]
     own_author_ids: set[str]
+    fresh_observed_count: int = 0
+    own_filtered_count: int = 0
+    reply_candidates_observed: int = 0
     history_message_count: int = 0
     history_fresh_count: int = 0
+    safety_history_diagnostics: dict[str, object] | None = None
 
 
 @dataclass
@@ -72,9 +77,14 @@ class NhiZuesRunner:
         *,
         start_cursor: int = 0,
         completed_loop_count: int = 0,
+        transport_factory: TransportFactory = DiscordWebSession,
     ) -> None:
         self.config = config
-        self.memory = ConversationMemory(config.state_dir / "memory.json")
+        self.transport_factory = transport_factory
+        self.memory = ConversationMemory(
+            config.state_dir / "memory.json",
+            candidate_ttl_seconds=getattr(config, "reply_candidate_ttl_seconds", 600.0),
+        )
         self.topics = TopicTracker()
         self.budget = BudgetManager(
             config.state_dir / "usage.json",
@@ -110,6 +120,7 @@ class NhiZuesRunner:
         self._target_cursor = int(start_cursor or 0) % channel_count if channel_count else 0
         self._completed_loop_count = max(0, int(completed_loop_count or 0))
         self._own_author_ids: set[str] = set()
+        self._candidate_replayed_channels: set[str] = set()
 
     async def run_once(self) -> None:
         await self._run(loop=False)
@@ -137,7 +148,7 @@ class NhiZuesRunner:
 
     async def run_until_stopped_in_session(
         self,
-        session: DiscordWebSession,
+        session: ChatTransport,
         stop_event,
         *,
         on_cycle=None,
@@ -166,12 +177,39 @@ class NhiZuesRunner:
         on_target_start=None,
         on_target_complete=None,
     ) -> None:
-        async with DiscordWebSession(
-            self.config.profile_dir,
-            browser_channel=self.config.browser_channel,
-            headless=self.config.headless,
-        ) as session:
-            await self._run_in_session(
+        self.config.state_dir.mkdir(parents=True, exist_ok=True)
+        with RuntimeInstanceLock(self.config.state_dir / "runtime.lock"):
+            async with self.transport_factory(
+                self.config.profile_dir,
+                browser_channel=self.config.browser_channel,
+                headless=self.config.headless,
+            ) as session:
+                await self._run_in_locked_session(
+                    session,
+                    loop=loop,
+                    stop_event=stop_event,
+                    on_cycle=on_cycle,
+                    on_targets_planned=on_targets_planned,
+                    on_target_start=on_target_start,
+                    on_target_complete=on_target_complete,
+                    verify_login=True,
+                )
+
+    async def _run_in_session(
+        self,
+        session: ChatTransport,
+        *,
+        loop: bool,
+        stop_event=None,
+        on_cycle=None,
+        on_targets_planned=None,
+        on_target_start=None,
+        on_target_complete=None,
+        verify_login: bool,
+    ) -> None:
+        self.config.state_dir.mkdir(parents=True, exist_ok=True)
+        with RuntimeInstanceLock(self.config.state_dir / "runtime.lock"):
+            await self._run_in_locked_session(
                 session,
                 loop=loop,
                 stop_event=stop_event,
@@ -179,12 +217,12 @@ class NhiZuesRunner:
                 on_targets_planned=on_targets_planned,
                 on_target_start=on_target_start,
                 on_target_complete=on_target_complete,
-                verify_login=True,
+                verify_login=verify_login,
             )
 
-    async def _run_in_session(
+    async def _run_in_locked_session(
         self,
-        session: DiscordWebSession,
+        session: ChatTransport,
         *,
         loop: bool,
         stop_event=None,
@@ -197,7 +235,9 @@ class NhiZuesRunner:
         if not self.config.channels:
             raise ValueError("Configure at least one channel in NHI_ZUES_CHANNELS.")
 
-        self.config.state_dir.mkdir(parents=True, exist_ok=True)
+        set_stop_event = getattr(session, "set_stop_event", None)
+        if callable(set_stop_event):
+            set_stop_event(stop_event)
         self.memory.load()
         await self._prepare_discord_session(session, verify_login=verify_login)
         await self._run_scan_cycles(
@@ -212,7 +252,7 @@ class NhiZuesRunner:
 
     async def _prepare_discord_session(
         self,
-        session: DiscordWebSession,
+        session: ChatTransport,
         *,
         verify_login: bool,
     ) -> None:
@@ -233,7 +273,7 @@ class NhiZuesRunner:
 
     async def _run_scan_cycles(
         self,
-        session: DiscordWebSession,
+        session: ChatTransport,
         *,
         loop: bool,
         stop_event=None,
@@ -286,7 +326,7 @@ class NhiZuesRunner:
         targets, will_complete_loop = self._select_targets(planned_targets)
         return planned_targets, targets, will_complete_loop, completed_in_loop
 
-    async def _remember_current_account_id(self, session: DiscordWebSession) -> None:
+    async def _remember_current_account_id(self, session: ChatTransport) -> None:
         try:
             account_id = await session.current_user_id()
         except Exception:
@@ -349,7 +389,7 @@ class NhiZuesRunner:
 
     async def _process_channels(
         self,
-        session: DiscordWebSession,
+        session: ChatTransport,
         targets,
         *,
         planned_targets=None,
@@ -361,7 +401,8 @@ class NhiZuesRunner:
         planned = list(planned_targets or targets)
         for index, target in enumerate(targets):
             if index > 0:
-                await self._channel_pacing_delay()
+                if await self._channel_pacing_delay(stop_event):
+                    return
             self._notify_target_start(
                 target,
                 index,
@@ -386,12 +427,17 @@ class NhiZuesRunner:
                 return
 
             state = await self._capture_channel_state(session, target)
+            if _stop_requested(stop_event):
+                return
             if getattr(target, "safety_review_enabled", False):
                 visible_count, fresh_count = await self._process_safety_review_channel(
                     session,
                     target,
                     state,
+                    stop_event=stop_event,
                 )
+                if _stop_requested(stop_event):
+                    return
             else:
                 await self._process_regular_channel(session, target, state)
                 visible_count = len(state.visible_messages)
@@ -465,7 +511,7 @@ class NhiZuesRunner:
 
     async def _open_channel_or_record_unavailable(
         self,
-        session: DiscordWebSession,
+        session: ChatTransport,
         target,
     ) -> bool:
         await self._raise_if_account_blocked(session, target)
@@ -488,11 +534,11 @@ class NhiZuesRunner:
 
     async def _capture_channel_state(
         self,
-        session: DiscordWebSession,
+        session: ChatTransport,
         target,
     ) -> ChannelScanState:
         visible_messages = await session.read_visible_messages(target.server_id, target.channel_id)
-        fresh_messages = self.memory.ingest(target.channel_id, visible_messages)
+        observed_fresh_messages = self.memory.ingest(target.channel_id, visible_messages)
         history_message_count = 0
         history_fresh_count = 0
         if self._scanner_history_backfill_enabled(target):
@@ -501,7 +547,6 @@ class NhiZuesRunner:
             if history_messages:
                 history_fresh_count = len(self.memory.ingest(target.channel_id, history_messages))
                 await session.ensure_latest_messages_visible()
-        self.memory.save()
         character = self.characters.for_server(target.server_id, target.character_card)
         character_names = (character.name, *character.aliases)
         own_message_ids = self.reply_ledger.own_message_ids_for_channel(channel_id=target.channel_id)
@@ -512,12 +557,21 @@ class NhiZuesRunner:
             own_texts=own_texts,
         )
         fresh_messages = _without_own_messages(
-            fresh_messages,
+            observed_fresh_messages,
             character_names=character_names,
             own_author_ids=own_author_ids,
             own_message_ids=own_message_ids,
             own_texts=own_texts,
         )
+        candidate_batch = None
+        observe_candidates = getattr(self.memory, "observe_reply_candidates", None)
+        if (
+            callable(observe_candidates)
+            and getattr(target, "engage_enabled", True)
+            and not getattr(target, "safety_review_enabled", False)
+        ):
+            candidate_batch = observe_candidates(target.channel_id, fresh_messages)
+        self.memory.save()
         return ChannelScanState(
             visible_messages=visible_messages,
             fresh_messages=fresh_messages,
@@ -526,6 +580,9 @@ class NhiZuesRunner:
             own_message_ids=own_message_ids,
             own_texts=own_texts,
             own_author_ids=own_author_ids,
+            fresh_observed_count=len(observed_fresh_messages),
+            own_filtered_count=max(0, len(observed_fresh_messages) - len(fresh_messages)),
+            reply_candidates_observed=len(fresh_messages) if candidate_batch is not None else 0,
             history_message_count=history_message_count,
             history_fresh_count=history_fresh_count,
         )
@@ -535,7 +592,7 @@ class NhiZuesRunner:
             return False
         return int(getattr(self.config, "scanner_history_backfill_limit", 0) or 0) > 0
 
-    async def _read_scan_history(self, session: DiscordWebSession, target) -> list[MessageRecord]:
+    async def _read_scan_history(self, session: ChatTransport, target) -> list[MessageRecord]:
         limit = max(0, int(getattr(self.config, "scanner_history_backfill_limit", 0) or 0))
         if limit <= 0:
             return []
@@ -582,15 +639,19 @@ class NhiZuesRunner:
 
     async def _process_safety_review_channel(
         self,
-        session: DiscordWebSession,
+        session: ChatTransport,
         target,
         state: ChannelScanState,
+        *,
+        stop_event=None,
     ) -> tuple[int, int]:
         review_source, fresh_messages, review_source_label = await self._read_safety_review_source(
             session,
             target,
             state,
         )
+        if _stop_requested(stop_event):
+            return len(review_source), 0
         review_messages = _without_own_messages(
             review_source,
             character_names=state.character_names,
@@ -599,6 +660,19 @@ class NhiZuesRunner:
             own_texts=state.own_texts,
         )
         findings = detect_safety_review_findings(review_messages)
+        fresh_review_messages = _without_own_messages(
+            fresh_messages,
+            character_names=state.character_names,
+            own_author_ids=state.own_author_ids,
+            own_message_ids=state.own_message_ids,
+            own_texts=state.own_texts,
+        )
+        newly_visible_count = len(state.fresh_messages)
+        # A successful history read ingests older rows after the visible-window
+        # capture, so its fresh rows are true backfill.  Visible fallbacks return
+        # state.fresh_messages directly and must not be counted a second time.
+        backfill_discovered_count = len(fresh_review_messages) if review_source_label == "history" else 0
+        total_new_count = newly_visible_count + backfill_discovered_count
         added = self.safety_reviews.add_findings(
             server_id=target.server_id,
             server_label=getattr(target, "server_label", ""),
@@ -612,41 +686,64 @@ class NhiZuesRunner:
             if getattr(self.config, "safety_review_exclusive", True)
             else "other observed channels stay in rotation"
         )
+        diagnostics = state.safety_history_diagnostics or {}
+        stop_reason = str(diagnostics.get("stop_reason") or "unknown")
+        pass_count = max(1, _diagnostic_int(diagnostics.get("pass_count"), default=1))
+        rounds_used = max(0, _diagnostic_int(diagnostics.get("rounds_used")))
+        retry_added = max(0, _diagnostic_int(diagnostics.get("retry_added")))
+        coverage = _safety_history_coverage_summary(diagnostics)
         self.events.add(
             event_type=event_type,
             server_id=target.server_id,
             channel_id=target.channel_id,
             summary=(
                 f"Dojo Sweep scanned {len(review_messages)} non-own {review_source_label} message(s), "
-                f"{len(fresh_messages)} new; queued {len(added)} new review item(s). "
+                f"{newly_visible_count} newly visible since the prior visit and "
+                f"{backfill_discovered_count} older backfill discovery/discoveries; "
+                f"queued {len(added)} new review item(s). {coverage} "
                 f"Replies/reactions are disabled for this sweep target; {sweep_scope}."
             ),
+            reason_code=f"history_{stop_reason}",
+            metrics={
+                "scanned_messages": len(review_messages),
+                "newly_visible": newly_visible_count,
+                "backfill_discovered": backfill_discovered_count,
+                "history_passes": pass_count,
+                "history_rounds": rounds_used,
+                "history_retry_added": retry_added,
+                "queued_reviews": len(added),
+            },
             draft="\n".join(item.text for item in added[:3]),
         )
         log.info(
-            "server=%s channel=%s safety_review=true source=%s scanned=%s fresh=%s queued=%s",
+            "server=%s channel=%s safety_review=true source=%s scanned=%s visible_new=%s backfill_new=%s queued=%s stop=%s passes=%s",
             target.server_id,
             target.channel_id,
             review_source_label,
             len(review_messages),
-            len(fresh_messages),
+            newly_visible_count,
+            backfill_discovered_count,
             len(added),
+            stop_reason,
+            pass_count,
         )
         self.memory.save()
-        return len(review_source), len(fresh_messages)
+        return len(review_source), total_new_count
 
     async def _read_safety_review_source(
         self,
-        session: DiscordWebSession,
+        session: ChatTransport,
         target,
         state: ChannelScanState,
     ) -> tuple[list[MessageRecord], list[MessageRecord], str]:
+        limit = max(20, int(getattr(self.config, "safety_review_history_limit", 420) or 420))
+        scroll_rounds = max(1, int(getattr(self.config, "safety_review_scroll_rounds", 45) or 45))
         try:
             review_source = await session.read_channel_history(
                 target.server_id,
                 target.channel_id,
-                limit=int(getattr(self.config, "safety_review_history_limit", 420) or 420),
-                scroll_rounds=int(getattr(self.config, "safety_review_scroll_rounds", 45) or 45),
+                limit=limit,
+                scroll_rounds=scroll_rounds,
             )
         except Exception as exc:
             log.warning(
@@ -665,6 +762,48 @@ class NhiZuesRunner:
                 ),
             )
             return state.visible_messages, state.fresh_messages, "visible"
+
+        diagnostics = self._history_read_diagnostics(session)
+        pass_count = 1
+        retry_added = 0
+        max_retries = max(0, min(2, int(getattr(self.config, "safety_review_history_retries", 1) or 0)))
+        while max_retries > 0 and _safety_history_retry_needed(review_source, diagnostics, limit=limit):
+            prior_ids = {message.message_id for message in review_source}
+            try:
+                retry_source = await session.read_channel_history(
+                    target.server_id,
+                    target.channel_id,
+                    limit=limit,
+                    scroll_rounds=scroll_rounds,
+                )
+            except Exception as exc:
+                log.warning(
+                    "server=%s channel=%s safety_review_history_retry_failed=%s",
+                    target.server_id,
+                    target.channel_id,
+                    exc,
+                )
+                diagnostics = {**diagnostics, "retry_error": str(exc)}
+                break
+            pass_count += 1
+            retry_diagnostics = self._history_read_diagnostics(session)
+            merged = _merge_history_messages(review_source, retry_source, limit=limit)
+            retry_added += len({message.message_id for message in merged} - prior_ids)
+            review_source = merged
+            diagnostics = retry_diagnostics or diagnostics
+            max_retries -= 1
+            if bool(diagnostics.get("cancelled")):
+                break
+
+        diagnostics = {
+            **diagnostics,
+            "pass_count": pass_count,
+            "retry_added": retry_added,
+            "message_count": len(review_source),
+        }
+        state.safety_history_diagnostics = diagnostics
+        if bool(diagnostics.get("cancelled")):
+            return review_source, [], "history-cancelled"
 
         if not review_source:
             diagnostics = await self._message_dom_diagnostics(session, target)
@@ -701,7 +840,18 @@ class NhiZuesRunner:
         )
         return review_source, fresh_messages, "history"
 
-    async def _message_dom_diagnostics(self, session: DiscordWebSession, target) -> dict[str, object]:
+    @staticmethod
+    def _history_read_diagnostics(session: ChatTransport) -> dict[str, object]:
+        diagnostics = getattr(session, "history_read_diagnostics", None)
+        if not callable(diagnostics):
+            return {}
+        try:
+            value = diagnostics()
+        except Exception:
+            return {}
+        return dict(value) if isinstance(value, dict) else {}
+
+    async def _message_dom_diagnostics(self, session: ChatTransport, target) -> dict[str, object]:
         diagnostics = getattr(session, "message_dom_diagnostics", None)
         if not callable(diagnostics):
             return {}
@@ -719,52 +869,222 @@ class NhiZuesRunner:
 
     async def _process_regular_channel(
         self,
-        session: DiscordWebSession,
+        session: ChatTransport,
         target,
         state: ChannelScanState,
     ) -> None:
-        reacted_message_ids = await self._process_channel_reactions(session, target, state)
-        reply_fresh = [
-            message
-            for message in state.fresh_messages
-            if message.message_id not in reacted_message_ids
-        ]
-        planning = self._build_reply_planning_state(target, state)
         if not target.engage_enabled:
+            await self._process_channel_reactions(session, target, state)
             self._record_engage_disabled(target, state)
             self.memory.save()
             return
 
-        decision = await self.planner.plan(
-            channel_id=target.channel_id,
-            character=state.character,
-            character_memory=planning.character_memory,
-            new_messages=reply_fresh,
-            context=planning.context,
-            topics=planning.snapshot,
-            user_memories=planning.user_memories,
-            user_instructions=planning.user_notes,
+        planning = self._build_reply_planning_state(target, state)
+        candidate_batch, reply_candidates = self._ready_reply_candidate_messages(
+            target,
+            state,
         )
-        self._record_planner_decision(target, state, planning, decision)
-        await self._handle_reply_decision(session, target, state, decision, reply_fresh)
+        if reply_candidates:
+            decision = await self.planner.plan(
+                channel_id=target.channel_id,
+                character=state.character,
+                character_memory=planning.character_memory,
+                new_messages=reply_candidates,
+                context=planning.context,
+                topics=planning.snapshot,
+                user_memories=planning.user_memories,
+                user_instructions=planning.user_notes,
+            )
+        else:
+            decision = DraftDecision(
+                False,
+                "no pending candidate context changed",
+                reason_code="no_new_messages",
+            )
+
+        lifecycle_metrics = self._apply_candidate_decision(
+            target.channel_id,
+            candidate_batch,
+            reply_candidates,
+            decision,
+        )
+        reserved_ids = _reaction_reserved_message_ids(decision)
+        reserved_ids.update(self._active_reply_candidate_ids(target.channel_id))
+        if (decision.should_reply or _decision_defers_until_context(decision)) and not reserved_ids:
+            reserved_ids = {message.message_id for message in reply_candidates}
+        reacted_message_ids = await self._process_channel_reactions(
+            session,
+            target,
+            state,
+            excluded_message_ids=reserved_ids,
+        )
+        self._resolve_reply_candidate_ids(target.channel_id, reacted_message_ids)
+        self._record_planner_decision(
+            target,
+            state,
+            planning,
+            decision,
+            lifecycle_metrics=lifecycle_metrics,
+        )
+        terminal = await self._handle_reply_decision(
+            session,
+            target,
+            state,
+            decision,
+            reply_candidates,
+        )
+        if terminal and candidate_batch is not None:
+            self._resolve_reply_candidate_batch(target.channel_id, candidate_batch)
         self.memory.save()
+
+    def _ready_reply_candidate_messages(
+        self,
+        target,
+        state: ChannelScanState,
+    ) -> tuple[ReplyCandidateBatch | None, list[MessageRecord]]:
+        ready_candidates = getattr(self.memory, "ready_reply_candidates", None)
+        messages_by_ids = getattr(self.memory, "messages_by_ids", None)
+        if not callable(ready_candidates) or not callable(messages_by_ids):
+            return None, list(state.fresh_messages)
+        if float(getattr(self.memory, "candidate_ttl_seconds", 1.0) or 0.0) <= 0:
+            return None, list(state.fresh_messages)
+
+        batch = ready_candidates(target.channel_id)
+        replayed_channels = set(getattr(self, "_candidate_replayed_channels", set()))
+        if batch is None and target.channel_id not in replayed_channels:
+            active_candidates = getattr(self.memory, "active_reply_candidates", None)
+            if callable(active_candidates):
+                active_batch = active_candidates(target.channel_id)
+                if active_batch is not None and active_batch.status in {"deferred", "eligible"}:
+                    batch_limit = max(
+                        1,
+                        int(getattr(self.memory, "candidate_batch_size", 8) or 8),
+                    )
+                    batch = ReplyCandidateBatch(
+                        channel_id=active_batch.channel_id,
+                        message_ids=active_batch.message_ids[-batch_limit:],
+                        generation=active_batch.generation,
+                        revision=active_batch.revision,
+                        status=active_batch.status,
+                        reason=active_batch.reason,
+                    )
+        replayed_channels.add(target.channel_id)
+        self._candidate_replayed_channels = replayed_channels
+        if batch is None:
+            return None, []
+        messages = messages_by_ids(target.channel_id, batch.message_ids)
+        messages = _without_own_messages(
+            messages,
+            character_names=state.character_names,
+            own_author_ids=state.own_author_ids,
+            own_message_ids=state.own_message_ids,
+            own_texts=state.own_texts,
+        )
+        safe_ids = {message.message_id for message in messages}
+        removed_ids = set(batch.message_ids) - safe_ids
+        self._resolve_reply_candidate_ids(target.channel_id, removed_ids)
+        return batch, messages
+
+    def _apply_candidate_decision(
+        self,
+        channel_id: str,
+        batch: ReplyCandidateBatch | None,
+        candidate_messages: list[MessageRecord],
+        decision: DraftDecision,
+    ) -> dict[str, int]:
+        metrics = {
+            "deferred": 0,
+            "eligible": max(0, int(getattr(decision, "eligible_source_count", 0) or 0)),
+            "rejected": 0,
+        }
+        candidate_count = len(candidate_messages)
+        if batch is None:
+            if decision.should_reply:
+                metrics["eligible"] = metrics["eligible"] or len(decision.source_message_ids) or candidate_count
+            elif _decision_defers_until_context(decision):
+                metrics["deferred"] = candidate_count
+            else:
+                metrics["rejected"] = candidate_count
+            return metrics
+
+        if decision.should_reply:
+            metrics["eligible"] = metrics["eligible"] or len(decision.source_message_ids) or candidate_count
+            if decision.draft:
+                return metrics
+            mark_eligible = getattr(self.memory, "mark_reply_candidates_eligible", None)
+            if callable(mark_eligible):
+                mark_eligible(batch, reason=decision.reason)
+            return metrics
+
+        if _decision_defers_until_context(decision):
+            defer_candidates = getattr(self.memory, "defer_reply_candidates", None)
+            if callable(defer_candidates) and defer_candidates(batch, reason=decision.reason):
+                metrics["deferred"] = candidate_count
+            return metrics
+
+        metrics["rejected"] = candidate_count
+        self._resolve_reply_candidate_batch(channel_id, batch)
+        return metrics
+
+    def _resolve_reply_candidate_batch(
+        self,
+        channel_id: str,
+        batch: ReplyCandidateBatch,
+    ) -> int:
+        resolve = getattr(self.memory, "resolve_reply_candidates", None)
+        if not callable(resolve):
+            return 0
+        return int(resolve(channel_id, batch) or 0)
+
+    def _active_reply_candidate_ids(self, channel_id: str) -> set[str]:
+        active = getattr(self.memory, "active_reply_candidates", None)
+        if not callable(active):
+            return set()
+        batch = active(channel_id)
+        return set(batch.message_ids) if batch is not None else set()
+
+    def _resolve_reply_candidate_ids(
+        self,
+        channel_id: str,
+        message_ids,
+    ) -> int:
+        cleaned_ids = {
+            str(message_id or "").strip()
+            for message_id in (message_ids or ())
+            if str(message_id or "").strip()
+        }
+        if not cleaned_ids:
+            return 0
+        resolve = getattr(self.memory, "resolve_reply_candidates", None)
+        if not callable(resolve):
+            return 0
+        return int(resolve(channel_id, cleaned_ids) or 0)
 
     async def _process_channel_reactions(
         self,
-        session: DiscordWebSession,
+        session: ChatTransport,
         target,
         state: ChannelScanState,
+        *,
+        excluded_message_ids: set[str] | None = None,
     ) -> set[str]:
+        excluded = set(excluded_message_ids or ())
+        visible_messages = [
+            message for message in state.visible_messages if message.message_id not in excluded
+        ]
+        fresh_messages = [
+            message for message in state.fresh_messages if message.message_id not in excluded
+        ]
         reaction_candidates = _recent_reaction_candidates(
-            state.visible_messages,
-            state.fresh_messages,
+            visible_messages,
+            fresh_messages,
             character_names=state.character_names,
             own_author_ids=state.own_author_ids,
             own_message_ids=state.own_message_ids,
             own_texts=state.own_texts,
         )
         force_laugh_ids = _recent_non_own_message_ids(
-            state.visible_messages,
+            visible_messages,
             character_names=state.character_names,
             own_author_ids=state.own_author_ids,
             own_message_ids=state.own_message_ids,
@@ -775,7 +1095,7 @@ class NhiZuesRunner:
             session,
             target,
             reaction_candidates,
-            fresh_count=len(state.fresh_messages),
+            fresh_count=len(fresh_messages),
             force_laugh_ids=force_laugh_ids,
             character_names=state.character_names,
             own_author_ids=state.own_author_ids,
@@ -784,7 +1104,14 @@ class NhiZuesRunner:
         )
 
     def _build_reply_planning_state(self, target, state: ChannelScanState) -> ReplyPlanningState:
-        snapshot = self.topics.update(target.channel_id, state.fresh_messages)
+        if isinstance(self.topics, TopicTracker):
+            snapshot = self.topics.update(
+                target.channel_id,
+                state.fresh_messages,
+                tracked_terms=tuple(getattr(state.character, "trigger_keywords", ()) or ()),
+            )
+        else:
+            snapshot = self.topics.update(target.channel_id, state.fresh_messages)
         context = self.memory.context(target.channel_id, limit=80)
         user_memories = self.memory.user_context_for(context, limit=10)
         user_notes = self.user_instructions.for_users(
@@ -814,6 +1141,19 @@ class NhiZuesRunner:
             event_type="channel_checked",
             server_id=target.server_id,
             channel_id=target.channel_id,
+            reason_code="engage_disabled",
+            metrics={
+                "fresh_observed": int(
+                    getattr(state, "fresh_observed_count", 0) or len(state.fresh_messages)
+                ),
+                "own_filtered": int(getattr(state, "own_filtered_count", 0) or 0),
+                "pending": 0,
+                "deferred": 0,
+                "eligible": 0,
+                "model_called": 0,
+                "model_requests": 0,
+                "rejected": 0,
+            },
             summary=(
                 f"Reviewed {len(state.visible_messages)} visible message(s), "
                 f"{len(state.fresh_messages)} new; Engage is off."
@@ -827,7 +1167,11 @@ class NhiZuesRunner:
         state: ChannelScanState,
         planning: ReplyPlanningState,
         decision: DraftDecision,
+        *,
+        lifecycle_metrics: dict[str, int] | None = None,
     ) -> None:
+        lifecycle = lifecycle_metrics or {}
+        model_requests = max(0, int(getattr(decision, "model_call_count", 0) or 0))
         log.info(
             "server=%s character=%s channel=%s visible=%s fresh=%s users=%s topics=%s decision=%s",
             target.server_id,
@@ -843,6 +1187,19 @@ class NhiZuesRunner:
             event_type="channel_checked",
             server_id=target.server_id,
             channel_id=target.channel_id,
+            reason_code=str(getattr(decision, "reason_code", "") or "unspecified"),
+            metrics={
+                "fresh_observed": int(
+                    getattr(state, "fresh_observed_count", 0) or len(state.fresh_messages)
+                ),
+                "own_filtered": int(getattr(state, "own_filtered_count", 0) or 0),
+                "pending": int(getattr(state, "reply_candidates_observed", 0) or 0),
+                "deferred": max(0, int(lifecycle.get("deferred", 0) or 0)),
+                "eligible": max(0, int(lifecycle.get("eligible", 0) or 0)),
+                "model_called": int(model_requests > 0),
+                "model_requests": model_requests,
+                "rejected": max(0, int(lifecycle.get("rejected", 0) or 0)),
+            },
             summary=(
                 f"Reviewed {len(state.visible_messages)} visible message(s), "
                 f"{len(state.fresh_messages)} new; {decision.reason}."
@@ -852,33 +1209,34 @@ class NhiZuesRunner:
 
     async def _handle_reply_decision(
         self,
-        session: DiscordWebSession,
+        session: ChatTransport,
         target,
         state: ChannelScanState,
         decision: DraftDecision,
         reply_fresh: list[MessageRecord],
-    ) -> None:
+    ) -> bool:
         if not decision.should_reply or not decision.draft:
-            return
+            return False
         if self._record_output_block_if_needed(target, decision):
-            return
+            return True
         source_ids = tuple(decision.source_message_ids or tuple(message.message_id for message in reply_fresh))
-        source_messages = _messages_by_ids(state.fresh_messages, source_ids) or _messages_by_ids(reply_fresh, source_ids) or reply_fresh
+        source_messages = _messages_by_ids(reply_fresh, source_ids) or _messages_by_ids(state.fresh_messages, source_ids) or reply_fresh
         if self._record_discarded_source_if_needed(target, decision, source_ids):
-            return
+            return True
         if self._record_duplicate_reply_if_needed(target, decision, source_ids):
-            return
+            return True
         if self.config.runtime_mode == "dry":
             self._record_dry_run_decision(target, decision)
-            return
+            return True
         if _requires_approval(
             self.config.runtime_mode,
             decision.engagement_type,
             auto_respond_enabled=target.auto_respond_enabled,
         ):
             self._queue_approval_decision(target, state, decision, source_ids, source_messages)
-            return
+            return True
         await self._send_auto_reply_decision(session, target, state, decision, source_ids, source_messages)
+        return True
 
     def _record_output_block_if_needed(self, target, decision: DraftDecision) -> bool:
         output_block = outgoing_block_reason(decision.draft)
@@ -889,6 +1247,8 @@ class NhiZuesRunner:
             event_type="output_guard_blocked",
             server_id=target.server_id,
             channel_id=target.channel_id,
+            reason_code="output_guard_blocked",
+            metrics={"rejected": 1},
             summary=output_block,
             draft=decision.draft,
         )
@@ -913,6 +1273,8 @@ class NhiZuesRunner:
             event_type="discarded_approval_suppressed",
             server_id=target.server_id,
             channel_id=target.channel_id,
+            reason_code="discarded_source",
+            metrics={"rejected": 1},
             summary=discarded_message,
             draft=decision.draft,
         )
@@ -937,6 +1299,8 @@ class NhiZuesRunner:
             event_type="duplicate_reply_blocked",
             server_id=target.server_id,
             channel_id=target.channel_id,
+            reason_code="duplicate_reply",
+            metrics={"rejected": 1},
             summary=duplicate_message,
             draft=decision.draft,
         )
@@ -948,6 +1312,7 @@ class NhiZuesRunner:
             event_type="dry_run",
             server_id=target.server_id,
             channel_id=target.channel_id,
+            reason_code=str(getattr(decision, "reason_code", "") or "dry_run"),
             summary=decision.reason,
             draft=decision.draft,
         )
@@ -979,6 +1344,8 @@ class NhiZuesRunner:
                 event_type="duplicate_reply_blocked",
                 server_id=target.server_id,
                 channel_id=target.channel_id,
+                reason_code="duplicate_reply",
+                metrics={"rejected": 1},
                 summary=(
                     "Duplicate approval skipped: an approval is already queued "
                     "for one or more of the same source messages."
@@ -1000,13 +1367,15 @@ class NhiZuesRunner:
             event_type="approval_queued",
             server_id=target.server_id,
             channel_id=target.channel_id,
+            reason_code="approval_queued",
+            metrics={"draft_queued": 1},
             summary=approval_summary,
             draft=decision.draft,
         )
 
     async def _send_auto_reply_decision(
         self,
-        session: DiscordWebSession,
+        session: ChatTransport,
         target,
         state: ChannelScanState,
         decision: DraftDecision,
@@ -1034,6 +1403,8 @@ class NhiZuesRunner:
                 event_type="reply_guard_blocked",
                 server_id=target.server_id,
                 channel_id=target.channel_id,
+                reason_code="reply_guard_blocked",
+                metrics={"rejected": 1},
                 summary=guard_reason,
                 draft=decision.draft,
             )
@@ -1050,6 +1421,8 @@ class NhiZuesRunner:
             event_type="message_sent",
             server_id=target.server_id,
             channel_id=target.channel_id,
+            reason_code="sent",
+            metrics={"sent": 1},
             summary=decision.reason,
             draft=decision.draft,
             message_id=str(delivery.get("message_id") or ""),
@@ -1065,17 +1438,17 @@ class NhiZuesRunner:
             message_id=str(delivery.get("message_id") or ""),
         )
 
-    async def _channel_pacing_delay(self) -> None:
+    async def _channel_pacing_delay(self, stop_event=None) -> bool:
         lower = max(0.0, self.config.scanner_min_channel_delay_seconds)
         upper = max(lower, self.config.scanner_max_channel_delay_seconds)
         if upper <= 0:
-            return
-        await asyncio.sleep(random.uniform(lower, upper))
+            return _stop_requested(stop_event)
+        return await _sleep_interruptible(stop_event, random.uniform(lower, upper))
 
     async def _channel_settle_delay(self, stop_event=None) -> bool:
         return await _sleep_interruptible(stop_event, self.config.scanner_channel_settle_seconds)
 
-    async def _raise_if_account_blocked(self, session: DiscordWebSession, target) -> None:
+    async def _raise_if_account_blocked(self, session: ChatTransport, target) -> None:
         state = await session.account_blocker_state()
         if not state.get("blocked"):
             return
@@ -1090,7 +1463,7 @@ class NhiZuesRunner:
 
     async def _process_reactions(
         self,
-        session: DiscordWebSession,
+        session: ChatTransport,
         target,
         candidates,
         *,
@@ -1122,6 +1495,37 @@ def _messages_by_ids(messages: list[MessageRecord], message_ids: tuple[str, ...]
     if not wanted:
         return []
     return [message for message in messages if message.message_id in wanted]
+
+
+_DEFERRED_DECISION_CODES = frozenset(
+    {
+        "awaiting_context",
+        "awaiting_more_detail",
+        "near_threshold",
+        "insufficient_substance",
+        "model_declined",
+    }
+)
+_AUTOMATIC_SILENCE_CODES = frozenset({"meta_suspicion", "self_only", "system_feed"})
+
+
+def _decision_defers_until_context(decision: DraftDecision) -> bool:
+    return str(getattr(decision, "reason_code", "") or "") in _DEFERRED_DECISION_CODES
+
+
+def _reaction_reserved_message_ids(decision: DraftDecision) -> set[str]:
+    reason_code = str(getattr(decision, "reason_code", "") or "")
+    if not (
+        decision.should_reply
+        or reason_code in _DEFERRED_DECISION_CODES
+        or reason_code in _AUTOMATIC_SILENCE_CODES
+    ):
+        return set()
+    return {
+        str(message_id or "").strip()
+        for message_id in decision.source_message_ids
+        if str(message_id or "").strip()
+    }
 
 
 def _scan_history_summary(state: ChannelScanState) -> str:
@@ -1157,6 +1561,65 @@ def _format_safety_review_dom_diagnostics(diagnostics: dict[str, object]) -> str
     if preview:
         parts.append(f"body={preview[:120]}")
     return ", ".join(parts) or "no DOM diagnostics available"
+
+
+def _safety_history_retry_needed(
+    messages: list[MessageRecord],
+    diagnostics: dict[str, object],
+    *,
+    limit: int,
+) -> bool:
+    if not diagnostics or bool(diagnostics.get("cancelled")):
+        return False
+    stop_reason = str(diagnostics.get("stop_reason") or "")
+    if stop_reason in {"channel_start", "limit_reached"}:
+        return False
+    shallow_threshold = min(max(80, limit // 3), limit)
+    return len(messages) < shallow_threshold
+
+
+def _merge_history_messages(
+    first: list[MessageRecord],
+    second: list[MessageRecord],
+    *,
+    limit: int,
+) -> list[MessageRecord]:
+    unique = {message.message_id: message for message in (*first, *second) if message.message_id}
+    ordered = sorted(unique.values(), key=_history_message_order)
+    return ordered[-max(1, limit) :]
+
+
+def _history_message_order(message: MessageRecord) -> int:
+    raw = str(message.message_id or "")
+    token = raw.rsplit("-", 1)[-1]
+    return int(token) if token.isdigit() else 0
+
+
+def _safety_history_coverage_summary(diagnostics: dict[str, object]) -> str:
+    reason = str(diagnostics.get("stop_reason") or "unknown")
+    labels = {
+        "limit_reached": "configured history limit reached",
+        "channel_start": "channel beginning verified",
+        "stable_timeout": "history loader stopped advancing",
+        "round_limit": "scroll-round limit reached",
+        "cancelled": "scan cancelled",
+        "unknown": "coverage status unavailable",
+    }
+    pass_count = max(1, _diagnostic_int(diagnostics.get("pass_count"), default=1))
+    rounds = max(0, _diagnostic_int(diagnostics.get("rounds_used")))
+    retry_added = max(0, _diagnostic_int(diagnostics.get("retry_added")))
+    retry_text = f", retry recovered {retry_added}" if pass_count > 1 else ""
+    return (
+        f"Coverage: {labels.get(reason, reason.replace('_', ' '))} "
+        f"after {pass_count} pass(es) and {rounds} final-pass round(s){retry_text}."
+    )
+
+
+def _diagnostic_int(value: object, *, default: int = 0) -> int:
+    try:
+        return int(str(value))
+    except (TypeError, ValueError):
+        return default
 
 
 def _stop_requested(stop_event) -> bool:

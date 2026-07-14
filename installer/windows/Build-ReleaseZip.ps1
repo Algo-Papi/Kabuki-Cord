@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [string]$Version = "1.0.39"
+    [string]$Version = "2.5.0",
+    [switch]$RequireSignature
 )
 
 $ErrorActionPreference = "Stop"
@@ -10,10 +11,11 @@ $RepoRoot = Resolve-Path (Join-Path $ScriptDir "..\..")
 $DistDir = Join-Path $RepoRoot "dist"
 $StageDir = Join-Path $DistDir "Kabuki-Cord-$Version-windows"
 $ZipPath = Join-Path $DistDir "Kabuki-Cord-$Version-windows.zip"
+$ChecksumPath = "$ZipPath.sha256"
 $ExePath = Join-Path $RepoRoot "Install-Kabuki-Cord.exe"
 $WrapperSource = Join-Path $ScriptDir "InstallWrapper.cs"
 $Csc = Join-Path $env:WINDIR "Microsoft.NET\Framework64\v4.0.30319\csc.exe"
-$IconPath = Join-Path $RepoRoot "assets\app.ico"
+$IconPath = Join-Path $RepoRoot "src\nhi_zues\assets\app.ico"
 
 if (-not (Test-Path $Csc)) {
   throw "Could not find csc.exe at $Csc"
@@ -22,6 +24,7 @@ if (-not (Test-Path $Csc)) {
 New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
 Remove-Item -Recurse -Force -Path $StageDir -ErrorAction SilentlyContinue
 Remove-Item -Force -Path $ZipPath -ErrorAction SilentlyContinue
+Remove-Item -Force -Path $ChecksumPath -ErrorAction SilentlyContinue
 Remove-Item -Force -Path $ExePath -ErrorAction SilentlyContinue
 
 $cscArgs = @(
@@ -39,21 +42,53 @@ if ($LASTEXITCODE -ne 0) {
   throw "Install wrapper build failed."
 }
 
+$SigningThumbprint = [Environment]::GetEnvironmentVariable("KABUKI_CORD_SIGNING_CERT_THUMBPRINT")
+if ($RequireSignature -and -not $SigningThumbprint) {
+  throw "A trusted Authenticode signing certificate is required for this release."
+}
+if ($SigningThumbprint) {
+  $Certificate = Get-Item "Cert:\CurrentUser\My\$SigningThumbprint" -ErrorAction Stop
+  if (-not $Certificate.HasPrivateKey) {
+    throw "The selected signing certificate does not have an accessible private key."
+  }
+  if ($Certificate.NotAfter -le (Get-Date)) {
+    throw "The selected signing certificate has expired."
+  }
+  if ($Certificate.EnhancedKeyUsageList.ObjectId -notcontains "1.3.6.1.5.5.7.3.3") {
+    throw "The selected certificate is not valid for code signing."
+  }
+  $Signature = Set-AuthenticodeSignature -FilePath $ExePath -Certificate $Certificate -TimestampServer "http://timestamp.digicert.com"
+  if ($Signature.Status -ne "Valid") {
+    throw "Installer signing failed: $($Signature.StatusMessage)"
+  }
+}
+
+if ($RequireSignature) {
+  $VerifiedSignature = Get-AuthenticodeSignature -FilePath $ExePath
+  if ($VerifiedSignature.Status -ne "Valid" -or -not $VerifiedSignature.SignerCertificate) {
+    throw "Installer signature verification failed: $($VerifiedSignature.StatusMessage)"
+  }
+  Write-Host "Verified Authenticode signer: $($VerifiedSignature.SignerCertificate.Subject)"
+}
+
 New-Item -ItemType Directory -Force -Path $StageDir | Out-Null
 
-$excludeDirs = @(".git", ".venv", ".profiles", ".state", ".local", "dist", "__pycache__", "playwright-report", "test-results")
-$excludeFiles = @(".env", "Install-Kabuki-Cord.exe")
-$excludeSuffixes = @(".pyc", ".pyo")
+$ReleaseItems = @(
+  "src",
+  "installer",
+  "pyproject.toml",
+  "README.md",
+  "SECURITY.md",
+  "Install-Kabuki-Cord.cmd",
+  "Run-Kabuki-Cord.cmd"
+)
 
-Get-ChildItem -Path $RepoRoot -Force | ForEach-Object {
-  if ($excludeDirs -contains $_.Name) { return }
-  if ($excludeFiles -contains $_.Name) { return }
-  $destination = Join-Path $StageDir $_.Name
-  if ($_.PSIsContainer) {
-    Copy-Item -Path $_.FullName -Destination $destination -Recurse -Force
-  } elseif ($excludeSuffixes -notcontains $_.Extension) {
-    Copy-Item -Path $_.FullName -Destination $destination -Force
+foreach ($Item in $ReleaseItems) {
+  $Source = Join-Path $RepoRoot $Item
+  if (-not (Test-Path $Source)) {
+    throw "Required release item is missing: $Item"
   }
+  Copy-Item -Path $Source -Destination (Join-Path $StageDir $Item) -Recurse -Force
 }
 
 Get-ChildItem -Path $StageDir -Recurse -Force -Directory | Where-Object {
@@ -63,4 +98,7 @@ Get-ChildItem -Path $StageDir -Recurse -Force -Directory | Where-Object {
 Copy-Item -Path $ExePath -Destination (Join-Path $StageDir "Install-Kabuki-Cord.exe") -Force
 
 Compress-Archive -Path (Join-Path $StageDir "*") -DestinationPath $ZipPath -Force
+$Hash = (Get-FileHash -Path $ZipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+Set-Content -Path $ChecksumPath -Value "$Hash *$(Split-Path -Leaf $ZipPath)" -Encoding Ascii
 Write-Host $ZipPath
+Write-Host $ChecksumPath

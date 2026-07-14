@@ -6,6 +6,7 @@ import threading
 import time
 
 from .browser import DiscordWebSession
+from .budget import begin_budget_session
 from .config import AppConfig, load_config
 from .events import EventLog
 from .redaction import redact_secret_text
@@ -35,6 +36,7 @@ class RuntimeController:
                 _record_runtime_event("runtime_start_requested", "Scanner was already running.")
                 return
             self._running = True
+            begin_budget_session()
             self._last_started_at = time.time()
             self._last_error = ""
             self._phase = "starting"
@@ -51,6 +53,7 @@ class RuntimeController:
                 _record_runtime_event("runtime_signin_handoff_requested", "Scanner was already running.")
                 return
             self._running = True
+            begin_budget_session()
             self._last_started_at = time.time()
             self._last_error = ""
             self._phase = "waiting_for_discord_login"
@@ -177,9 +180,14 @@ class RuntimeController:
                 "runtime_waiting_for_discord_login",
                 "Waiting for manual Discord sign-in in the visible browser window.",
             )
+            stable_login_checks = 0
             while not self._stop.is_set():
                 if await session.is_logged_in():
-                    break
+                    stable_login_checks += 1
+                    if stable_login_checks >= 3:
+                        break
+                else:
+                    stable_login_checks = 0
                 await asyncio.sleep(1.0)
             if self._stop.is_set():
                 return

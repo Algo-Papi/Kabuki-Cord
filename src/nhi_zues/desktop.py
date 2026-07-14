@@ -5,14 +5,23 @@ import os
 import threading
 import webbrowser
 from http.server import ThreadingHTTPServer
-from pathlib import Path
 from ctypes import wintypes
 
+from .app_paths import asset_root
+from .config import load_config
+from .diagnostics import configure_diagnostic_logging
 from .gui import GuiHandler
 
 
-ROOT = Path.cwd()
+ASSET_ROOT = asset_root()
 BADGE_ICON_HANDLE = None
+WEBVIEW2_RUNTIME_FLAGS = (
+    "--renderer-process-limit=2",
+    "--disable-background-networking",
+    "--disable-component-update",
+    "--disable-domain-reliability",
+    "--disable-sync",
+)
 
 
 class DesktopBridge:
@@ -106,6 +115,17 @@ def set_taskbar_badge(active: bool) -> bool:
         return False
 
 
+def configure_webview2_runtime() -> None:
+    """Use a bounded local-UI renderer footprint while preserving caller flags."""
+    key = "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"
+    existing = os.environ.get(key, "").strip()
+    values = existing.split() if existing else []
+    for flag in WEBVIEW2_RUNTIME_FLAGS:
+        if flag not in values:
+            values.append(flag)
+    os.environ[key] = " ".join(values)
+
+
 def _find_kabuki_window() -> int:
     user32 = ctypes.windll.user32
     current_pid = os.getpid()
@@ -136,7 +156,7 @@ def _badge_icon_handle() -> int:
     global BADGE_ICON_HANDLE
     if BADGE_ICON_HANDLE:
         return BADGE_ICON_HANDLE
-    icon_path = ROOT / "assets" / "taskbar-badge.ico"
+    icon_path = ASSET_ROOT / "taskbar-badge.ico"
     if not icon_path.exists():
         return 0
     load_image = ctypes.windll.user32.LoadImageW
@@ -179,12 +199,14 @@ def _set_taskbar_overlay(hwnd: int, icon: int | None, description: str) -> bool:
 
 
 def main() -> None:
+    configure_diagnostic_logging(load_config().state_dir)
     server = ThreadingHTTPServer(("127.0.0.1", 0), GuiHandler)
     host, port = server.server_address
     url = f"http://{host}:{port}"
     thread = threading.Thread(target=server.serve_forever, name="kabuki-cord-gui", daemon=True)
     thread.start()
 
+    configure_webview2_runtime()
     try:
         import webview
     except Exception:
@@ -196,7 +218,7 @@ def main() -> None:
         return
 
     try:
-        icon_path = ROOT / "assets" / "app.ico"
+        icon_path = ASSET_ROOT / "app.ico"
         if hasattr(ctypes, "windll"):
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("KabukiCord.Desktop")
         window = webview.create_window(
@@ -204,7 +226,7 @@ def main() -> None:
             url,
             width=1440,
             height=980,
-            min_size=(1180, 720),
+            min_size=(1024, 720),
             js_api=DesktopBridge(url),
         )
         webview.start(icon=str(icon_path) if icon_path.exists() else None)

@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import json
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
 from .models import MessageRecord
-from .state_io import write_json_file
+from .state_io import mutate_json_file, read_json_file, write_json_file
 
 
 @dataclass(frozen=True)
@@ -100,34 +99,7 @@ class ReactionLedger:
         reason: str,
         verified: bool = True,
     ) -> ReactionRecord:
-        existing_index = next(
-            (
-                index
-                for index, record in enumerate(self._records)
-                if record.channel_id == message.channel_id
-                and record.message_id == message.message_id
-                and record.emoji == emoji
-            ),
-            None,
-        )
-        if existing_index is not None:
-            existing = self._records[existing_index]
-            if verified and not existing.verified:
-                updated = ReactionRecord(
-                    created_at=existing.created_at,
-                    server_id=server_id,
-                    channel_id=existing.channel_id,
-                    message_id=existing.message_id,
-                    emoji=existing.emoji,
-                    reason=reason,
-                    author=message.author,
-                    verified=True,
-                )
-                self._records[existing_index] = updated
-                self._save()
-                return updated
-            return existing
-        record = ReactionRecord(
+        new_record = ReactionRecord(
             created_at=datetime.now(timezone.utc).isoformat(),
             server_id=server_id,
             channel_id=message.channel_id,
@@ -137,28 +109,51 @@ class ReactionLedger:
             author=message.author,
             verified=verified,
         )
-        self._records.append(record)
-        self._records = self._records[-1000:]
-        self._save()
-        return record
+
+        def add_record(payload: dict) -> ReactionRecord:
+            records = _records_from_payload(payload)
+            existing_index = next(
+                (
+                    index
+                    for index, record in enumerate(records)
+                    if record.channel_id == message.channel_id
+                    and record.message_id == message.message_id
+                    and record.emoji == emoji
+                ),
+                None,
+            )
+            if existing_index is not None:
+                existing = records[existing_index]
+                if verified and not existing.verified:
+                    updated = ReactionRecord(
+                        created_at=existing.created_at,
+                        server_id=server_id,
+                        channel_id=existing.channel_id,
+                        message_id=existing.message_id,
+                        emoji=existing.emoji,
+                        reason=reason,
+                        author=message.author,
+                        verified=True,
+                    )
+                    records[existing_index] = updated
+                    payload["items"] = [asdict(row) for row in records]
+                    return updated
+                return existing
+            records.append(new_record)
+            payload["items"] = [asdict(row) for row in records[-1000:]]
+            return new_record
+
+        _, result = mutate_json_file(
+            self.ledger_file,
+            default={"items": []},
+            mutator=add_record,
+        )
+        self._records = self._load()
+        return result
 
     def _load(self) -> list[ReactionRecord]:
-        if not self.ledger_file.exists():
-            return []
-        payload = json.loads(self.ledger_file.read_text(encoding="utf-8-sig"))
-        return [
-            ReactionRecord(
-                created_at=str(row["created_at"]),
-                server_id=str(row["server_id"]),
-                channel_id=str(row["channel_id"]),
-                message_id=str(row["message_id"]),
-                emoji=str(row["emoji"]),
-                reason=str(row.get("reason") or ""),
-                author=str(row.get("author") or ""),
-                verified=bool(row.get("verified", False)),
-            )
-            for row in payload.get("items", [])
-        ]
+        payload = read_json_file(self.ledger_file, default={"items": []})
+        return _records_from_payload(payload)
 
     def _save(self) -> None:
         self.ledger_file.parent.mkdir(parents=True, exist_ok=True)
@@ -173,3 +168,19 @@ def _parse_iso_datetime(value: str) -> datetime | None:
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def _records_from_payload(payload: dict) -> list[ReactionRecord]:
+    return [
+        ReactionRecord(
+            created_at=str(row["created_at"]),
+            server_id=str(row["server_id"]),
+            channel_id=str(row["channel_id"]),
+            message_id=str(row["message_id"]),
+            emoji=str(row["emoji"]),
+            reason=str(row.get("reason") or ""),
+            author=str(row.get("author") or ""),
+            verified=bool(row.get("verified", False)),
+        )
+        for row in payload.get("items", [])
+    ]

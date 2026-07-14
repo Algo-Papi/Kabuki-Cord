@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 from .approvals import ApprovalQueue
 from .budget import BudgetManager
 from .config import load_config
+from .diagnostics import configure_diagnostic_logging
 from .character_memory import CharacterMemoryStore
 from .user_instructions import UserInstructionStore
 
@@ -33,6 +34,7 @@ def main() -> None:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     config = load_config()
+    configure_diagnostic_logging(config.state_dir)
     if args.login:
         from .browser import DiscordWebSession
         from .secrets import get_discord_credentials

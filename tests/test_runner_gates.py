@@ -79,7 +79,7 @@ class RunnerGateTests(unittest.TestCase):
     def test_live_fire_explains_universal_review_gate(self):
         self.assertTrue(_requires_approval("live_fire", "direct", auto_respond_enabled=True))
         self.assertEqual(
-            "Live Fire requires review for every draft",
+            "Review every draft mode requires approval before live delivery",
             _approval_gate_reason("live_fire", "direct", auto_respond_enabled=True),
         )
 

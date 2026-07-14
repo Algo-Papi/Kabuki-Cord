@@ -1,0 +1,59 @@
+.bi {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: "Segoe UI Symbol", "Segoe UI Emoji", sans-serif;
+  font-style: normal;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.bi::before { content: "•"; }
+.bi-arrow-clockwise::before { content: "↻"; }
+.bi-binoculars::before { content: "⌕"; }
+.bi-box-arrow-in-right::before { content: "⇥"; }
+.bi-box-arrow-up-right::before { content: "↗"; }
+.bi-cash-coin::before { content: "$"; }
+.bi-chat-left-text::before { content: "▤"; }
+.bi-check2::before { content: "✓"; }
+.bi-check2-circle::before { content: "✓"; }
+.bi-check-circle::before { content: "✓"; }
+.bi-chevron-right::before { content: "›"; }
+.bi-circle-fill::before { content: "●"; }
+.bi-clock-history::before { content: "◷"; }
+.bi-cloud-arrow-down::before,
+.bi-cloud-download::before { content: "⇩"; }
+.bi-copy::before { content: "⧉"; }
+.bi-diagram-3::before { content: "⌘"; }
+.bi-emoji-smile::before { content: "☺"; }
+.bi-exclamation-circle::before,
+.bi-exclamation-triangle::before { content: "!"; }
+.bi-hourglass-split::before { content: "⌛"; }
+.bi-journal-plus::before { content: "▣"; }
+.bi-list-ul::before { content: "☷"; }
+.bi-map::before { content: "⌖"; }
+.bi-pause-fill::before { content: "Ⅱ"; }
+.bi-person-gear::before { content: "⚙"; }
+.bi-person-plus::before { content: "+"; }
+.bi-pin-angle::before { content: "⌖"; }
+.bi-pin-angle-fill::before { content: "◆"; }
+.bi-play-btn::before,
+.bi-play-fill::before { content: "▶"; }
+.bi-plus::before,
+.bi-plus-lg::before { content: "+"; }
+.bi-reply::before { content: "↩"; }
+.bi-save2::before { content: "▣"; }
+.bi-search::before { content: "⌕"; }
+.bi-shield-lock::before { content: "◈"; }
+.bi-send::before { content: "➤"; }
+.bi-signpost-split::before { content: "⑂"; }
+.bi-sliders::before { content: "≡"; }
+.bi-trash3::before { content: "⌫"; }
+.bi-stars::before { content: "✦"; }
+.bi-volume-down::before { content: "◖"; }
+.bi-volume-mute::before { content: "×"; }
+.bi-volume-up::before { content: "◕"; }
+.bi-window-sidebar::before { content: "▥"; }
+.bi-wrench-adjustable::before { content: "⚙"; }
+.bi-x-circle::before,
+.bi-x-lg::before { content: "×"; }

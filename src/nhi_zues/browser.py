@@ -20,6 +20,18 @@ class DiscordWebSession:
         self._playwright = None
         self._context: BrowserContext | None = None
         self._page: Page | None = None
+        self._stop_event = None
+        self._last_history_diagnostics: dict[str, object] = {}
+
+    def set_stop_event(self, stop_event) -> None:
+        """Attach the runtime's cooperative cancellation signal to long browser reads."""
+        self._stop_event = stop_event
+
+    def history_read_diagnostics(self) -> dict[str, object]:
+        return dict(self._last_history_diagnostics)
+
+    def _stop_requested(self) -> bool:
+        return bool(self._stop_event is not None and self._stop_event.is_set())
 
     async def __aenter__(self) -> "DiscordWebSession":
         profile_dir = self.profile_dir.resolve()
@@ -675,9 +687,14 @@ class DiscordWebSession:
         try:
             await self.page.wait_for_function(
                 """
-                () => location.href.includes("/channels/")
-                    && !location.href.includes("/login")
-                    && !document.querySelector('input[name="email"], input[type="email"]')
+                () => {
+                    const authenticatedShell = document.querySelector('[aria-label="User Settings"]')
+                        || document.querySelector('[data-list-id="guildsnav"]');
+                    return location.href.includes("/channels/")
+                        && !location.href.includes("/login")
+                        && !document.querySelector('input[name="email"], input[type="email"]')
+                        && Boolean(authenticatedShell);
+                }
                 """,
                 timeout=timeout_seconds * 1000,
             )
@@ -960,8 +977,16 @@ class DiscordWebSession:
             seen[message.message_id] = message
 
         stable_rounds = 0
+        stall_recoveries = 0
+        top_confirmations = 0
+        rounds_used = 0
+        stop_reason = "round_limit"
         last_count = len(seen)
         for _ in range(max(scroll_rounds, 1)):
+            if self._stop_requested():
+                stop_reason = "cancelled"
+                break
+            rounds_used += 1
             oldest_before = await self._first_visible_message_id()
             at_top = await self._scroll_messages_up()
             if oldest_before:
@@ -974,13 +999,16 @@ class DiscordWebSession:
                             return first && first.id && first.id !== oldest;
                         }
                         """,
-                        oldest_before,
+                        arg=oldest_before,
                         timeout=1_400,
                     )
                 except Exception:
                     await self.page.wait_for_timeout(650)
             else:
                 await self.page.wait_for_timeout(650)
+            if self._stop_requested():
+                stop_reason = "cancelled"
+                break
             for message in await self._read_message_records_from_dom(server_id, channel_id):
                 seen[message.message_id] = message
             oldest_after = await self._first_visible_message_id()
@@ -988,12 +1016,43 @@ class DiscordWebSession:
                 stable_rounds += 1
             else:
                 stable_rounds = 0
+                top_confirmations = 0
             last_count = len(seen)
-            if len(seen) >= limit or (at_top and stable_rounds >= 3) or stable_rounds >= 5:
+            top_confirmed = bool(at_top and await self._channel_history_start_visible())
+            top_confirmations = top_confirmations + 1 if top_confirmed else 0
+            if len(seen) >= limit:
+                stop_reason = "limit_reached"
+                break
+            if top_confirmations >= 2:
+                stop_reason = "channel_start"
+                break
+            if stable_rounds >= 3 and stall_recoveries < 3:
+                # Discord virtualizes message rows and can temporarily leave the
+                # scroller at zero before its older-page request finishes. Nudge
+                # the loader and require repeated stalls before accepting one.
+                stall_recoveries += 1
+                stable_rounds = 0
+                await self._nudge_history_loader()
+                continue
+            if stable_rounds >= 3:
+                stop_reason = "stable_timeout"
                 break
 
         messages = sorted(seen.values(), key=_message_sort_value)
-        return messages[-limit:]
+        selected = messages[-limit:]
+        self._last_history_diagnostics = {
+            "stop_reason": stop_reason,
+            "rounds_used": rounds_used,
+            "scroll_rounds": max(scroll_rounds, 1),
+            "message_count": len(selected),
+            "limit": limit,
+            "oldest_message_id": selected[0].message_id if selected else "",
+            "newest_message_id": selected[-1].message_id if selected else "",
+            "top_confirmed": stop_reason == "channel_start",
+            "stall_recoveries": stall_recoveries,
+            "cancelled": stop_reason == "cancelled",
+        }
+        return selected
 
     async def _read_message_records_from_dom(self, server_id: str, channel_id: str) -> list[MessageRecord]:
         rows = await self.page.evaluate(
@@ -1097,6 +1156,55 @@ class DiscordWebSession:
                 """
             )
         )
+
+    async def _nudge_history_loader(self) -> None:
+        try:
+            await self.page.keyboard.press("Home")
+            await self.page.keyboard.press("PageUp")
+            await self.page.evaluate(
+                """
+                () => {
+                    const firstMessage = Array.from(document.querySelectorAll('[id^="chat-messages-"]'))
+                        .find((node) => /^chat-messages-\\d{5,}-\\d{5,}$/.test(node.id || ""));
+                    let scroller = firstMessage;
+                    while (scroller && scroller !== document.body) {
+                        const style = window.getComputedStyle(scroller);
+                        if (/(auto|scroll)/.test(style.overflowY || "")
+                            && scroller.scrollHeight > scroller.clientHeight + 20) {
+                            scroller.scrollTop = 0;
+                            scroller.dispatchEvent(new Event("scroll", { bubbles: true }));
+                            break;
+                        }
+                        scroller = scroller.parentElement;
+                    }
+                }
+                """
+            )
+            await self.page.wait_for_timeout(1_200)
+        except Exception:
+            await self.page.wait_for_timeout(500)
+
+    async def _channel_history_start_visible(self) -> bool:
+        try:
+            return bool(
+                await self.page.evaluate(
+                    """
+                    () => {
+                        const main = document.querySelector('[role="main"]') || document;
+                        const marker = main.querySelector(
+                            '[class*="channelBeginning"], [class*="welcome"], [class*="emptyChannelIcon"]'
+                        );
+                        const text = (main.innerText || "").slice(0, 1200);
+                        const markerVisible = Boolean(
+                            marker && marker.getClientRects().length && marker.getAttribute("aria-hidden") !== "true"
+                        );
+                        return markerVisible || /this is the beginning of/i.test(text);
+                    }
+                    """
+                )
+            )
+        except Exception:
+            return False
 
     async def ensure_latest_messages_visible(self) -> None:
         try:
@@ -1921,11 +2029,31 @@ class DiscordWebSession:
         if not self.page.url.startswith("https://discord.com/channels/"):
             return False
         try:
-            return not await self.page.locator('input[name="email"], input[type="email"]').first.is_visible(
-                timeout=500
+            return bool(
+                await self.page.evaluate(
+                    """
+                    () => {
+                        const visible = (node) => {
+                            if (!node) return false;
+                            const rect = node.getBoundingClientRect();
+                            const style = window.getComputedStyle(node);
+                            return rect.width > 0
+                                && rect.height > 0
+                                && style.display !== "none"
+                                && style.visibility !== "hidden";
+                        };
+                        const loginVisible = Array.from(document.querySelectorAll(
+                            'input[name="email"], input[type="email"]'
+                        )).some(visible);
+                        const authenticatedShell = document.querySelector('[aria-label="User Settings"]')
+                            || document.querySelector('[data-list-id="guildsnav"]');
+                        return !loginVisible && Boolean(authenticatedShell);
+                    }
+                    """
+                )
             )
         except Exception:
-            return True
+            return False
 
 
 def _typing_duration(

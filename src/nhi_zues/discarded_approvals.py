@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
 from .discord_text import sanitize_outgoing_draft
-from .state_io import write_json_file
+from .state_io import mutate_json_file, read_json_file, write_json_file
 
 
 @dataclass(frozen=True)
@@ -40,9 +39,6 @@ class DiscardedApprovalStore:
         if not source_ids:
             return None
         discard_id = _discard_id(channel_id=channel_id, source_ids=source_ids)
-        existing = next((item for item in self._items if item.discard_id == discard_id), None)
-        if existing:
-            return existing
         item = DiscardedApproval(
             discard_id=discard_id,
             created_at=datetime.now(timezone.utc).isoformat(),
@@ -52,10 +48,23 @@ class DiscardedApprovalStore:
             reason=str(reason or "discarded approval"),
             draft_hash=_draft_hash(draft),
         )
-        self._items.append(item)
-        self._items = self._items[-self.limit :]
-        self._save()
-        return item
+
+        def add_item(payload: dict) -> DiscardedApproval:
+            items = _items_from_payload(payload)
+            existing = next((row for row in items if row.discard_id == discard_id), None)
+            if existing:
+                return existing
+            items.append(item)
+            payload["items"] = [asdict(row) for row in items[-self.limit :]]
+            return item
+
+        _, result = mutate_json_file(
+            self.store_file,
+            default={"items": []},
+            mutator=add_item,
+        )
+        self._items = self._load()
+        return result
 
     def find_overlap(
         self,
@@ -63,6 +72,7 @@ class DiscardedApprovalStore:
         channel_id: str,
         source_message_ids: tuple[str, ...] | list[str],
     ) -> list[DiscardedApproval]:
+        self._items = self._load()
         source_ids = set(_clean_source_ids(source_message_ids))
         if not source_ids:
             return []
@@ -76,21 +86,8 @@ class DiscardedApprovalStore:
         return list(self._items)
 
     def _load(self) -> list[DiscardedApproval]:
-        if not self.store_file.exists():
-            return []
-        payload = json.loads(self.store_file.read_text(encoding="utf-8-sig"))
-        return [
-            DiscardedApproval(
-                discard_id=str(row["discard_id"]),
-                created_at=str(row["created_at"]),
-                server_id=str(row.get("server_id") or ""),
-                channel_id=str(row["channel_id"]),
-                source_message_ids=tuple(str(value) for value in row.get("source_message_ids", [])),
-                reason=str(row.get("reason") or "discarded approval"),
-                draft_hash=str(row.get("draft_hash") or ""),
-            )
-            for row in payload.get("items", [])
-        ]
+        payload = read_json_file(self.store_file, default={"items": []})
+        return _items_from_payload(payload)
 
     def _save(self) -> None:
         self.store_file.parent.mkdir(parents=True, exist_ok=True)
@@ -128,3 +125,18 @@ def _draft_hash(draft: str) -> str:
 def _discard_id(*, channel_id: str, source_ids: tuple[str, ...]) -> str:
     raw = "\n".join((str(channel_id or ""), *source_ids))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _items_from_payload(payload: dict) -> list[DiscardedApproval]:
+    return [
+        DiscardedApproval(
+            discard_id=str(row["discard_id"]),
+            created_at=str(row["created_at"]),
+            server_id=str(row.get("server_id") or ""),
+            channel_id=str(row["channel_id"]),
+            source_message_ids=tuple(str(value) for value in row.get("source_message_ids", [])),
+            reason=str(row.get("reason") or "discarded approval"),
+            draft_hash=str(row.get("draft_hash") or ""),
+        )
+        for row in payload.get("items", [])
+    ]

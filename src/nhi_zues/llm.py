@@ -10,6 +10,16 @@ from .character_memory import CharacterMemory
 from .discord_text import clean_discord_display_name, sanitize_outgoing_draft
 from .models import DraftDecision, MessageRecord, UserMemory
 from . import own_identity
+from .relevance import (
+    assess_reply_candidate,
+    contains_card_alias,
+    contains_card_trigger,
+    detect_text_signals,
+    is_conversation_worthy_text,
+    looks_like_app_feed,
+    looks_like_meta_suspicion,
+    term_in_text,
+)
 from .topics import TopicSnapshot
 from .user_instructions import UserInstruction
 from .voice_guard import (
@@ -65,30 +75,28 @@ class ReplyPlanner:
         user_instructions: dict[str, list[UserInstruction]],
     ) -> DraftDecision:
         if not new_messages:
-            return DraftDecision(False, "no new messages")
+            return DraftDecision(False, "no new messages", reason_code="no_new_messages")
 
-        engagement_type = _engagement_type(
-            new_messages,
-            topics,
-            character,
+        assessment = assess_reply_candidate(
+            new_messages=new_messages,
+            context=context,
+            character=character,
             conversation_reply_enabled=self.conversation_reply_enabled,
         )
-        if engagement_type == "none":
-            return DraftDecision(False, "no conversation, tracked topic, or direct name cue")
-        focus_messages = _focus_messages_for_reply(
-            new_messages,
-            context,
-            character,
-            engagement_type=engagement_type,
-        )
-        source_message_ids = tuple(message.message_id for message in focus_messages)
-        focus_issue = _focus_issue(focus_messages, character, engagement_type=engagement_type)
-        if focus_issue:
+        engagement_type = assessment.engagement_type
+        source_message_ids = assessment.target_message_ids
+        source_id_set = set(source_message_ids)
+        focus_messages = [
+            message for message in new_messages if message.message_id in source_id_set
+        ]
+        if assessment.outcome != "reply":
             return DraftDecision(
                 False,
-                focus_issue,
+                assessment.reason,
                 engagement_type=engagement_type,
                 source_message_ids=source_message_ids,
+                reason_code=assessment.reason_code,
+                eligible_source_count=0,
             )
         requires_approval = engagement_type == "proactive" and self.proactive_approval_required
         reason = _engagement_reason(engagement_type)
@@ -101,6 +109,8 @@ class ReplyPlanner:
                 engagement_type=engagement_type,
                 requires_approval=requires_approval,
                 source_message_ids=source_message_ids,
+                reason_code=assessment.reason_code,
+                eligible_source_count=len(source_message_ids),
             )
         if not self.generate_drafts:
             return DraftDecision(
@@ -110,6 +120,8 @@ class ReplyPlanner:
                 engagement_type=engagement_type,
                 requires_approval=requires_approval,
                 source_message_ids=source_message_ids,
+                reason_code=assessment.reason_code,
+                eligible_source_count=len(source_message_ids),
             )
         if self.client is None:
             return DraftDecision(
@@ -119,6 +131,8 @@ class ReplyPlanner:
                 engagement_type=engagement_type,
                 requires_approval=requires_approval,
                 source_message_ids=source_message_ids,
+                reason_code=assessment.reason_code,
+                eligible_source_count=len(source_message_ids),
             )
 
         transcript = _fit_text(_format_message_lines(context[-32:], max_chars=320), self.max_input_chars)
@@ -173,6 +187,8 @@ class ReplyPlanner:
                 engagement_type=engagement_type,
                 requires_approval=requires_approval,
                 source_message_ids=source_message_ids,
+                reason_code=assessment.reason_code,
+                eligible_source_count=len(source_message_ids),
             )
 
         draft, records, issues = await self._generate_with_quality_retry(
@@ -190,6 +206,9 @@ class ReplyPlanner:
                 engagement_type=engagement_type,
                 requires_approval=requires_approval,
                 source_message_ids=source_message_ids,
+                reason_code="model_declined",
+                eligible_source_count=len(source_message_ids),
+                model_call_count=len(records),
             )
         cost = sum(record.cost_usd for record in records)
         retry_count = max(0, len(records) - 1)
@@ -201,6 +220,9 @@ class ReplyPlanner:
             engagement_type=engagement_type,
             requires_approval=requires_approval,
             source_message_ids=source_message_ids,
+            reason_code=assessment.reason_code,
+            eligible_source_count=len(source_message_ids),
+            model_call_count=len(records),
         )
 
     async def regenerate(
@@ -391,15 +413,14 @@ def _engagement_type(
     *,
     conversation_reply_enabled: bool = False,
 ) -> str:
-    text = "\n".join(message.text.lower() for message in messages)
-    if any(_term_in_text(alias, text) for alias in character.aliases):
+    del topics  # Topic summaries are prompt context, never permission to engage.
+    text = "\n".join(message.text for message in messages)
+    if contains_card_alias(text, character):
         return "direct"
+    if contains_card_trigger(text, character):
+        return "proactive"
     if conversation_reply_enabled:
         return "conversation"
-    if any(_term_in_text(keyword, text) for keyword in character.trigger_keywords):
-        return "proactive"
-    if topics.top_topics:
-        return "proactive"
     return "none"
 
 
@@ -472,19 +493,15 @@ def _focus_issue(
 ) -> str:
     if not focus_messages:
         return "no non-self source message to answer"
-    if engagement_type in {"direct", "manual"}:
+    if engagement_type == "manual":
         return ""
     if any(_looks_like_meta_suspicion(message.text) for message in focus_messages):
         return "AI/bot-suspicion thread skipped unless manually selected"
-    if engagement_type == "proactive" and any(_contains_trigger(message.text, character) for message in focus_messages):
+    if any(_is_conversation_worthy(message.text, character) for message in focus_messages):
         return ""
-    if engagement_type == "proactive" and not any(
-        _is_conversation_worthy(message.text, character) for message in focus_messages
-    ):
+    if engagement_type == "proactive":
         return "tracked topic source too thin or stale for a grounded draft"
-    if engagement_type == "conversation" and not any(
-        _is_conversation_worthy(message.text, character) for message in focus_messages
-    ):
+    if engagement_type in {"conversation", "direct"}:
         return "conversation source too thin or ambiguous for a grounded draft"
     return ""
 
@@ -496,7 +513,7 @@ def grounding_prompt(*, engagement_type: str) -> str:
         "- If there is no clear useful reply to the target, output exactly NO_REPLY.",
         "- Do not answer app/game/system feed text unless a real user is clearly discussing it.",
         "- Do not invent a subject from banter fragments, acknowledgements, or one-word reactions.",
-        "- Do not import personal backstory props like guitar, amp, call center, parents, gigs, or St. Augustine unless the target directly makes that relevant.",
+        "- Do not import personal biography, possessions, work, family, location, or past experiences unless the target directly makes that relevant.",
         "- Do not introduce a new technical, legal, medical, or evidentiary claim unless the target/context already contains that lane.",
         "- Pick one grounded point from the target and either add one small take, ask one concrete detail, or pass.",
     ]
@@ -520,102 +537,46 @@ def _message_has_text(message: MessageRecord) -> bool:
 
 
 def _looks_like_app_feed(message: MessageRecord) -> bool:
-    author = str(getattr(message, "author", "") or "").lower()
-    text = _clean_focus_text(str(getattr(message, "text", "") or ""))
-    if "app" in author and re.search(r"\b(were playing|started playing|level up|verified app)\b", text):
-        return True
-    return bool(re.search(r"\b(verified app|new achievement|started a game|were playing)\b", text))
+    return looks_like_app_feed(message)
 
 
 def _looks_like_meta_suspicion(text: str) -> bool:
-    cleaned = _clean_focus_text(text)
-    if re.search(r"\b(chatgpt|llm|bot|automated|automation|fake account|posting behavior)\b", cleaned):
-        return True
-    if "ai" in re.findall(r"\b[\w']+\b", cleaned) and re.search(
-        r"\b(mimic|grammar|human|person|posting|behavior|detect|sounds|sus|suspicious)\b",
-        cleaned,
-    ):
-        return True
-    return False
+    return looks_like_meta_suspicion(text)
 
 
 def _is_conversation_worthy(text: str, character: CharacterCard) -> bool:
-    cleaned = _clean_focus_text(text)
-    if _contains_trigger(cleaned, character):
-        return True
-    words = re.findall(r"\b[\w']+\b", cleaned)
-    return _reply_worthiness_score(cleaned, words) >= 2
+    return is_conversation_worthy_text(text, character)
 
 
 def _reply_worthiness_score(cleaned: str, words: list[str]) -> int:
     if not words:
         return 0
-    score = 0
-    if len(words) >= 4 and ("?" in cleaned or re.search(r"\b(why|how|what|where|when|who)\b", cleaned)):
-        score += 2
-    if re.search(r"https?://|\b[a-z0-9-]+\.(?:com|org|net|gov|io)\b", cleaned):
-        score += 2
-    if len(words) >= 8:
-        score += 1
-    if _has_claim_marker(cleaned):
-        score += 1
-    if re.search(r"\b(not|never|can't|cant|dont|doesn't|isn't|without|instead|because|but|though)\b", cleaned):
-        score += 1
-    return score
+    signals = detect_text_signals(cleaned)
+    return min(
+        5,
+        (3 if signals.concrete_question else 0)
+        + (3 if signals.compact_opinion else 0)
+        + (2 if signals.disagreement else 0)
+        + (2 if signals.reason_or_evidence else 0)
+        + int(signals.specific),
+    )
 
 
 def _has_claim_marker(cleaned: str) -> bool:
-    claim_markers = (
-        "i think",
-        "i believe",
-        "my take",
-        "proof",
-        "evidence",
-        "source",
-        "confirmed",
-        "actually",
-        "probably",
-        "means",
-        "system",
-        "sensor",
-        "camera",
-        "plate",
-        "vehicle",
-        "identify",
-        "tracking",
-        "flock",
-        "lawyer",
-        "sue",
-        "foia",
-        "data",
-        "lab",
-        "test",
-        "tests",
-        "empirical",
-        "physics",
-        "government",
-        "official",
-        "case",
-        "claim",
-    )
-    return any(marker in cleaned for marker in claim_markers)
+    signals = detect_text_signals(cleaned)
+    return signals.compact_opinion or signals.disagreement or signals.reason_or_evidence
 
 
 def _contains_alias(text: str, character: CharacterCard) -> bool:
-    lowered = str(text or "").lower()
-    return any(_term_in_text(alias, lowered) for alias in character.aliases)
+    return contains_card_alias(text, character)
 
 
 def _contains_trigger(text: str, character: CharacterCard) -> bool:
-    lowered = str(text or "").lower()
-    return any(_term_in_text(keyword, lowered) for keyword in character.trigger_keywords)
+    return contains_card_trigger(text, character)
 
 
 def _term_in_text(term: str, text: str) -> bool:
-    cleaned_term = " ".join(str(term or "").lower().split())
-    if not cleaned_term:
-        return False
-    return bool(re.search(rf"(?<![a-z0-9]){re.escape(cleaned_term)}(?![a-z0-9])", str(text or "").lower()))
+    return term_in_text(term, text)
 
 
 def _clean_focus_text(text: str) -> str:
@@ -723,7 +684,7 @@ def conversation_intelligence_prompt(*, mode: str) -> str:
         "- If the same topic continues, advance one step: narrow the claim, add a concrete objection, concede a small point, or pivot to a fresher implication.",
         "- Pick one live point, tension, or implied claim and answer that. Do not respond to every sentence.",
         "- Have an actual take: buy it, doubt it, split the difference, draw a line, or admit a rough bias.",
-        "- For UFO lore, use one rough mental lane at a time: sightings, coverup, consciousness, crash retrieval, experiencers, military sensors, or media disinfo. Do not list lore.",
+        "- For lore-heavy topics, choose one concrete lane at a time instead of listing every related theory or reference.",
         "- It is okay to be imperfect or half-informed, but the reply still needs a direction and a reason someone could challenge.",
         "- Do not quote the user and then interpret the quote. React as if you already heard it in the room.",
         "- Prefer a specific opinion, correction, or side comment over a broad question.",
@@ -803,7 +764,7 @@ def _draft_quality_issues(
     repeat_issue = own_identity.repeated_own_point_issue(text, recent_character_lines)
     if repeat_issue:
         issues.append(repeat_issue)
-    grounding_issue = _unsupported_persona_detail_issue(text, focus_messages or [])
+    grounding_issue = _unsupported_personal_claim_issue(text, focus_messages or [])
     if grounding_issue:
         issues.append(grounding_issue)
     return issues
@@ -814,7 +775,7 @@ def _is_no_reply(text: str) -> bool:
     return normalized == "no_reply"
 
 
-def _unsupported_persona_detail_issue(
+def _unsupported_personal_claim_issue(
     text: str,
     focus_messages: list[MessageRecord],
 ) -> str:
@@ -822,28 +783,14 @@ def _unsupported_persona_detail_issue(
         return ""
     lowered = str(text or "").lower()
     focus_text = " ".join(_clean_focus_text(message.text) for message in focus_messages)
-    persona_terms = (
-        "amp",
-        "guitar",
-        "call center",
-        "call-center",
-        "headset",
-        "parents",
-        "gig",
-        "gigs",
-        "st. augustine",
-        "st augustine",
-        "beach bar",
-        "beach-town",
-        "pedalboard",
+    biography_patterns = (
+        re.compile(r"\bi (?:live|work|grew up|was born|went to school|own|play)\b"),
+        re.compile(r"\bmy (?:age|family|hometown|job|parents|school|workplace)\b"),
+        re.compile(r"\bwhen i was (?:a kid|younger|in school)\b"),
     )
-    unsupported = [
-        term
-        for term in persona_terms
-        if term in lowered and term.replace("-", " ") not in focus_text and term not in focus_text
-    ]
-    if unsupported:
-        return "injects unrelated persona detail(s): " + ", ".join(unsupported[:3])
+    unsupported = [match.group(0) for pattern in biography_patterns if (match := pattern.search(lowered))]
+    if unsupported and not any(claim in focus_text for claim in unsupported):
+        return "injects unrelated personal biography"
     return ""
 
 

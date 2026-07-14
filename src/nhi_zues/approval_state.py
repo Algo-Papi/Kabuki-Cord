@@ -6,6 +6,7 @@ from pathlib import Path
 
 from .approvals import ApprovalQueue
 from .message_view import message_preview, sorted_message_rows
+from .state_io import read_json_file
 
 
 def approval_items_state(config) -> list[dict]:
@@ -48,7 +49,11 @@ def approval_items_state(config) -> list[dict]:
 
 
 def approval_config_indexes(servers_file: Path) -> tuple[dict[str, str], dict[str, dict]]:
-    payload = read_json(servers_file, default={"servers": []})
+    payload = (
+        json.loads(servers_file.read_text(encoding="utf-8-sig"))
+        if servers_file.exists()
+        else {"servers": []}
+    )
     server_labels: dict[str, str] = {}
     channel_labels: dict[str, dict] = {}
     for server in payload.get("servers", []):
@@ -71,6 +76,4 @@ def approval_config_indexes(servers_file: Path) -> tuple[dict[str, str], dict[st
 
 
 def read_json(path: Path, *, default: dict) -> dict:
-    if not path.exists():
-        return default
-    return json.loads(path.read_text(encoding="utf-8-sig"))
+    return read_json_file(path, default=default)

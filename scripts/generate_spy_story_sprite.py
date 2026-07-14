@@ -7,7 +7,7 @@ from PIL import Image, ImageDraw
 
 
 ROOT = Path(__file__).resolve().parents[1]
-OUTPUT = ROOT / "web" / "assets" / "scanner-kabuki-spy-story-sheet.png"
+OUTPUT = ROOT / "src" / "nhi_zues" / "web" / "assets" / "scanner-kabuki-spy-story-sheet.png"
 FRAME_W = 256
 FRAME_H = 192
 FRAMES = 36

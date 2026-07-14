@@ -34,3 +34,6 @@ class DraftDecision:
     engagement_type: str = "none"
     requires_approval: bool = False
     source_message_ids: tuple[str, ...] = ()
+    reason_code: str = ""
+    eligible_source_count: int = 0
+    model_call_count: int = 0

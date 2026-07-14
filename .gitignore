@@ -1,8 +1,17 @@
 .env
+.env.*
+!.env.example
+settings.env
 .venv/
 __pycache__/
 *.py[cod]
 *.egg-info/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
 
 .profiles/
 .state/
@@ -11,9 +20,25 @@ __pycache__/
 playwright-report/
 test-results/
 dist/
+build/
+output/
+tmp/
+/diagnostics/
+design_assets/*chromakey*.png
+design_assets/previews/*.gif
 Install-Kabuki-Cord.exe
 
+# Operator-owned configuration and character cards stay local. Public examples
+# and the neutral packaged fallback live under config/servers.example.json and
+# src/nhi_zues/defaults/ instead.
+/config/servers.json
+/character_cards/
+
 *.log
+*.jsonl
+*.har
+storage-state*.json
+playwright-storage*.json
 *.sqlite
 *.sqlite3
 *.db
