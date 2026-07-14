@@ -124,6 +124,16 @@ class WebContractTests(unittest.TestCase):
         self.assertIn("--card-accent-rgb", script)
         self.assertNotIn('/assets/placeholders/character.svg', script)
 
+    def test_runtime_uses_original_app_icon_without_pixelated_downscaling(self) -> None:
+        markup = (WEB_ROOT / "index.html").read_text(encoding="utf-8")
+        styles = (WEB_ROOT / "styles.css").read_text(encoding="utf-8")
+        self.assertIn('<div class="brand-mark"><img src="/assets/app-icon-64.png"', markup)
+        self.assertIn('<div class="avatar-dot runtime-avatar"><img src="/assets/app-icon-64.png"', markup)
+        runtime_rule = styles.split(".runtime-avatar img {", 1)[1].split("}", 1)[0]
+        self.assertIn("image-rendering: auto", runtime_rule)
+        self.assertNotIn("image-rendering: pixelated", runtime_rule)
+        self.assertIn("padding: 0", runtime_rule)
+
     def test_discord_blocked_animation_uses_v2_eight_frame_sheet(self) -> None:
         styles = (WEB_ROOT / "styles.css").read_text(encoding="utf-8")
         self.assertIn('url("/assets/scanner-kabuki-discord-blocked-v2-sheet.png")', styles)

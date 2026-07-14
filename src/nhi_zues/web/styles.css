@@ -636,9 +636,18 @@ textarea:disabled {
 }
 
 .runtime-avatar img {
-  object-fit: contain;
-  padding: 4px;
-  image-rendering: pixelated;
+  object-fit: cover;
+  padding: 0;
+  image-rendering: auto;
+}
+
+.runtime-avatar {
+  flex: 0 0 48px;
+  width: 48px;
+  height: 48px;
+  border-radius: 16px;
+  background: #111820;
+  box-shadow: 0 12px 28px rgba(94, 75, 255, 0.28);
 }
 
 .account-footer span {
