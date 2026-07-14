@@ -15,11 +15,12 @@ class ReleaseSigningContractTests(unittest.TestCase):
         self.assertIn('__version__ = "2.5.0"', package)
         self.assertNotIn("2.5.0.dev", pyproject + package)
 
-    def test_release_workflow_requires_signing_secrets(self) -> None:
+    def test_release_workflow_supports_optional_signing(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
         self.assertIn("WINDOWS_CODE_SIGNING_PFX_BASE64", workflow)
         self.assertIn("WINDOWS_CODE_SIGNING_PFX_PASSWORD", workflow)
-        self.assertIn("Refusing to publish an unsigned release", workflow)
+        self.assertIn("Publishing an unsigned Windows installer", workflow)
+        self.assertIn("KABUKI_CORD_REQUIRE_SIGNATURE", workflow)
         self.assertIn("-RequireSignature", workflow)
 
     def test_release_builder_verifies_authenticode(self) -> None:

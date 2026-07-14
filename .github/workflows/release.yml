@@ -32,17 +32,21 @@ jobs:
         run: |
           python -m build --wheel
           python scripts/verify_wheel.py
-      - name: Import Authenticode signing certificate
+      - name: Configure optional Authenticode signing
         shell: pwsh
         env:
           SIGNING_PFX_BASE64: ${{ secrets.WINDOWS_CODE_SIGNING_PFX_BASE64 }}
           SIGNING_PFX_PASSWORD: ${{ secrets.WINDOWS_CODE_SIGNING_PFX_PASSWORD }}
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:SIGNING_PFX_BASE64)) {
-            throw "Missing WINDOWS_CODE_SIGNING_PFX_BASE64 repository secret. Refusing to publish an unsigned release."
+          $HasPfx = -not [string]::IsNullOrWhiteSpace($env:SIGNING_PFX_BASE64)
+          $HasPassword = -not [string]::IsNullOrWhiteSpace($env:SIGNING_PFX_PASSWORD)
+          if ($HasPfx -xor $HasPassword) {
+            throw "Signing configuration is incomplete. Configure both Windows code-signing secrets or neither."
           }
-          if ([string]::IsNullOrWhiteSpace($env:SIGNING_PFX_PASSWORD)) {
-            throw "Missing WINDOWS_CODE_SIGNING_PFX_PASSWORD repository secret. Refusing to publish an unsigned release."
+          if (-not $HasPfx) {
+            Write-Warning "Publishing an unsigned Windows installer because no Authenticode credential is configured."
+            "KABUKI_CORD_REQUIRE_SIGNATURE=false" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            exit 0
           }
           $CertificatePath = Join-Path $env:RUNNER_TEMP "kabuki-cord-code-signing.pfx"
           try {
@@ -67,11 +71,16 @@ jobs:
             throw "The imported certificate is not valid for Authenticode code signing."
           }
           "KABUKI_CORD_SIGNING_CERT_THUMBPRINT=$($Certificate.Thumbprint)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "KABUKI_CORD_REQUIRE_SIGNATURE=true" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Build Windows release and checksum
         shell: pwsh
         run: |
           $Version = "${{ github.ref_name }}".TrimStart("v")
-          ./installer/windows/Build-ReleaseZip.ps1 -Version $Version -RequireSignature
+          if ($env:KABUKI_CORD_REQUIRE_SIGNATURE -eq "true") {
+            ./installer/windows/Build-ReleaseZip.ps1 -Version $Version -RequireSignature
+          } else {
+            ./installer/windows/Build-ReleaseZip.ps1 -Version $Version
+          }
       - name: Verify release privacy boundary
         shell: pwsh
         run: python scripts/verify_release_archive.py
@@ -79,6 +88,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
+          body: |
+            Windows notice: this release's installer is not currently Authenticode-signed. Verify the accompanying SHA-256 checksum before running it. Code signing may be added to future releases.
           files: |
             dist/Kabuki-Cord-*-windows.zip
             dist/Kabuki-Cord-*-windows.zip.sha256
