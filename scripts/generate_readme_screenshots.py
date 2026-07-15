@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import base64
 import mimetypes
+import re
 from pathlib import Path
 
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import Page, sync_playwright
 
 
 ROOT = Path(__file__).resolve().parents[1]
 WEB_ROOT = ROOT / "src" / "nhi_zues" / "web"
 STYLE_PATH = WEB_ROOT / "styles.css"
+ICON_STYLE_PATH = WEB_ROOT / "icons.css"
 MONITOR_STYLE_PATH = WEB_ROOT / "monitor.css"
 ASSET_DIR = WEB_ROOT / "assets"
 OUTPUT_DIR = ROOT / "docs" / "screenshots"
@@ -18,18 +20,37 @@ VIEWPORT = {"width": 1440, "height": 900}
 
 def app_styles() -> str:
     css = STYLE_PATH.read_text(encoding="utf-8")
-    return css.replace('url("/assets/', f'url("{ASSET_DIR.as_uri()}/')
+    return inline_asset_urls(
+        css,
+        {"scanner-kabuki-v2-sheet.png", "update-mask-workshop-checking-v2-sheet.png"},
+    )
+
+
+def icon_styles() -> str:
+    return ICON_STYLE_PATH.read_text(encoding="utf-8")
 
 
 def monitor_styles() -> str:
     css = MONITOR_STYLE_PATH.read_text(encoding="utf-8")
-    return css.replace('url("/assets/', f'url("{ASSET_DIR.as_uri()}/')
+    return inline_asset_urls(css, {"monitor-arigato-v2-sheet.png"})
 
 
 def image_data_uri(path: Path) -> str:
     content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
     encoded = base64.b64encode(path.read_bytes()).decode("ascii")
     return f"data:{content_type};base64,{encoded}"
+
+
+def inline_asset_urls(css: str, selected: set[str]) -> str:
+    def replace(match: re.Match[str]) -> str:
+        asset = ASSET_DIR / match.group(1)
+        return (
+            f'url("{image_data_uri(asset)}")'
+            if asset.name in selected and asset.is_file()
+            else match.group(0)
+        )
+
+    return re.sub(r'url\("/assets/([^"?]+)"\)', replace, css)
 
 
 FIXTURE_STYLES = """
@@ -58,6 +79,20 @@ body {
 
 .screenshot-shell::before {
   display: none !important;
+}
+
+.screenshot-shell *,
+.screenshot-shell *::before,
+.screenshot-shell *::after,
+.readme-help-shot .onboarding-overlay *,
+.readme-help-shot .onboarding-overlay *::before,
+.readme-help-shot .onboarding-overlay *::after,
+.readme-update-shot .update-overlay *,
+.readme-update-shot .update-overlay *::before,
+.readme-update-shot .update-overlay *::after {
+  animation: none !important;
+  transition: none !important;
+  caret-color: transparent !important;
 }
 
 .screenshot-shell .workspace,
@@ -89,8 +124,7 @@ body {
 }
 
 .screenshot-shell .channel-name .hash-icon,
-.screenshot-shell .server-icon-frame .fixture-icon,
-.screenshot-shell .brand-mark .fixture-icon {
+.screenshot-shell .server-icon-frame .fixture-icon {
   display: grid;
   place-items: center;
   width: 30px;
@@ -99,13 +133,6 @@ body {
   background: linear-gradient(135deg, rgba(126, 216, 255, 0.22), rgba(149, 101, 255, 0.2));
   color: #eaf8ff;
   font-weight: 800;
-}
-
-.screenshot-shell .brand-mark .fixture-icon {
-  width: 100%;
-  height: 100%;
-  border-radius: 16px;
-  font-size: 18px;
 }
 
 .screenshot-shell .server-icon-frame .fixture-icon {
@@ -117,6 +144,18 @@ body {
 
 .screenshot-shell .character-card {
   cursor: default;
+}
+
+.screenshot-shell .operation-status.scanning .scanner-sprite {
+  animation: none !important;
+  background-position: -204px 0;
+}
+
+.screenshot-shell .brand-mark img,
+.screenshot-shell .runtime-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
 
 .screenshot-shell textarea {
@@ -149,6 +188,32 @@ body {
 
 .readme-approval-shot .approval-review-body {
   padding: 18px;
+}
+
+.readme-help-shot,
+.readme-update-shot {
+  position: relative;
+  width: 1440px;
+  height: 900px;
+  overflow: hidden;
+}
+
+.readme-help-shot .onboarding-overlay,
+.readme-update-shot .update-overlay {
+  position: absolute;
+}
+
+.readme-help-shot .onboarding-card {
+  max-height: 844px;
+}
+
+.readme-update-shot .update-workshop-sprite,
+.readme-update-shot .update-phase-bar > span.active::after {
+  animation: none !important;
+}
+
+.readme-update-shot .update-workshop-sprite {
+  background-position: -768px 0;
 }
 """
 
@@ -192,6 +257,25 @@ body {
 .monitor-toast {
   opacity: 1;
 }
+
+.monitor-shell *,
+.monitor-shell *::before,
+.monitor-shell *::after,
+.monitor-toasts *,
+.monitor-toasts *::before,
+.monitor-toasts *::after {
+  animation: none !important;
+  transition: none !important;
+  caret-color: transparent !important;
+}
+
+.delivery-character-toast {
+  background-position: 100% 0;
+}
+
+.toast-stars span {
+  opacity: 0;
+}
 """
 
 
@@ -202,6 +286,7 @@ def document(body: str, *, mode: str = "runtime-mode-semi-auto") -> str:
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Kabuki-Cord README Fixture</title>
+    <style>{icon_styles()}</style>
     <style>{app_styles()}</style>
     <style>{FIXTURE_STYLES}</style>
   </head>
@@ -228,6 +313,7 @@ def monitor_document(body: str) -> str:
 
 
 def rail(active: str = "Signal Lab") -> str:
+    app_icon = image_data_uri(ASSET_DIR / "app-icon-64.png")
     servers = [
         ("Signal Lab", "SL"),
         ("Arcade Ops", "AO"),
@@ -245,16 +331,17 @@ def rail(active: str = "Signal Lab") -> str:
             </button>
             """
         )
-    return """
+    return f"""
       <aside class="server-rail">
-        <div class="brand-mark"><span class="fixture-icon">KC</span></div>
+        <div class="brand-mark"><img src="{app_icon}" alt="" /></div>
         <div class="server-list">{''.join(bubbles)}</div>
-        <button class="icon-button rail-add" title="Find newly joined servers">+</button>
+        <button class="icon-button rail-add" title="Find newly joined servers"><i class="bi bi-plus-lg"></i></button>
       </aside>
     """
 
 
 def server_panel() -> str:
+    app_icon = image_data_uri(ASSET_DIR / "app-icon-64.png")
     channels = [
         ("general", "12 remembered", True, True, False, False),
         ("field-notes", "8 remembered", False, True, True, False),
@@ -272,7 +359,7 @@ def server_panel() -> str:
                 <div><strong>{name}</strong><span>{meta}</span></div>
               </div>
               <div class="channel-actions">
-                <button class="icon-mini{' on' if name == 'night-shift' else ''}">★</button>
+                <button class="icon-mini{' on' if name == 'night-shift' else ''}"><i class="bi bi-pin-angle-fill"></i></button>
                 <button class="pill-toggle{' on observe' if observe else ''}">Observe</button>
                 <button class="pill-toggle{' on engage' if engage else ''}">Engage</button>
                 <button class="pill-toggle{' on auto' if auto else ''}">Auto</button>
@@ -287,31 +374,32 @@ def server_panel() -> str:
             <div class="eyebrow">Selected Server</div>
             <h1>Signal Lab</h1>
           </div>
-          <button class="icon-button">✓</button>
+          <button class="icon-button" title="Save server settings"><i class="bi bi-save2"></i></button>
         </header>
         <section class="panel-section">
           <div class="section-title">Server Settings</div>
           <label class="field"><span>Label</span><input value="Signal Lab" readonly /></label>
           <label class="field"><span>Character Card</span><select><option>Max Arcadia (sample_card.json)</option></select></label>
-          <label class="field">
-            <span>Scan Cadence</span>
-            <div class="inline-input"><input value="180" readonly /><span>seconds</span></div>
+          <label class="safety-review-toggle">
+            <input type="checkbox" />
+            <span><strong>Dojo Sweep</strong><small>Deep review override for accessible channel history.</small></span>
           </label>
         </section>
         <section class="panel-section channels-section">
           <div class="section-title with-action">
             <span>Channels</span>
             <div class="button-row">
-              <button class="small-button">Open</button>
-              <button class="small-button">Repair</button>
-              <button class="small-button">Latest</button>
-              <button class="small-button">Backfill</button>
+              <button class="small-button"><i class="bi bi-box-arrow-up-right"></i> Open</button>
+              <button class="small-button"><i class="bi bi-wrench-adjustable"></i> Repair</button>
+              <button class="small-button"><i class="bi bi-arrow-clockwise"></i> Latest</button>
+              <button class="small-button"><i class="bi bi-clock-history"></i> Backfill</button>
+              <button class="small-button"><i class="bi bi-plus"></i> Add</button>
             </div>
           </div>
           <div class="channel-list">{''.join(rows)}</div>
         </section>
         <footer class="account-footer">
-          <div class="avatar-dot runtime-avatar">K</div>
+          <div class="avatar-dot runtime-avatar"><img src="{app_icon}" alt="" /></div>
           <div><strong>Kabuki runtime</strong><span>scanner ready</span></div>
         </footer>
       </aside>
@@ -319,7 +407,8 @@ def server_panel() -> str:
 
 
 def workspace() -> str:
-    return """
+    mask = image_data_uri(ASSET_DIR / "kabuki-mask-mark-v2.png")
+    return f"""
       <main class="workspace">
         <header class="topbar">
           <div class="topbar-title">
@@ -333,26 +422,30 @@ def workspace() -> str:
               <small>general</small>
             </div>
             <span class="status-pill ok">API key set</span>
-            <button class="secondary-button">Start</button>
-            <button class="secondary-button">Sync Discord</button>
-            <button class="secondary-button">Refresh</button>
-            <button class="primary-button">Save Changes</button>
+            <div class="topbar-button-group">
+              <button class="secondary-button"><i class="bi bi-question-circle"></i> Help</button>
+              <button class="secondary-button"><i class="bi bi-pause-fill"></i> Pause</button>
+              <button class="secondary-button"><i class="bi bi-binoculars"></i> Monitor</button>
+              <button class="secondary-button"><i class="bi bi-diagram-3"></i> Sync Discord</button>
+              <button class="secondary-button"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+              <button class="primary-button"><i class="bi bi-check2"></i> Save Changes</button>
+            </div>
           </div>
         </header>
         <section class="character-strip">
           <div class="character-cards">
-            <article class="character-card">
-              <div class="portrait">M</div>
-              <strong>Max Arcadia</strong>
+            <article class="character-card" style="--card-accent:#7ed8ff;--card-accent-rgb:126,216,255">
+              <div class="portrait"><img src="{mask}" alt="" /></div>
+              <strong>Starter Mask</strong>
               <small>default.json</small>
             </article>
-            <article class="character-card active">
-              <div class="portrait">M</div>
+            <article class="character-card active" style="--card-accent:#ff64d8;--card-accent-rgb:255,100,216">
+              <div class="portrait"><img src="{mask}" alt="" /></div>
               <strong>Max Arcadia</strong>
               <small>cards/sample_generalist.json</small>
             </article>
           </div>
-          <button class="create-character"><span>+</span><span>Create Character</span></button>
+          <button class="create-character"><i class="bi bi-plus-lg"></i><span>Create Character</span></button>
         </section>
         <nav class="tabs">
           <button class="tab active">Identity</button>
@@ -426,6 +519,85 @@ def dashboard_body() -> str:
         {server_panel()}
         {workspace()}
         {preview_panel()}
+      </div>
+    """
+
+
+def help_body() -> str:
+    return f"""
+      <div class="readme-help-shot">
+        {dashboard_body()}
+        <div class="onboarding-overlay">
+          <div class="onboarding-card help-center">
+            <div class="onboarding-header">
+              <div>
+                <div class="eyebrow">Kabuki-Cord Field Manual</div>
+                <h2>Help &amp; setup</h2>
+                <p>Start safely, shape a character, and collect useful diagnostics without uploading anything.</p>
+              </div>
+              <button class="icon-button" aria-label="Close help"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <div class="help-layout">
+              <nav class="help-nav" aria-label="Help topics">
+                <button class="active"><i class="bi bi-flag"></i><span>Quick start</span></button>
+                <button><i class="bi bi-discord"></i><span>Discord sign-in</span></button>
+                <button><i class="bi bi-person-vcard"></i><span>Character cards</span></button>
+                <button><i class="bi bi-toggles"></i><span>Channel actions</span></button>
+                <button><i class="bi bi-broadcast"></i><span>Response modes</span></button>
+                <button><i class="bi bi-wrench-adjustable-circle"></i><span>Diagnostics</span></button>
+              </nav>
+              <div class="help-content">
+                <section class="help-topic active">
+                  <div class="help-topic-heading"><span>01</span><div><h3>Safe first run</h3><p>Complete these in order. Green items are already ready.</p></div></div>
+                  <div class="onboarding-steps">
+                    <article class="onboarding-step ready"><strong><i class="bi bi-check-circle"></i> App installed</strong><span>The local runtime and browser support are available.</span></article>
+                    <article class="onboarding-step ready"><strong><i class="bi bi-check-circle"></i> API key saved</strong><span>Your OpenAI key is stored in the operating-system keyring.</span></article>
+                    <article class="onboarding-step ready"><strong><i class="bi bi-check-circle"></i> Discord signed in</strong><span>The private Kabuki-Cord browser profile has an active session.</span></article>
+                    <article class="onboarding-step pending"><strong><i class="bi bi-hourglass-split"></i> Sync channels</strong><span>Discover servers and explicitly enable only the channels you intend to observe.</span></article>
+                    <article class="onboarding-step pending"><strong><i class="bi bi-person-vcard"></i> Create a character</strong><span>Observation works without one; persona-driven drafts need a useful custom card.</span></article>
+                    <article class="onboarding-step pending"><strong><i class="bi bi-shield-check"></i> Start in Observe only</strong><span>Validate selectors, pacing, and memory before enabling sends.</span></article>
+                  </div>
+                  <div class="help-callout warning"><i class="bi bi-exclamation-triangle"></i><span>Personal-account browser automation is less stable and carries more platform risk than a supported integration. Keep manual review enabled while tuning.</span></div>
+                </section>
+              </div>
+            </div>
+            <div class="onboarding-actions">
+              <button class="secondary-button"><i class="bi bi-sliders"></i> API &amp; Runtime</button>
+              <button class="secondary-button"><i class="bi bi-diagram-3"></i> Sync Discord</button>
+              <button class="primary-button"><i class="bi bi-check2"></i> Done</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    """
+
+
+def update_body() -> str:
+    return f"""
+      <div class="readme-update-shot">
+        {dashboard_body()}
+        <div class="update-overlay">
+          <div class="update-dialog" tabindex="-1" aria-busy="true" data-state="checking">
+            <div class="update-dialog-heading">
+              <div><div class="eyebrow">Mask workshop</div><h2>Inspecting Kabuki-Cord</h2></div>
+              <span class="update-result-icon" aria-hidden="true"><i class="bi bi-cloud-arrow-down"></i></span>
+            </div>
+            <div class="update-workshop-stage" aria-hidden="true">
+              <span class="update-stage-curtain update-stage-curtain-left"></span>
+              <span class="update-stage-curtain update-stage-curtain-right"></span>
+              <span class="update-workshop-sprite"></span>
+              <span class="update-stage-footlights"></span>
+            </div>
+            <div class="update-progress-block">
+              <div class="update-phase-bar" role="progressbar" aria-valuenow="58">
+                <span class="complete"></span><span class="complete"></span><span class="active"></span><span></span>
+              </div>
+              <ol class="update-phase-list"><li class="complete">Validate</li><li class="complete">Fetch</li><li class="active">Compare</li><li>Apply</li></ol>
+            </div>
+            <div class="update-dialog-status" role="status">Fetching origin/main and comparing it with this Git checkout.</div>
+            <div class="update-dialog-actions"><button class="secondary-button" disabled><i class="bi bi-hourglass-split"></i> Working…</button></div>
+          </div>
+        </div>
       </div>
     """
 
@@ -522,8 +694,7 @@ def approvals_body() -> str:
 
 
 def monitor_body() -> str:
-    spy_frame = image_data_uri(ASSET_DIR / "monitor_spy_frames" / "frame_003.png")
-    arigato = image_data_uri(ASSET_DIR / "monitor-arigato-sprite.png")
+    spy_frame = image_data_uri(ASSET_DIR / "monitor_spy_v2_frames" / "frame_003.webp")
     return f"""
     <main class="monitor-shell">
       <header class="monitor-header">
@@ -637,12 +808,23 @@ def monitor_body() -> str:
     <div class="monitor-toasts">
       <article class="monitor-toast">
         <div class="toast-stars"><span></span><span></span></div>
-        <img src="{arigato}" alt="" />
+        <span class="delivery-character delivery-character-toast" aria-hidden="true"></span>
         <div><strong>Arigato</strong><span>Reply delivered in Signal Lab / #general</span><small>Just now</small></div>
-        <button>×</button>
+        <button>&times;</button>
       </article>
     </div>
     """
+
+
+def wait_for_assets(page: Page) -> None:
+    page.evaluate(
+        """async () => {
+          await document.fonts.ready;
+          await Promise.all(
+            Array.from(document.images, (image) => image.decode().catch(() => undefined)),
+          );
+        }"""
+    )
 
 
 def capture(name: str, body: str, *, mode: str = "runtime-mode-semi-auto") -> None:
@@ -652,6 +834,7 @@ def capture(name: str, body: str, *, mode: str = "runtime-mode-semi-auto") -> No
         browser = p.chromium.launch(headless=True)
         page = browser.new_page(viewport=VIEWPORT, device_scale_factor=1)
         page.set_content(document(body, mode=mode), wait_until="networkidle")
+        wait_for_assets(page)
         page.screenshot(path=str(output), full_page=False)
         browser.close()
     print(f"wrote {output}")
@@ -664,6 +847,7 @@ def capture_monitor(name: str, body: str) -> None:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page(viewport=VIEWPORT, device_scale_factor=1)
         page.set_content(monitor_document(body), wait_until="networkidle")
+        wait_for_assets(page)
         page.screenshot(path=str(output), full_page=False)
         browser.close()
     print(f"wrote {output}")
@@ -671,6 +855,8 @@ def capture_monitor(name: str, body: str) -> None:
 
 def main() -> None:
     capture("kabuki-cord-dashboard.png", dashboard_body())
+    capture("kabuki-cord-help.png", help_body(), mode="runtime-mode-dry")
+    capture("kabuki-cord-update-check.png", update_body(), mode="runtime-mode-dry")
     capture("kabuki-cord-approvals.png", approvals_body(), mode="runtime-mode-live-fire")
     capture_monitor("kabuki-cord-monitor.png", monitor_body())
 

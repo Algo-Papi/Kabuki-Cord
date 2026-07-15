@@ -10,6 +10,8 @@
 
 .bi::before { content: "•"; }
 .bi-arrow-clockwise::before { content: "↻"; }
+.bi-arrow-left-right::before { content: "↔"; }
+.bi-arrow-repeat::before { content: "⟳"; }
 .bi-binoculars::before { content: "⌕"; }
 .bi-box-arrow-in-right::before { content: "⇥"; }
 .bi-box-arrow-up-right::before { content: "↗"; }
@@ -18,6 +20,7 @@
 .bi-check2::before { content: "✓"; }
 .bi-check2-circle::before { content: "✓"; }
 .bi-check-circle::before { content: "✓"; }
+.bi-broadcast::before { content: "◉"; }
 .bi-chevron-right::before { content: "›"; }
 .bi-circle-fill::before { content: "●"; }
 .bi-clock-history::before { content: "◷"; }
@@ -25,15 +28,22 @@
 .bi-cloud-download::before { content: "⇩"; }
 .bi-copy::before { content: "⧉"; }
 .bi-diagram-3::before { content: "⌘"; }
+.bi-discord::before { content: "◌"; }
+.bi-door-closed::before { content: "▯"; }
 .bi-emoji-smile::before { content: "☺"; }
 .bi-exclamation-circle::before,
 .bi-exclamation-triangle::before { content: "!"; }
 .bi-hourglass-split::before { content: "⌛"; }
+.bi-file-earmark-zip::before { content: "▣"; }
+.bi-flag::before { content: "⚑"; }
+.bi-folder2-open::before { content: "▱"; }
 .bi-journal-plus::before { content: "▣"; }
 .bi-list-ul::before { content: "☷"; }
+.bi-lightbulb::before { content: "☼"; }
 .bi-map::before { content: "⌖"; }
 .bi-pause-fill::before { content: "Ⅱ"; }
 .bi-person-gear::before { content: "⚙"; }
+.bi-person-vcard::before { content: "♙"; }
 .bi-person-plus::before { content: "+"; }
 .bi-pin-angle::before { content: "⌖"; }
 .bi-pin-angle-fill::before { content: "◆"; }
@@ -41,13 +51,17 @@
 .bi-play-fill::before { content: "▶"; }
 .bi-plus::before,
 .bi-plus-lg::before { content: "+"; }
+.bi-power::before { content: "⏻"; }
+.bi-question-circle::before { content: "?"; }
 .bi-reply::before { content: "↩"; }
 .bi-save2::before { content: "▣"; }
 .bi-search::before { content: "⌕"; }
 .bi-shield-lock::before { content: "◈"; }
+.bi-shield-check::before { content: "◇"; }
 .bi-send::before { content: "➤"; }
 .bi-signpost-split::before { content: "⑂"; }
 .bi-sliders::before { content: "≡"; }
+.bi-toggles::before { content: "≛"; }
 .bi-trash3::before { content: "⌫"; }
 .bi-stars::before { content: "✦"; }
 .bi-volume-down::before { content: "◖"; }
@@ -55,5 +69,7 @@
 .bi-volume-up::before { content: "◕"; }
 .bi-window-sidebar::before { content: "▥"; }
 .bi-wrench-adjustable::before { content: "⚙"; }
+.bi-wrench-adjustable-circle::before { content: "⚙"; }
+.bi-patch-check::before { content: "✓"; }
 .bi-x-circle::before,
 .bi-x-lg::before { content: "×"; }
